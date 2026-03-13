@@ -91,11 +91,11 @@ get_file() ->
 
 
 check_file([])		-> {no_file};
-check_file([H|_]) 	-> 
-	true = filelib:is_file(H),
-	ok = dets:open_file(H, [{file, H}]);
-check_file([_|T])	->
-	check_file(T).
+check_file([H|T]) 	->
+	case dets:open_file(H, [{file, H}]) of
+	ok -> ok;
+	_  -> check_file(T)  %% file in use or error — try next
+	end.
 
 
 open(File) ->

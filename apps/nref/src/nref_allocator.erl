@@ -87,7 +87,7 @@
 %% Opens the DETS file for the nref_allocator data.
 %%-----------------------------------------------------------------------------
 open() ->
-	File = nref_allocator.dets,    %% File name is set here.
+	File = "nref_allocator.dets",    %% File name is set here.
 	Bool = filelib:is_file(File),  %% check this before you open the file, because dets:open_file creates the file if it doesn't exist.
     io:format("dets opened:~p~n", [File]),
     case dets:open_file(?MODULE, [{file, File}]) of
