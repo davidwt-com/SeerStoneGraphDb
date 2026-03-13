@@ -1,2 +1,9 @@
 *.beam
 *.boot
+*.rel
+*.script
+*.tar.gz
+*.dets
+erl_crash.dump
+_build/
+log/

@@ -1,0 +1,9 @@
+{application, nref,
+ [{description, "SeerStone Node Reference ID server"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {nref, []}},
+  {applications, [kernel, stdlib]},
+  {env, []},
+  {modules, []}
+ ]}.

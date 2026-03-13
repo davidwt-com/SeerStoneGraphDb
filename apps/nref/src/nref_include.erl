@@ -48,10 +48,7 @@
 %%---------------------------------------------------------------------
 %% Include files
 %%---------------------------------------------------------------------
--import(lists).
-
-
-%%--------------------------------------------------------------------- 
+%%---------------------------------------------------------------------
 %% Exported Functions
 %%--------------------------------------------------------------------- 
 %%--------------------------------------------------------------------- 
@@ -95,8 +92,8 @@ get_file() ->
 
 check_file([])		-> {no_file};
 check_file([H|_]) 	-> 
-	true = file_lib:is_file(H),
-	ok = dets:open(H, {file, H});
+	true = filelib:is_file(H),
+	ok = dets:open_file(H, [{file, H}]);
 check_file([_|T])	->
 	check_file(T).
 
@@ -125,8 +122,8 @@ close() -> dets:close(?MODULE).
 %%	top is the last nref in the block to allocate before requesting more from the nref_server.
 %%	reuse is a list of nrefs to use in precedence to free.
 %%  confirm is the list of nrefs that have been allocated but not yet confirmed as used.
-initialize(File) ->
-	dets:init_table(File, fun()-> dets:insert(?MODULE, [{free,1},{top, 1},{reuse,[]}, {confirm,[]}]) end, []),
+initialize(_File) ->
+	dets:insert(?MODULE, [{free,1},{top, 1},{reuse,[]}, {confirm,[]}]),
 	ok.
 
 %% get_nref() -> nref
@@ -155,7 +152,7 @@ get_nref() ->
 	end.
 
 get_another_nref_block() ->
-	{First, Last} =	allocate_nrefs,
+	{First, Last} = nref_allocator:allocate_nrefs(),
 	dets:insert(?MODULE, [{free,First + 1}, {top,Last}]),
 	First.
 

@@ -78,20 +78,13 @@ nref_server:confirm_nref_block(Nref, Count)
 
 ## Known Bugs
 
-1. **`nref_server:get_another_nref_block/0` (line 148)** — calls `allocate_nrefs` as a bare atom (not a function call). Should be `nref_allocator:allocate_nrefs()`. This will cause a `badmatch` error at runtime.
+1. **`nref_server:get_another_nref_block/0`** — **FIXED** (was calling `allocate_nrefs` as a bare atom; now calls `nref_allocator:allocate_nrefs()`).
 
-   Current (broken):
-   ```erlang
-   {First, Last} = allocate_nrefs,
-   ```
-   Should be:
-   ```erlang
-   {First, Last} = nref_allocator:allocate_nrefs(),
-   ```
-
-2. **`nref_server:initialize/2`** — calls `dets:init_table/3`, which is not the correct API for inserting initial records. Should use `dets:insert/2` directly (as `nref_allocator:open/0` does correctly).
+2. **`nref_server:initialize/1`** — **FIXED** (was calling `dets:init_table/3`; now uses `dets:insert/2` directly, consistent with `nref_allocator:open/0`).
 
 3. **`nref.erl` callbacks** — `start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3` are NYI stubs.
+
+4. **`nref_allocator` and `nref_server` lack `start_link/0`** — Both are currently plain API modules that call DETS directly, not gen_servers. `nref_sup` references `nref_server` as a supervised child but `nref_server:start_link/0` does not exist. To properly supervise these processes, both modules need to be wrapped as `gen_server` behaviours. This is NYI — the gen_server skeleton (init/handle_call/handle_cast/terminate) needs to be written for each, with `open()` called in `init/1` and `close()` in `terminate/2`. Once done, `nref_sup` should list `nref_allocator` first, then `nref_server`.
 
 ## DETS File Location
 
@@ -104,5 +97,9 @@ This resolves relative to the Erlang node's working directory. The file `nref_al
 ## Compile
 
 ```sh
-erlc "Nref Server/nref_sup.erl" "Nref Server/nref_allocator.erl" "Nref Server/nref_server.erl" "Nref Server/nref_include.erl" "Nref Server/nref.erl"
+# with rebar3 (from project root):
+./rebar3 compile
+
+# manually (from project root):
+erlc apps/nref/src/nref_allocator.erl apps/nref/src/nref_server.erl apps/nref/src/nref_include.erl apps/nref/src/nref_sup.erl apps/nref/src/nref.erl
 ```
