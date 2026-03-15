@@ -211,11 +211,8 @@ start(Type, StartArgs) ->
 %% It is expected to return the pid of the top supervisor and an optional
 %% term State, which defaults to []. This term is passed as-is to stop.
 %%--------------------------------------------------------------------- 
-start_phase(Phase, Type, PhaseStartArgs) -> 
-	?NYI({start_phase, {Phase, Type, PhaseStartArgs}})
-	%% create the supervision tree by starting the top supervisor
-	%% Return = {ok, Pid} | {ok, Pid, State} | {error, Reason}
-	.
+start_phase(_Phase, _Type, _PhaseStartArgs) ->
+	ok.
 
 
 %%--------------------------------------------------------------------- 
@@ -234,8 +231,8 @@ start_phase(Phase, Type, PhaseStartArgs) ->
 %%
 %% If Module:prep_stop/1 isn't defined, NewState will be identical to State. 
 %%--------------------------------------------------------------------- 
-prep_stop(State) -> 
-	?NYI({prep_stop, {State}}).
+prep_stop(State) ->
+	State.
 %%	Return = NewState.
 
 %%--------------------------------------------------------------------- 
@@ -272,8 +269,7 @@ prep_stop(State) ->
 %% Before Mod:stop/1 is called, Mod:prep_stop/1 will have been called. 
 %% State is the state that was returned from Mod:prep_stop/1. 
 %%--------------------------------------------------------------------- 
-stop(State) -> 
-	?NYI({stop, {State}}),
+stop(_State) ->
 	ok.
 
 
@@ -295,8 +291,7 @@ stop(State) ->
 %% therefore the function is not evaluated for applications which have 
 %% unchanged configuration parameters between the old and new releases. 
 %%--------------------------------------------------------------------- 
-config_change(Changed, New, Removed) -> 
-	?NYI({config_change, {Changed, New, Removed}}),
+config_change(_Changed, _New, _Removed) ->
 	ok.
 
 
