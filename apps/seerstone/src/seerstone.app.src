@@ -1,0 +1,9 @@
+{application, seerstone,
+ [{description, "SeerStone Graph Database - top level application"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {seerstone, []}},
+  {applications, [kernel, stdlib, nref, database]},
+  {env, []},
+  {modules, []}
+ ]}.

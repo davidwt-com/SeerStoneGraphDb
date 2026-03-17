@@ -1,0 +1,9 @@
+{application, graphdb,
+ [{description, "SeerStone Graph Database application"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {graphdb, []}},
+  {applications, [kernel, stdlib]},
+  {env, []},
+  {modules, []}
+ ]}.

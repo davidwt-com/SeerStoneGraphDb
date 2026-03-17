@@ -8,32 +8,23 @@
 %% SeerStone, Inc.
 %%--------------------------------------------------------------------- 
 %% Author: Dallas Noyes
-%% Created: August 16, 2008
-%% Description: 
-%%		The nref is the top level application module for the seerstone nref server.
-%%		It's basic purpose is to start the nref supervisor (nref_sup).
-%%		The SeerStone nref server is responsible for assigning nrefs: globaly unique node reference numbers for the SeerStone Database.
-%%		The assignment includes issuing nrefs on request, and recycling nrefs.
-%%		The nref service is:
-%%			Hugely scalable so that it's capacity can be dynamically increased by adding servers.
-%%			Can issue trillions of nrefs per minute with *** (finish description based on testing)
-%%			Able to assure that all nrefs are unique
-%%			Highly fault tolerent
+%% Created: August 26, 2008
+%% Description: graphdb is the application for the SeerStone graph database.
 %%  
-%% Resources for understanding the erlang applications behavior:
+%% Resources for understanding the erlang Applications behaviour:
 %%  OTP behaviour see http://www.erlang.org/doc/design_principles/part_frame.html starting section 7.0
 %%	Application callback exports: http://erlang.org/documentation/doc-5.0.1/lib/kernel-2.6.1/doc/html/application.html
 %%--------------------------------------------------------------------- 
 %% Revision History
 %%--------------------------------------------------------------------- 
-%% Rev PA1 Date: October 8, 2008 Author: Dallas Noyes (dallas.noyes@gmail.com)
+%% Rev PA1 Date: August 16, 2008 Author: Dallas Noyes (dallas.noyes@gmail.com)
 %% Initial implementation and testing of module completed.
 %% 
 %%--------------------------------------------------------------------- 
 %% Rev A Date: *** 2008 Author: Dallas Noyes (dallas.noyes@gmail.com)
 %%  
 %%--------------------------------------------------------------------- 
--module(nref).
+-module(graphdb).
 -behaviour(application).  
 
 
@@ -41,16 +32,16 @@
 %% Module Attributes
 %%---------------------------------------------------------------------
 -revision('Revision: 1 ').
--created('Date: October 8, 2008 14:57:00').
+-created('Date: August 26, 2008 10:49:00').
 -created_by('dallas.noyes@gmail.com').
-%%-modified('Date: Month Day, Year 10:50:00').
+%%-modified('Date: August 1, 2008 10:50:00').
 %%-modified_by('dallas.noyes@gmail.com').
 
 
 %%---------------------------------------------------------------------
 %% Include files
 %%---------------------------------------------------------------------
-%% -import(lists, [map/2]). N/A
+%-import().
 
 
 %%---------------------------------------------------------------------
@@ -76,10 +67,11 @@
 %%---------------------------------------------------------------------
 %% Exported Functions
 %%--------------------------------------------------------------------- 
-%% Description module seerstone
+%% Description module graphdb
 %%--------------------------------------------------------------------- 
-%% seerstone is the top level module of the SeerStone database.
-%% 
+%% graphdb is the application module of the SeerStone graph database.
+%% the graph database is responsible for the graph databases.
+%% the graph database is part of the stone database system.
 %% 
 %%--------------------------------------------------------------------- 
 %% Exports Behavior Callback Functions
@@ -149,19 +141,17 @@
 %% If no State is returned, [] is used. 
 %%--------------------------------------------------------------------- 
 
-start(normal, []) ->
-    case nref_sup:start_link() of
+start(Type, StartArgs) ->
+    case graphdb_sup:start_link(StartArgs) of
 		{ok, Pid} ->
 			{ok, Pid};
 		ignore -> 
 			{error, ignore};
 		{error, Reason} ->	
-			{error, Reason}
-    end;
-start(Type, StartArgs) ->
-	?NYI({start, {Type, StartArgs}}),
-	ok.
-
+			{error, Reason};
+		MSG ->
+			?UEM({start , {Type, StartArgs}}, MSG)
+    end.
 
 
 %%--------------------------------------------------------------------- 
@@ -211,11 +201,8 @@ start(Type, StartArgs) ->
 %% It is expected to return the pid of the top supervisor and an optional
 %% term State, which defaults to []. This term is passed as-is to stop.
 %%--------------------------------------------------------------------- 
-start_phase(Phase, Type, PhaseStartArgs) -> 
-	?NYI({start_phase, {Phase, Type, PhaseStartArgs}})
-	%% create the supervision tree by starting the top supervisor
-	%% Return = {ok, Pid} | {ok, Pid, State} | {error, Reason}
-	.
+start_phase(_Phase, _Type, _PhaseStartArgs) ->
+	ok.
 
 
 %%--------------------------------------------------------------------- 
@@ -234,9 +221,8 @@ start_phase(Phase, Type, PhaseStartArgs) ->
 %%
 %% If Module:prep_stop/1 isn't defined, NewState will be identical to State. 
 %%--------------------------------------------------------------------- 
-prep_stop(State) -> 
-	?NYI({prep_stop, {State}}).
-%%	Return = NewState.
+prep_stop(State) ->
+	State.	%%	Return = NewState.
 
 %%--------------------------------------------------------------------- 
 %% stop/1
@@ -272,8 +258,7 @@ prep_stop(State) ->
 %% Before Mod:stop/1 is called, Mod:prep_stop/1 will have been called. 
 %% State is the state that was returned from Mod:prep_stop/1. 
 %%--------------------------------------------------------------------- 
-stop(State) -> 
-	?NYI({stop, {State}}),
+stop(_State) ->
 	ok.
 
 
@@ -295,8 +280,8 @@ stop(State) ->
 %% therefore the function is not evaluated for applications which have 
 %% unchanged configuration parameters between the old and new releases. 
 %%--------------------------------------------------------------------- 
-config_change(Changed, New, Removed) -> 
-	?NYI({config_change, {Changed, New, Removed}}),
+config_change(_Changed, _New, _Removed) ->
 	ok.
+
 
 

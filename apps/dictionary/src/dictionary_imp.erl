@@ -151,7 +151,7 @@ start_dictionary(File, Proc_Name) ->
 				  put("tab",Tab),
 			 	  loop()
 				  end,	
-	sfiles:file_exists(File, F1), %% makes sure File exists, creates new File if needed.
+	file_exists(File, F1), %% makes sure File exists, creates new File if needed.
 	start_registered_process(Proc_Name, F2).							
 
 

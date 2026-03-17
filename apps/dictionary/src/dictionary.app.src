@@ -1,0 +1,9 @@
+{application, dictionary,
+ [{description, "SeerStone Dictionary application"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {dictionary, []}},
+  {applications, [kernel, stdlib]},
+  {env, []},
+  {modules, []}
+ ]}.

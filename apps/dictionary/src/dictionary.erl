@@ -9,7 +9,8 @@
 %%--------------------------------------------------------------------- 
 %% Author: Dallas Noyes
 %% Created: August 26, 2008
-%% Description: graphdb is the application for the SeerStone graph database.
+%% Description: dictionary is applicationthat manages the dictionaries
+%%				as part of SeerStone database system.
 %%  
 %% Resources for understanding the erlang Applications behaviour:
 %%  OTP behaviour see http://www.erlang.org/doc/design_principles/part_frame.html starting section 7.0
@@ -24,7 +25,7 @@
 %% Rev A Date: *** 2008 Author: Dallas Noyes (dallas.noyes@gmail.com)
 %%  
 %%--------------------------------------------------------------------- 
--module(graphdb).
+-module(dictionary).
 -behaviour(application).  
 
 
@@ -67,11 +68,10 @@
 %%---------------------------------------------------------------------
 %% Exported Functions
 %%--------------------------------------------------------------------- 
-%% Description module graphdb
+%% Description module dictionary
 %%--------------------------------------------------------------------- 
-%% graphdb is the application module of the SeerStone graph database.
-%% the graph database is responsible for the graph databases.
-%% the graph database is part of the stone database system.
+%% dictionary is the application that manages the dictionary as part of
+%% the SeerStone database.
 %% 
 %%--------------------------------------------------------------------- 
 %% Exports Behavior Callback Functions
@@ -142,7 +142,7 @@
 %%--------------------------------------------------------------------- 
 
 start(Type, StartArgs) ->
-    case graphdb_sup:start_link(StartArgs) of
+    case dictionary_sup:start_link(StartArgs) of
 		{ok, Pid} ->
 			{ok, Pid};
 		ignore -> 
@@ -201,11 +201,8 @@ start(Type, StartArgs) ->
 %% It is expected to return the pid of the top supervisor and an optional
 %% term State, which defaults to []. This term is passed as-is to stop.
 %%--------------------------------------------------------------------- 
-start_phase(Phase, Type, PhaseStartArgs) -> 
-	?NYI({start_phase, {Phase, Type, PhaseStartArgs}}),
-	%% create the supervision tree by starting the top supervisor
-	%% Return = {ok, Pid} | {ok, Pid, State} | {error, Reason}
-	{error, "Note Yet Implemented"}.
+start_phase(_Phase, _Type, _PhaseStartArgs) ->
+	ok.
 
 
 %%--------------------------------------------------------------------- 
@@ -224,8 +221,7 @@ start_phase(Phase, Type, PhaseStartArgs) ->
 %%
 %% If Module:prep_stop/1 isn't defined, NewState will be identical to State. 
 %%--------------------------------------------------------------------- 
-prep_stop(State) -> 
-	?NYI({prep_stop, {State}}),
+prep_stop(State) ->
 	State.	%%	Return = NewState.
 
 %%--------------------------------------------------------------------- 
@@ -262,8 +258,7 @@ prep_stop(State) ->
 %% Before Mod:stop/1 is called, Mod:prep_stop/1 will have been called. 
 %% State is the state that was returned from Mod:prep_stop/1. 
 %%--------------------------------------------------------------------- 
-stop(State) -> 
-	?NYI({stop, {State}}),
+stop(_State) ->
 	ok.
 
 
@@ -285,9 +280,9 @@ stop(State) ->
 %% therefore the function is not evaluated for applications which have 
 %% unchanged configuration parameters between the old and new releases. 
 %%--------------------------------------------------------------------- 
-config_change(Changed, New, Removed) -> 
-	?NYI({config_change, {Changed, New, Removed}}),
+config_change(_Changed, _New, _Removed) ->
 	ok.
+
 
 
 

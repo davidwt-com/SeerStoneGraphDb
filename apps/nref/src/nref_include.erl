@@ -9,20 +9,20 @@
 %%--------------------------------------------------------------------- 
 %% Author: Dallas Noyes
 %% Created: October 10, 2008
-%% Description: nref_server serves Nrefs.
-%%				nref_server is a client of the nref_allocator.
+%% Description: nref_include is the client side module for the nref Server
+%%				The nref_include is the local capability that requests a block of nrefs from the Server
+%%				and then hands them out, as needed locally.
+%%				
+%%				nref_include is the client of the nref_allocator and should be included in any module where nrefs are needed.
 %%			
-%%				The servers work from blocks of Nrefs that they request from
+%%				The nref_include works from blocks of Nrefs that are request from
 %%				the nref_allocator.  As they allocate a block they confirm the allocation
 %%				with the nref_allocator.
+%%
+%%				The nref_include is also responsible for tracking the deallocation of nrefs,
+%%				reusing them locally if possible, or handing them on to the nref_allocation for
+%%				reuse.
 %% 
-%% This is a server callback module for the erlang server behavior (gen_server).
-%%  
-%% Resources for understanding the erlang server (gen_server) behaviour:
-%%  gen_server manual: http://www.erlang.org/doc/man/gen_server.html 
-%%  OTP behaviour see http://www.erlang.org/doc/design_principles/part_frame.html starting section 2.0
-%%  Server Behaviour: http://www.erlang.org/doc/design_principles/gen_server_concepts.html#2
-%%	Server callback exports: http://erlang.org/documentation/doc-5.0.1/lib/stdlib-1.9.1/doc/html/gen_server.html
 %%--------------------------------------------------------------------- 
 %% Revision History
 %%--------------------------------------------------------------------- 
@@ -32,8 +32,7 @@
 %% Rev A Date: *** 2008 Author: Dallas Noyes (dallas.noyes@gmail.com)
 %%  
 %%--------------------------------------------------------------------- 
--module(nref_server).
-%%-behaviour(gen_server).
+-module(nref_include).
 
 
 %%---------------------------------------------------------------------
@@ -49,48 +48,56 @@
 %%---------------------------------------------------------------------
 %% Include files
 %%---------------------------------------------------------------------
--import(lists).
-
-
 %%---------------------------------------------------------------------
-%% Macro Functions
-%%--------------------------------------------------------------------- 
-%% NYI - Not Yet Implemented
-%%	F = {fun,{Arg1,Arg2,...}}
-%%
-%% UEM - UnExpected Message
-%%	F = {fun,{Arg1,Arg2,...}}
-%%	X = Message
-%%--------------------------------------------------------------------- 
--define(NYI(F), (begin
-					io:format("*** NYI ~p ~p ~p~n",[?MODULE, ?LINE, F]),
-					exit(nyi)
-				 end)).
--define(UEM(F, X), (begin
-					io:format("*** UEM ~p:~p ~p ~p~n",[?MODULE, F, ?LINE, X]),
-					exit(uem)
-				 end)).
-
-
-%%--------------------------------------------------------------------- 
 %% Exported Functions
 %%--------------------------------------------------------------------- 
 %%--------------------------------------------------------------------- 
 %% Exports External API
 %%--------------------------------------------------------------------- 
 -export([
-		open/1, 			%% Opens the nref Dets file.
+		open/0, 			%% Opens an nref Dets file.
 		close/0, 			%% Closes the nref Dets file.
 		initialize/1,		%% initializes the Dets file.
 		get_nref/0, 		%% returns a single nref and adds it to the allocation tracker.
 		confirm_nref/1,		%% removes nref from the confirm list.
-		confirm_nrefs/1,		%% removes list of nrefs from the confirm list.
+		confirm_nrefs/1,	%% removes list of nrefs from the confirm list.
 		reuse_nref/1,		%% adds nref to the reuse list.
 		reuse_nrefs/1,		%% adds list of nrefs to the reuse list.
-		confirm_nref_block/2	%% logs the allocation of an nref and removes it from the allocation tracker.
+		confirm_nref_block/2%% logs the allocation of an nref and removes it from the allocation tracker.
 		]).
 
-%%
+
+%% Each local service keeps track of the nref info in a file called ***nrefs.dets where *** is an integer.
+%% When open is called, the module looks at all of the ***nrefs files to find one that is not currently in use, and opens that one.
+%% If there is no ***nref file available it requests the next available *** number and opens the file. 
+open() ->
+	case get_file() of
+	ok -> ok;
+	{no_file} ->
+		nref_allocator! {self(), get_file},
+			receive
+				{nref_allocator, {get_file, Response}} -> {get_file, Response}
+			end,
+			open(Response)
+	end.
+
+
+get_file() ->
+	%% need to retrieve the systems variable for where the nref files are stored.
+	case check_file( filelib:wildcard("*nrefs.dets") ) of
+	ok 	-> ok;
+	_	-> {no_file}
+	end.
+
+
+check_file([])		-> {no_file};
+check_file([H|T]) 	->
+	case dets:open_file(H, [{file, H}]) of
+	ok -> ok;
+	_  -> check_file(T)  %% file in use or error — try next
+	end.
+
+
 open(File) ->
     io:format("dets opened:~p~n", [File]),
     Bool = filelib:is_file(File),
@@ -115,8 +122,8 @@ close() -> dets:close(?MODULE).
 %%	top is the last nref in the block to allocate before requesting more from the nref_server.
 %%	reuse is a list of nrefs to use in precedence to free.
 %%  confirm is the list of nrefs that have been allocated but not yet confirmed as used.
-initialize(File) ->
-	dets:init_table(File, fun()-> dets:insert(?MODULE, [{free,1},{top, 1},{reuse,[]}, {confirm,[]}]) end, []),
+initialize(_File) ->
+	dets:insert(?MODULE, [{free,1},{top, 1},{reuse,[]}, {confirm,[]}]),
 	ok.
 
 %% get_nref() -> nref
@@ -145,7 +152,7 @@ get_nref() ->
 	end.
 
 get_another_nref_block() ->
-	{First, Last} =	allocate_nrefs,
+	{First, Last} = nref_allocator:allocate_nrefs(),
 	dets:insert(?MODULE, [{free,First + 1}, {top,Last}]),
 	First.
 

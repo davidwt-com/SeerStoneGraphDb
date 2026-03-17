@@ -223,9 +223,10 @@ init([]) ->
  		Restart_Strategy = one_for_one, %% one_for_all | one_for_one | rest_for_one | simple_one_for_one
   		MaxR = 5, 						%% maximum number of restarts
 		MaxT = 5000, 					%% restart period,
-	SupFlags = {Restart_Strategy, MaxR, MaxT}, 
-	{ok, ChSpec1} = childspec(nref_server), %% edit childspec for each child specification.
-	{ok, {SupFlags, [ChSpec1]}};
+	SupFlags = {Restart_Strategy, MaxR, MaxT},
+	{ok, ChSpec1} = childspec(nref_allocator), %% nref_allocator must start before nref_server
+	{ok, ChSpec2} = childspec(nref_server),
+	{ok, {SupFlags, [ChSpec1, ChSpec2]}};
 init(State) -> 
 	?NYI({init, {State}}),
 	ignore.
