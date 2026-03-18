@@ -54,3 +54,13 @@ Or from the project root, compile all:
 ```sh
 erlc graphdb/*.erl
 ```
+
+## TASKS.md Alignment
+
+This guide reflects the state of the project as of `TASKS.md` generation. Key items marked as DONE in `TASKS.md` include:
+- Dictionary subsystem worker modules.
+- `dictionary_imp` export_all flag.
+
+Remaining high-priority items include:
+- Implementation of the six graphdb worker modules.
+- Clarification of `nref_include.erl`'s purpose.

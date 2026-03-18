@@ -54,8 +54,28 @@ The following callbacks in `database.erl` are stubs:
 - The `database` application's `.app` file should declare `graphdb` and `dictionary` as included applications
 - Both `database.beam` and `database_sup.beam` are also present in the project root (copies — keep in sync or resolve)
 
+## TASKS.md Alignment
+
+This guide reflects the state of the project as of `TASKS.md` generation. Key items marked as DONE in `TASKS.md` include:
+- Dictionary subsystem worker modules.
+- `dictionary_imp` export_all flag.
+
+Remaining high-priority items include:
+- Implementation of the six graphdb worker modules.
+- Clarification of `nref_include.erl`'s purpose.
+
 ## Compile
 
 ```sh
-erlc Database/database_sup.erl Database/database.erl
+erlc Dictionary/dictionary_sup.erl Dictionary/dictionary_imp.erl Dictionary/dictionary.erl
 ```
+
+## TASKS.md Alignment
+
+This guide reflects the state of the project as of `TASKS.md` generation. Key items marked as DONE in `TASKS.md` include:
+- Dictionary subsystem worker modules.
+- `dictionary_imp` export_all flag.
+
+Remaining high-priority items include:
+- Implementation of the six graphdb worker modules.
+- Clarification of `nref_include.erl`'s purpose.

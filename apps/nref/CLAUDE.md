@@ -76,19 +76,24 @@ nref_server:reuse_nrefs(List)     %% mark list of nrefs for reuse
 nref_server:confirm_nref_block(Nref, Count)
 ```
 
-## Known Bugs
+## Known Bugs / NYI Status
 
-1. **`nref_server:get_another_nref_block/0`** — **FIXED** (was calling `allocate_nrefs` as a bare atom; now calls `nref_allocator:allocate_nrefs()`).
+The following items are tracked in `TASKS.md`:
 
-2. **`nref_server:initialize/1`** — **FIXED** (was calling `dets:init_table/3`; now uses `dets:insert/2` directly, consistent with `nref_allocator:open/0`).
+- **`nref.erl` callbacks** (`start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3`) are NYI stubs. (Task 5)
+- **`nref_include.erl` purpose unclear**: Unsupervised and unreferenced; requires design decision. (Task 4)
+- **`seerstone:start/2` and `nref:start/2` non-normal clauses**: `?NYI` for `{takeover, Node}` and `{failover, Node}`. (Task 5)
+- **`code_change/3` NYI**: In `nref_allocator.erl`, `nref_server.erl`, and other gen_server modules. (Task 6)
 
-3. **`nref_allocator:open/0`** — **FIXED** (syntax error: `nref_allocator.dets` is not valid Erlang; changed to the string `"nref_allocator.dets"`).
+**Previously noted bugs (now fixed):**
 
-4. **`nref_include:check_file/1`** — **FIXED** (unreachable clause: `[H|_]` matched all non-empty lists, making the `[_|T]` fallthrough dead code; collapsed into a single `[H|T]` clause with a `case` on `dets:open_file/2`).
+1.  **`nref_server:get_another_nref_block/0`**: Fixed (was calling `allocate_nrefs` as a bare atom; now calls `nref_allocator:allocate_nrefs()`).
+2.  **`nref_server:initialize/1`**: Fixed (was calling `dets:init_table/3`; now uses `dets:insert/2` directly, consistent with `nref_allocator:open/0`).
+3.  **`nref_allocator:open/0`**: Fixed (syntax error: `nref_allocator.dets` is not valid Erlang; changed to the string `"nref_allocator.dets"`).
+4.  **`nref_include:check_file/1`**: Fixed (unreachable clause resolved).
 
-3. **`nref.erl` callbacks** — `start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3` are NYI stubs.
-
-4. **`nref_allocator` and `nref_server` lack `start_link/0`** — Both are currently plain API modules that call DETS directly, not gen_servers. `nref_sup` references `nref_server` as a supervised child but `nref_server:start_link/0` does not exist. To properly supervise these processes, both modules need to be wrapped as `gen_server` behaviours. This is NYI — the gen_server skeleton (init/handle_call/handle_cast/terminate) needs to be written for each, with `open()` called in `init/1` and `close()` in `terminate/2`. Once done, `nref_sup` should list `nref_allocator` first, then `nref_server`.
+**Implementation Note:**
+- `nref_allocator` and `nref_server` currently lack `start_link/0` and are plain API modules. They need to be wrapped as `gen_server` behaviours to be properly supervised by `nref_sup`. This is part of Task 4.
 
 ## DETS File Location
 

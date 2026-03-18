@@ -71,3 +71,13 @@ Each dictionary runs as an **independent registered process**. The process name 
 ```sh
 erlc Dictionary/dictionary_sup.erl Dictionary/dictionary_imp.erl Dictionary/dictionary.erl
 ```
+
+## TASKS.md Alignment
+
+This guide reflects the state of the project as of `TASKS.md` generation. Key items marked as DONE in `TASKS.md` include:
+- Dictionary subsystem worker modules.
+- `dictionary_imp` export_all flag.
+
+Remaining high-priority items include:
+- Implementation of the six graphdb worker modules.
+- Clarification of `nref_include.erl`'s purpose.

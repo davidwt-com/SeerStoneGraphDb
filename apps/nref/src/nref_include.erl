@@ -1,20 +1,20 @@
-%%--------------------------------------------------------------------- 
+%%---------------------------------------------------------------------
 %% Copyright SeerStone, Inc. 2008
 %%
-%% All rights reserved. No part of this computer programs(s) may be 
+%% All rights reserved. No part of this computer programs(s) may be
 %% used, reproduced,stored in any retrieval system, or transmitted,
 %% in any form or by any means, electronic, mechanical, photocopying,
-%% recording, or otherwise without prior written permission of 
+%% recording, or otherwise without prior written permission of
 %% SeerStone, Inc.
-%%--------------------------------------------------------------------- 
+%%---------------------------------------------------------------------
 %% Author: Dallas Noyes
 %% Created: October 10, 2008
 %% Description: nref_include is the client side module for the nref Server
 %%				The nref_include is the local capability that requests a block of nrefs from the Server
 %%				and then hands them out, as needed locally.
-%%				
+%%
 %%				nref_include is the client of the nref_allocator and should be included in any module where nrefs are needed.
-%%			
+%%
 %%				The nref_include works from blocks of Nrefs that are request from
 %%				the nref_allocator.  As they allocate a block they confirm the allocation
 %%				with the nref_allocator.
@@ -22,16 +22,16 @@
 %%				The nref_include is also responsible for tracking the deallocation of nrefs,
 %%				reusing them locally if possible, or handing them on to the nref_allocation for
 %%				reuse.
-%% 
-%%--------------------------------------------------------------------- 
+%%
+%%---------------------------------------------------------------------
 %% Revision History
-%%--------------------------------------------------------------------- 
+%%---------------------------------------------------------------------
 %% Rev Initial Date: October 10, 2008 Author: Dallas Noyes (dallas.noyes@gmail.com)
 %% Initial implementation and testing of module completed.
-%%--------------------------------------------------------------------- 
+%%---------------------------------------------------------------------
 %% Rev A Date: *** 2008 Author: Dallas Noyes (dallas.noyes@gmail.com)
-%%  
-%%--------------------------------------------------------------------- 
+%%
+%%---------------------------------------------------------------------
 -module(nref_include).
 
 
@@ -50,10 +50,10 @@
 %%---------------------------------------------------------------------
 %%---------------------------------------------------------------------
 %% Exported Functions
-%%--------------------------------------------------------------------- 
-%%--------------------------------------------------------------------- 
+%%---------------------------------------------------------------------
+%%---------------------------------------------------------------------
 %% Exports External API
-%%--------------------------------------------------------------------- 
+%%---------------------------------------------------------------------
 -export([
 		open/0, 			%% Opens an nref Dets file.
 		close/0, 			%% Closes the nref Dets file.
@@ -69,7 +69,7 @@
 
 %% Each local service keeps track of the nref info in a file called ***nrefs.dets where *** is an integer.
 %% When open is called, the module looks at all of the ***nrefs files to find one that is not currently in use, and opens that one.
-%% If there is no ***nref file available it requests the next available *** number and opens the file. 
+%% If there is no ***nref file available it requests the next available *** number and opens the file.
 open() ->
 	case get_file() of
 	ok -> ok;
@@ -135,15 +135,15 @@ get_nref() ->
 	case dets:lookup(?MODULE, reuse) of    %% Reuse released nrefs preferentialy
 	[{reuse, []}] 	->
     	case dets:lookup(?MODULE, free) of %% No Reuse availalbe so take next free nref
-		[{free, N}] -> 
-				case dets:lookup(?MODULE, top) of 
+		[{free, N}] ->
+				case dets:lookup(?MODULE, top) of
 				[{top,N}] ->			   %% Free = Top so request another block.
 					get_another_nref_block();
 				[_] ->					 	%% Free <> Top so use Free
 					increment(N),
 	    			N
     			end;
-		[] -> 
+		[] ->
 			get_another_nref_block()
 		end;
 	[{reuse,[N|T]}]	->
@@ -156,10 +156,10 @@ get_another_nref_block() ->
 	dets:insert(?MODULE, [{free,First + 1}, {top,Last}]),
 	First.
 
-%% increment(nref) -> ok.				
+%% increment(nref) -> ok.
 %% Increments the free list and adds the nref to the confirm list.
 %% called only by get_nref/1.
-increment(N) when is_integer(N) ->	
+increment(N) when is_integer(N) ->
 	case dets:lookup(?MODULE, confirm) of
 	[] ->
 		dets:insert(?MODULE, [{free, N + 1}, {confirm, [N]}]);
@@ -168,7 +168,8 @@ increment(N) when is_integer(N) ->
 	end.
 
 %% Stopped Here
-%% Is the Allocator really responsible for confirmation messaging?  If so how?  Do the requestors confirm to the allocation process?
+%% Is the Allocator really responsible for confirmation messaging?
+%% If so how?  Do the requestors confirm to the allocation process?
 %% Is the Allocator responsible for reuse?
 %%
 confirm_nref(Nref) ->
@@ -201,6 +202,3 @@ reuse_nrefs(List) ->
 	[{reuse,T}] = dets:lookup(?MODULE, reuse),
 		Reuse_list = lists:append(List,T),
 		dets:insert(?MODULE, {reuse, Reuse_list}).
-
-
-
