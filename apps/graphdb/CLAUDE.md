@@ -76,12 +76,12 @@ Example:
 
 ### Inheritance Rules
 
-1. Instances inherit **attributes** (not values) from their class(es).
-2. Local values override all inherited values.
-3. For attributes without local values, resolve in order:
-   - Class-level bound values
-   - Compositional ancestors (unbroken chain upward)
-   - Directly connected nodes (one level only)
+Priority order — each step applies only to attributes not yet resolved by a higher-priority step:
+
+1. **Local values** (highest priority — override all else)
+2. **Class-level bound values** (values explicitly bound at the class)
+3. **Compositional ancestors** (unbroken chain upward only)
+4. **Directly connected nodes** (one level deep only; lowest priority)
 
 ### Record Structure
 
@@ -104,7 +104,8 @@ Example:
 
 Maintains all named attribute concepts used as arc labels.
 
-- Name attributes: class name attributes, instance name attributes, external name attributes
+- Name attributes: class name attributes, instance name attributes
+- Literal attributes: scalar/external values stored directly on a node (numbers, strings, URLs, filenames) — not graph nodes; no Nref; do not participate in relationships
 - Relationship attributes: grouped into relationship types (e.g., `location_of` / `located_in`)
 - API to implement: `create_name_attribute/1`, `create_relationship_attribute/2`,
   `create_relationship_type/1`, `get_attribute/1`, `list_relationship_types/0`

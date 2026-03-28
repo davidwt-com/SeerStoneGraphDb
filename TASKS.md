@@ -47,11 +47,13 @@ Graph nodes are identified by **Nrefs** (plain `integer()`, allocated by
 ### 3a. `graphdb_attr` — Attribute Library
 
 Maintains the attribute library: the set of named concepts used as
-characterizations (labels) for both naming and relationships.
+characterizations (labels) for both naming and relationships, plus literal
+attribute descriptors for scalar/external values stored directly on nodes.
 
 **Sub-tasks:**
-- Define ETS/DETS schema for attribute records
-- Implement `create_name_attribute/1`, `create_relationship_attribute/2` (attribute + reciprocal)
+- Define ETS/DETS schema for attribute records (name, literal, relationship)
+- Implement `create_name_attribute/1`, `create_literal_attribute/2` (name, type)
+- Implement `create_relationship_attribute/2` (attribute + reciprocal)
 - Implement `create_relationship_type/1` and grouping of attributes under types
 - Implement lookup: `get_attribute/1`, `list_attributes/0`, `list_relationship_types/0`
 
@@ -188,40 +190,37 @@ present configuration.
 
 ---
 
-## Session Notes (2026-03-26)
+## Session Notes
 
-### Completed this session
+### knowledge-graph-database-guide.md — applied corrections
 
-All markdown files updated to incorporate knowledge from `knowledge-graph-database-guide.md`:
-
-- `CLAUDE.md` (root) — added Knowledge Model section (node types, hierarchy systems, inheritance rules, Erlang record structure, worker responsibility table); fixed stale `nref_include` reference
-- `README.md` — added Knowledge Model section with node types, hierarchies, relationships, worker table; added reference to guide in Contributing section
-- `TASKS.md` — expanded task 3 into six sub-tasks (3a–3f) each with schema, role, and concrete API functions; rewrote Priority Order
-- `apps/graphdb/CLAUDE.md` — full rewrite with knowledge model, worker responsibilities, correct compile commands
-- `apps/dictionary/CLAUDE.md` — fixed compile command (was pointing at old flat layout), updated TASKS alignment
-- `apps/database/CLAUDE.md` — removed duplicate TASKS section, fixed compile command, updated TASKS alignment
-- `apps/nref/CLAUDE.md` — no changes needed; already accurate
+| # | Description | Applied |
+|---|---|---|
+| 1 | Erlang/SeerStone mapping (workers, Nrefs, storage) | Skipped — guide is conceptual only; implementation detail belongs elsewhere |
+| 2 | Node creation sequence (bootstrap order) | Pending |
+| 3 | Multiple inheritance conflict resolution rule | Pending |
+| 4 | "External Name Attributes" undefined | Applied 2026-03-27 — replaced with Literal Attributes |
+| 5 | Descriptive Database layer unexplained | Pending |
+| 6 | "Articulation Principles" title opaque | Applied 2026-03-27 — renamed Modelling Guidelines |
+| 7 | Instance Inheritance Process wrong priority order | Applied 2026-03-27 — reordered local → class → ancestor → connected |
+| 8 | Contradictory multiple-parent pitfall advice | Applied 2026-03-27 — balanced pitfall list for both cases |
+| 9 | "Class" reused in View/Document Derivation | Applied 2026-03-27 — renamed to Template |
+| 10 | Reciprocity table middle column mislabelled "Relationship" | Pending |
+| 11 | Patent titles incomplete (1997, 1999 entries) | Pending |
 
 ### Pending: improvements to `knowledge-graph-database-guide.md`
 
-Issues 1–4 applied 2026-03-27. 11 issues remain — confirm which to apply in the next session.
+**A (was 2) — No node creation sequence**
+The guide describes the model structure but not the order of operations required to build it. Attributes must exist before they can be used as characterizations; classes must exist before instances can be members; Nrefs must be allocated before records are written. A "Construction Order" or "Bootstrap Sequence" section is needed.
 
-**Omissions (5)**
+**B (was 3) — Multiple inheritance conflict resolution unspecified**
+The Multiple Inheritance section now documents the pitfalls of attribute conflicts between two parent classes, but gives no resolution rule — which parent wins, or whether an explicit local override is always required. A definitive statement is needed.
 
-1. No Erlang/SeerStone mapping — the six worker modules and what part of the model each owns, Nrefs as integers, DETS/ETS storage; most impactful addition given the guide's stated purpose
-2. No node creation sequence — order of operations (allocate Nref → write → confirm; attributes before arcs; class before instances)
-3. Multiple inheritance conflict resolution unspecified — what wins when two parent classes bind conflicting values for the same attribute
-4. "External Name Attributes" listed in the Attribute Library tree (line 89) but never defined or exemplified
-5. Descriptive Database layer in the 3-layer architecture (lines 236–239) is unexplained — how it is populated, when discarded, role in query execution
+**C (was 5) — Descriptive Database layer unexplained**
+The three-layer architecture diagram (Environment → Project → Descriptive) describes only the first two layers. The Descriptive Database is noted as "non-permanent working memory" with no explanation of how it is populated, when it is discarded, or what role it plays in query execution.
 
-**Structural / clarity (4)**
+**D (was 10) — Reciprocity table middle column mislabelled**
+Column header is "Relationship" but all cells contain relationship type names (manufacturing, family, location). Should be "Type" or "Group".
 
-6. "Articulation Principles" section title is opaque — content is about node granularity and query optimisation; suggest renaming "Modelling Guidelines"
-7. Instance Inheritance Process steps listed in wrong priority order (lines 174–179) — local values listed second but are highest priority; should read local → class-bound → compositional ancestors → directly connected
-8. Contradictory pitfall advice — "Over-compositional parents: use multiple class membership" (line 341) directly contradicts "Prefer multiple compositional parents over multiple class memberships" (line 188); one must be removed or the distinction explained
-9. View/Document Derivation section (line 308) reuses "Class" to mean document grammar/format, conflicting with its established meaning as a taxonomic node type; needs disambiguation or renaming
-
-**Minor (2)**
-
-10. Reciprocity table middle column (line 103) labelled "Relationship" but cells contain type names — should be "Type" or "Group"
-11. Patent titles incomplete (lines 382–383) — 1997 and 1999 entries have editorial summaries instead of actual titles
+**E (was 11) — Patent titles incomplete**
+The 1997 and 1999 entries in Sources carry editorial summaries ("Continuation with system concepts", "Further refinements") rather than the actual patent titles.

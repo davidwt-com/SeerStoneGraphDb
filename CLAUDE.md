@@ -112,7 +112,7 @@ This database is an implementation of the knowledge graph model described in
 | **Node / Concept**          | A record identified by an Nref (positive integer)                                                |
 | **Instance Node**           | Concrete entity: has a name attribute, class membership, compositional parent, and relationships |
 | **Class Node**              | Type/schema: has a class name attribute, instance name attribute, and qualifying characteristics |
-| **Attribute Node**          | Name or relationship descriptor in the attribute library                                         |
+| **Attribute Node**          | Name attribute, relationship attribute, or literal attribute stored in the attribute library     |
 | **Relationship (Arc)**      | Reciprocal connection between instances; stored as `{Characterization, Value, Reciprocal}`       |
 | **Reference Number (Nref)** | Globally unique `integer()` allocated by `nref_server:get_nref/0`                                |
 
@@ -124,9 +124,12 @@ This database is an implementation of the knowledge graph model described in
 
 ### Inheritance Rules
 
-1. Instances inherit attributes (not values) from their class(es).
-2. Local values on an instance override all inherited values.
-3. Remaining attributes without local values inherit from: class-level bound values → compositional ancestors (unbroken chain) → directly connected nodes (one level only).
+Priority order — each step applies only to attributes not yet resolved by a higher-priority step:
+
+1. **Local values** (highest priority — override all else)
+2. **Class-level bound values** (values explicitly bound at the class)
+3. **Compositional ancestors** (unbroken chain upward only)
+4. **Directly connected nodes** (one level deep only; lowest priority)
 
 ### Record Structure
 
@@ -146,7 +149,7 @@ Every graph record maps to:
 
 | Module             | Knowledge model role                                                                           |
 |--------------------|------------------------------------------------------------------------------------------------|
-| `graphdb_attr`     | Maintains the attribute library (name attributes, relationship attributes, relationship types) |
+| `graphdb_attr`     | Maintains the attribute library (name attributes, literal attributes, relationship attributes, relationship types) |
 | `graphdb_class`    | Manages the taxonomic hierarchy: class nodes, qualifying characteristics, inheritance          |
 | `graphdb_instance` | Creates and retrieves instance nodes; manages compositional hierarchy                          |
 | `graphdb_rules`    | Stores and enforces graph rules (pattern recognition, relationship constraints)                |
