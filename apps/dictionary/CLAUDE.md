@@ -11,10 +11,8 @@ The `dictionary` application manages **in-memory, file-backed key-value dictiona
 | `dictionary.erl` | OTP `application` behaviour callback module |
 | `dictionary_sup.erl` | OTP `supervisor` callback module |
 | `dictionary_imp.erl` | Core implementation: ETS-backed CRUD + process lifecycle |
-| `dict_wkr.erl` | Dictionary worker (purpose TBD — not yet examined in detail) |
-| `dictionary_draft.erl` | Draft/scratch file — not production code |
-| `dictionary-1.*` | OTP release files |
-| `*.beam` | Compiled BEAM bytecode |
+| `dictionary_server.erl` | gen_server worker stub |
+| `term_server.erl` | gen_server worker stub |
 
 ## dictionary_imp — Key API
 
@@ -39,13 +37,11 @@ dictionary_imp:size(Proc_Name)  -> integer()
 
 Keys are stored as **binaries** (`list_to_binary(Key)` is applied internally).
 
-## Known Bugs / Incomplete Areas
+## NYI Status
 
-1. **`start_dictionary/2` calls `sfiles:file_exists/2`** — this module does not exist. A `file_exists/2` function is defined locally in `dictionary_imp.erl` at line 162 and should be called directly as `file_exists(File, F1)` instead of `sfiles:file_exists(File, F1)`.
-
-2. **`dictionary.erl` callbacks** — `start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3` are all NYI stubs.
-
-3. **`dictionary_draft.erl`** — draft file; should not be compiled into production releases.
+**`dictionary.erl` callbacks** — `start_phase/3`, `prep_stop/1`, `stop/1`,
+`config_change/3` are NYI stubs. These return `ok` and are correct for the
+current deployment model.
 
 ## Process Model
 
@@ -76,12 +72,4 @@ Each dictionary runs as an **independent registered process**. The process name 
 erlc apps/dictionary/src/dictionary_sup.erl apps/dictionary/src/dictionary_imp.erl apps/dictionary/src/dictionary.erl
 ```
 
-## TASKS.md Alignment
 
-Key items marked as DONE in `TASKS.md`:
-- Dictionary subsystem worker modules (`dictionary_server`, `term_server`).
-- `dictionary_imp` export_all flag removed.
-- `nref_include.erl` deleted (superseded by `nref_server`).
-
-Remaining high-priority items:
-- Implementation of the six graphdb worker modules (see `apps/graphdb/CLAUDE.md` and `TASKS.md` task 3).

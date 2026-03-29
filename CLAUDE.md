@@ -58,7 +58,7 @@ nref (application — started independently)
 ```
 
 `nref_include.erl` has been deleted — it was Dallas's earlier unsupervised
-predecessor to `nref_server` and was fully superseded (TASKS.md item 4 — DONE).
+predecessor to `nref_server` and is fully superseded by it.
 
 ## Common Coding Conventions
 
@@ -165,15 +165,10 @@ These are outstanding items — all previously known bugs have been fixed.
 - **`code_change/3`** — NYI in all gen_server modules; only relevant for hot code upgrades
 - **App lifecycle callbacks** — `start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3` return `ok` (no-op) across all five app modules; correct for current deployment model
 
-## TASKS.md Alignment
+## Remaining Work
 
-This guide reflects the state of the project as of `TASKS.md` generation. Key items marked as DONE in `TASKS.md` include:
-- Dictionary subsystem worker modules.
-- `dictionary_imp` export_all flag.
-- `nref_include.erl` deleted (superseded by `nref_server`).
-
-Remaining high-priority items include:
-- Implementation of the six graphdb worker modules (see Knowledge Model section above for roles).
+The six graphdb worker modules are the primary remaining implementation work.
+See `TASKS.md` for the full task list and priority order.
 
 ## Configuration
 

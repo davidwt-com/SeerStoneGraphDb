@@ -200,6 +200,8 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 - Inheritance fan-out: values propagate from all compositional ancestors; conflicting inherited values require explicit local overrides
 - Maintenance burden: moving or restructuring one parent silently affects the instance's inherited context from all other parents
 
+**Conflict resolution:** When two parent classes (or two compositional ancestors) supply conflicting values for the same attribute, no automatic resolution rule is defined here. A general conflict resolution mechanism will be introduced in a future enhancement to the relationships model. Until then, conflicts must be resolved by explicitly setting a local value on the instance, which takes priority over all inherited values (see Inheritance Mechanisms above).
+
 ---
 
 ## Modelling Guidelines
@@ -243,13 +245,6 @@ Result: Can query "find all blue things"
 │  One per project, reference         │
 │  common Environment                 │
 └─────────────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────────────┐
-│       Descriptive Database          │
-│  (Non-permanent working memory)     │
-│  Assembles specific views of KR     │
-└─────────────────────────────────────┘
 ```
 
 ### Record Structure
@@ -274,6 +269,29 @@ Each relationship is a flat triple: `characterization` is the arc label (an attr
 |--------------|----------------------------------------------------------|
 | **Internal** | Reference to another concept (enables network traversal) |
 | **External** | Standard data type (string, number, etc.)                |
+
+---
+
+## Construction Order
+
+Building a graph correctly requires that certain records exist before others can reference them. This is a **persistence constraint**, not an API constraint — an implementation may accept names, strings, or other symbolic inputs and resolve or create the underlying records transparently. What cannot be deferred is the order in which records are durably written.
+
+```
+1. Attribute nodes  (name attributes, literal attributes, relationship attributes, relationship types)
+2. Class nodes      (reference name attributes and qualifying characteristic attributes from step 1)
+3. Instance nodes   (reference class nodes from step 2 and name attributes from step 1)
+4. Relationships    (reference instance nodes from step 3 and relationship attributes from step 1)
+```
+
+**Why this order is required:**
+
+- A class node's class name attribute and instance name attribute are references to attribute nodes — those attribute nodes must exist and have Reference Numbers before the class record can be written.
+- An instance node's class membership is a reference to a class node — that class must exist before the instance is written.
+- A relationship is a triple of Reference Numbers (characterization, value, reciprocal) — all three referenced records must exist before the relationship is stored.
+
+**Bootstrapping note:** The first records written into any new graph are attribute nodes, because every other node type depends on them. A minimal graph requires at least one name attribute before any class or instance can be created.
+
+**API note:** An implementation is free to accept symbolic names rather than Reference Numbers at its interface — for example, `create_instance("Ford Taurus", "Automobile")` — and resolve or create the required attribute and class records internally, in the correct order, before writing the instance. The construction order is a property of the persistence layer, not a requirement that callers manage Reference Numbers directly.
 
 ---
 

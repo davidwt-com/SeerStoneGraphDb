@@ -161,7 +161,7 @@ The following callbacks in `graphdb.erl` are stubs that call `?NYI(...)` and mus
 - `config_change/3` — runtime config change notification
 
 All six worker modules (`graphdb_mgr`, `graphdb_rules`, `graphdb_attr`, `graphdb_class`,
-`graphdb_instance`, `graphdb_language`) are empty gen_server stubs. See `TASKS.md` task 3
+`graphdb_instance`, `graphdb_language`) are empty gen_server stubs. See `TASKS.md` task 1
 for the detailed sub-task breakdown.
 
 ## Key Design Notes
@@ -181,12 +181,7 @@ for the detailed sub-task breakdown.
 erlc apps/graphdb/src/graphdb_sup.erl apps/graphdb/src/graphdb.erl
 ```
 
-## TASKS.md Alignment
+## Remaining Work
 
-Key items marked as DONE in `TASKS.md`:
-- Dictionary subsystem worker modules.
-- `dictionary_imp` export_all flag.
-- `nref_include.erl` deleted (superseded by `nref_server`).
-
-Remaining high-priority items:
-- Implementation of the six graphdb worker modules (tasks 3a–3f).
+All six worker modules are empty gen_server stubs. See `TASKS.md` task 1
+for the detailed sub-task breakdown and priority order.
