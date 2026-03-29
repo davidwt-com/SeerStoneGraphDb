@@ -237,7 +237,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% Opens the DETS file. Initializes it if it did not previously exist.
 %%-----------------------------------------------------------------------------
 open(File) ->
-    io:format("dets opened:~p~n", [File]),
+    logger:info("opening dets file: ~p", [File]),
     Bool = filelib:is_file(File),
     case dets:open_file(?MODULE, [{file, File}]) of
 	{ok, ?MODULE} ->
@@ -247,7 +247,7 @@ open(File) ->
 	    end,
 	    true;
 	{error, Reason} ->
-	    io:format("cannot open dets table ~p~n", [Reason]),
+	    logger:error("cannot open dets table: ~p", [Reason]),
     	exit(nref_server_open)
     end.
 

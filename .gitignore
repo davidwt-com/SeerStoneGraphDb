@@ -9,3 +9,4 @@ _build/
 log/
 .idea/
 .claude/settings.local.json
+rebar3

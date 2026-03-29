@@ -57,8 +57,8 @@ nref (application — started independently)
         └── nref_server     (serves nrefs to callers, gen_server)
 ```
 
-`nref_include.erl` exists but is unsupervised and unreferenced — purpose unclear
-(see TASKS.md item 4).
+`nref_include.erl` has been deleted — it was Dallas's earlier unsupervised
+predecessor to `nref_server` and is fully superseded by it.
 
 ## Common Coding Conventions
 
@@ -99,25 +99,76 @@ Maintain this structure when adding new modules.
 ### Key Data Types
 - **Nref**: plain positive `integer()`, starting at 1. No wrapper type. Allocated by `nref_server:get_nref/0`.
 
+## Knowledge Model
+
+This database is an implementation of the knowledge graph model described in
+`knowledge-graph-database-guide.md` (sourced from US patents 5,379,366;
+5,594,837; 5,878,406 — Noyes; and Cogito knowledge center documentation).
+
+### Core Concepts
+
+| Concept                     | Erlang mapping                                                                                   |
+|-----------------------------|--------------------------------------------------------------------------------------------------|
+| **Node / Concept**          | A record identified by an Nref (positive integer)                                                |
+| **Instance Node**           | Concrete entity: has a name attribute, class membership, compositional parent, and relationships |
+| **Class Node**              | Type/schema: has a class name attribute, instance name attribute, and qualifying characteristics |
+| **Attribute Node**          | Name attribute, relationship attribute, or literal attribute stored in the attribute library     |
+| **Relationship (Arc)**      | Reciprocal connection between instances; stored as `{Characterization, Value, Reciprocal}`       |
+| **Reference Number (Nref)** | Globally unique `integer()` allocated by `nref_server:get_nref/0`                                |
+
+### Hierarchy Systems
+
+- **Taxonomic hierarchy** ("is a") — class structure managed by `graphdb_class`
+- **Compositional hierarchy** ("part of") — instance structure managed by `graphdb_instance`
+- These two hierarchies are **perpendicular** — they intersect only at instance-to-class membership
+
+### Inheritance Rules
+
+Priority order — each step applies only to attributes not yet resolved by a higher-priority step:
+
+1. **Local values** (highest priority — override all else)
+2. **Class-level bound values** (values explicitly bound at the class)
+3. **Compositional ancestors** (unbroken chain upward only)
+4. **Directly connected nodes** (one level deep only; lowest priority)
+
+### Record Structure
+
+Every graph record maps to:
+```erlang
+#{
+  nref          => Nref,              %% unique positive integer
+  relationships => [
+    #{characterization => AttrNref,   %% ref to attribute concept
+      value            => TargetNref, %% ref to target concept
+      reciprocal       => AttrNref2}  %% ref to reciprocal attribute
+  ]
+}
+```
+
+### graphdb Worker Responsibilities
+
+| Module             | Knowledge model role                                                                           |
+|--------------------|------------------------------------------------------------------------------------------------|
+| `graphdb_attr`     | Maintains the attribute library (name attributes, literal attributes, relationship attributes, relationship types) |
+| `graphdb_class`    | Manages the taxonomic hierarchy: class nodes, qualifying characteristics, inheritance          |
+| `graphdb_instance` | Creates and retrieves instance nodes; manages compositional hierarchy                          |
+| `graphdb_rules`    | Stores and enforces graph rules (pattern recognition, relationship constraints)                |
+| `graphdb_language` | Parses and executes graph queries against the node network                                     |
+| `graphdb_mgr`      | Primary coordinator: routes operations across the other five workers                           |
+
 ## Known Incomplete Areas (NYI)
 
 These are outstanding items — all previously known bugs have been fixed.
 
 - **graphdb worker modules** — all six are gen_server stubs with no real implementation (`graphdb_mgr`, `graphdb_rules`, `graphdb_attr`, `graphdb_class`, `graphdb_instance`, `graphdb_language`)
-- **`nref_include.erl`** — unsupervised, unreferenced; unclear if it's a library module or a duplicate of `nref_server` to be removed
 - **`seerstone:start/2` and `nref:start/2`** — non-normal start types (`{takeover,Node}`, `{failover,Node}`) hit `?NYI`; only relevant in distributed/failover deployments
 - **`code_change/3`** — NYI in all gen_server modules; only relevant for hot code upgrades
 - **App lifecycle callbacks** — `start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3` return `ok` (no-op) across all five app modules; correct for current deployment model
 
-## TASKS.md Alignment
+## Remaining Work
 
-This guide reflects the state of the project as of `TASKS.md` generation. Key items marked as DONE in `TASKS.md` include:
-- Dictionary subsystem worker modules.
-- `dictionary_imp` export_all flag.
-
-Remaining high-priority items include:
-- Implementation of the six graphdb worker modules.
-- Clarification of `nref_include.erl`'s purpose.
+The six graphdb worker modules are the primary remaining implementation work.
+See `TASKS.md` for the full task list and priority order.
 
 ## Configuration
 

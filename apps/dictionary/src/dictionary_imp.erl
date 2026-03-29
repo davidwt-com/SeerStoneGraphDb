@@ -169,7 +169,7 @@ file_exists(File, Fun) ->
 start_registered_process(Proc_Name, Fun) ->
 	case is_pid(whereis(Proc_Name))of
 		false -> register(Proc_Name, spawn(Fun)), ok;  %% no Proc_Name process is defined.
-		true -> io:format("~p process is already started.~n", [Proc_Name])	
+		true -> logger:warning("~p process is already started", [Proc_Name])	
 	end.
 
 
@@ -181,7 +181,7 @@ rpc(F, Proc_Name) ->
 				{Proc_Name, Reply} -> Reply
 			end;
 		false ->
-			io:format("~p not open.~n",[Proc_Name])
+			logger:warning("~p not open", [Proc_Name])
 		end.
 
 
@@ -235,7 +235,7 @@ delete_dictionary(Type, File) ->
 			file:delete(File);					%% note that stop_dictionary flushes the pds to File and exists the process.  File is then deleted, so it doesn't matter if the process had opened File or not.
 		false -> case filelib:is_file(File) of 	%% process is not open
 			true -> file:delete(File);			%% file exists so delete it.
-			false -> io:format("Can't find ~p to delete.~n", [File]), true %% file does not exits so you'r done.
+			false -> logger:warning("can't find ~p to delete", [File]), true %% file does not exits so you'r done.
 			end 	
 	end.
 

@@ -239,7 +239,7 @@ code_change(_OldVsn, State, _Extra) ->
 open() ->
 	File = "nref_allocator.dets",    %% File name is set here.
 	Bool = filelib:is_file(File),  %% check this before you open the file, because dets:open_file creates the file if it doesn't exist.
-    io:format("dets opened:~p~n", [File]),
+    logger:info("opening dets file: ~p", [File]),
     case dets:open_file(?MODULE, [{file, File}]) of
 	{ok,?MODULE} ->
 	    case Bool of
@@ -255,7 +255,7 @@ open() ->
 		ok
 	    end;
 	{error, Reason} ->
-	    io:format("cannot open dets table ~p~n", [Reason]),
+	    logger:error("cannot open dets table: ~p", [Reason]),
     	exit(Reason),
 		{error, Reason}
     end.
