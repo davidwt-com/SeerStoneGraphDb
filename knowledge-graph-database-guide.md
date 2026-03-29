@@ -103,8 +103,8 @@ Attribute Library
 All relationships are reciprocal. From viewpoint A→B and B→A, characterizations may differ.
 
 **Examples:**
-| A's View | Relationship | B's View |
-|----------|-------------|----------|
+| A's View | Type | B's View |
+|----------|------|----------|
 | Ford makes Taurus | manufacturing | Taurus is made by Ford |
 | Mary is mother of Martha | family | Martha is daughter of Mary |
 | Warehouse 10 has forklift A | location | Forklift A is located in Warehouse 10 |
@@ -392,8 +392,8 @@ Relationship = Characterization + Value + [Reciprocal Characterization]
 
 - **Cogito, Inc.** "Defining Models" (2005) - Graph database modeling methodology
 - **US Patent 5,379,366** (1995) - Noyes, "Method for representation of knowledge in a computer as a network database system"
-- **US Patent 5,594,837** (1997) - Noyes, Continuation with system concepts
-- **US Patent 5,878,406** (1999) - Noyes, Further refinements
+- **US Patent 5,594,837** (1997) - Noyes, "Method for representation of knowledge in a computer as a network database system" (continuation-in-part of 5,379,366)
+- **US Patent 5,878,406** (1999) - Noyes, "Method for representation of knowledge in a computer as a network database system" (continuation-in-part of 5,594,837)
 
 ---
 

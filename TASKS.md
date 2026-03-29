@@ -205,8 +205,8 @@ present configuration.
 | 7 | Instance Inheritance Process wrong priority order | Applied 2026-03-27 — reordered local → class → ancestor → connected |
 | 8 | Contradictory multiple-parent pitfall advice | Applied 2026-03-27 — balanced pitfall list for both cases |
 | 9 | "Class" reused in View/Document Derivation | Applied 2026-03-27 — renamed to Template |
-| 10 | Reciprocity table middle column mislabelled "Relationship" | Pending |
-| 11 | Patent titles incomplete (1997, 1999 entries) | Pending |
+| 10 | Reciprocity table middle column mislabelled "Relationship" | Applied 2026-03-29 — renamed to "Type" |
+| 11 | Patent titles incomplete (1997, 1999 entries) | Applied 2026-03-29 — actual titles inserted; continuation-in-part notes added |
 
 ### Pending: improvements to `knowledge-graph-database-guide.md`
 
@@ -219,8 +219,8 @@ The Multiple Inheritance section now documents the pitfalls of attribute conflic
 **C (was 5) — Descriptive Database layer unexplained**
 The three-layer architecture diagram (Environment → Project → Descriptive) describes only the first two layers. The Descriptive Database is noted as "non-permanent working memory" with no explanation of how it is populated, when it is discarded, or what role it plays in query execution.
 
-**D (was 10) — Reciprocity table middle column mislabelled**
-Column header is "Relationship" but all cells contain relationship type names (manufacturing, family, location). Should be "Type" or "Group".
+~~**D (was 10) — Reciprocity table middle column mislabelled**~~
+~~Column header is "Relationship" but all cells contain relationship type names (manufacturing, family, location). Should be "Type" or "Group".~~ Applied 2026-03-29.
 
-**E (was 11) — Patent titles incomplete**
-The 1997 and 1999 entries in Sources carry editorial summaries ("Continuation with system concepts", "Further refinements") rather than the actual patent titles.
+~~**E (was 11) — Patent titles incomplete**~~
+~~The 1997 and 1999 entries in Sources carry editorial summaries ("Continuation with system concepts", "Further refinements") rather than the actual patent titles.~~ Applied 2026-03-29. All three Noyes patents share the title "Method for representation of knowledge in a computer as a network database system"; 5,594,837 is a continuation-in-part of 5,379,366 and 5,878,406 is a continuation-in-part of 5,594,837.
