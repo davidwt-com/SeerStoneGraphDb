@@ -200,7 +200,7 @@ present configuration.
 | 2 | Node creation sequence (bootstrap order) | Pending |
 | 3 | Multiple inheritance conflict resolution rule | Pending |
 | 4 | "External Name Attributes" undefined | Applied 2026-03-27 — replaced with Literal Attributes |
-| 5 | Descriptive Database layer unexplained | Pending |
+| 5 | Descriptive Database layer unexplained | Resolved 2026-03-29 — section removed from guide |
 | 6 | "Articulation Principles" title opaque | Applied 2026-03-27 — renamed Modelling Guidelines |
 | 7 | Instance Inheritance Process wrong priority order | Applied 2026-03-27 — reordered local → class → ancestor → connected |
 | 8 | Contradictory multiple-parent pitfall advice | Applied 2026-03-27 — balanced pitfall list for both cases |
@@ -216,8 +216,8 @@ The guide describes the model structure but not the order of operations required
 **B (was 3) — Multiple inheritance conflict resolution unspecified**
 The Multiple Inheritance section now documents the pitfalls of attribute conflicts between two parent classes, but gives no resolution rule — which parent wins, or whether an explicit local override is always required. A definitive statement is needed.
 
-**C (was 5) — Descriptive Database layer unexplained**
-The three-layer architecture diagram (Environment → Project → Descriptive) describes only the first two layers. The Descriptive Database is noted as "non-permanent working memory" with no explanation of how it is populated, when it is discarded, or what role it plays in query execution.
+~~**C (was 5) — Descriptive Database layer unexplained**~~
+~~The three-layer architecture diagram (Environment → Project → Descriptive) describes only the first two layers. The Descriptive Database was noted as "non-permanent working memory" with no explanation of how it is populated, when it is discarded, or what role it plays in query execution.~~ Resolved 2026-03-29 — section removed from guide.
 
 ~~**D (was 10) — Reciprocity table middle column mislabelled**~~
 ~~Column header is "Relationship" but all cells contain relationship type names (manufacturing, family, location). Should be "Type" or "Group".~~ Applied 2026-03-29.
