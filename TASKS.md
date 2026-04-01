@@ -17,7 +17,11 @@ Graph nodes are identified by **Nrefs** (plain `integer()`, allocated by
 `nref_server:get_nref/0`). Every record stores:
 ```erlang
 #{
-  nref          => Nref,
+  nref                  => Nref,
+  attribute_value_pairs => [
+    #{attribute => AttrNref,
+      value     => Value}
+  ],
   relationships => [
     #{characterization => AttrNref,
       value            => TargetNref,
@@ -116,23 +120,7 @@ The following gen_server modules have `?NYI(code_change)` in their
 Only invoked during a hot code upgrade. Low priority.
 
 
-## 4. Old pre-rebar3 directories
-
-The following directories at the project root are **not compiled** by rebar3
-and are not part of the active build:
-
-| Path | Status |
-|---|---|
-| `Dictionary/` | Early design reference; not in `apps/`; not compiled |
-| `Database/` | Old source location; rebar3 uses `apps/` |
-| `graphdb/` (top-level) | Old source location; rebar3 uses `apps/` |
-| `*.beam` at project root | Stale; built from old flat layout |
-
-These do not interfere with the build. Delete or retain as historical
-reference — your call.
-
-
-## 5. seerstone.app.src — start_phases not defined
+## 4. seerstone.app.src — start_phases not defined
 
 None of the `.app.src` files define a `start_phases` key, so `start_phase/3`
 will never be called by OTP. If phased startup is desired in future,
@@ -151,4 +139,4 @@ will never be called by OTP. If phased startup is desired in future,
 6. **graphdb_mgr** (task 1f) — coordinator; implement last once workers have stable APIs
 7. **Non-normal start/2** (task 2) — low priority, distributed deployments only
 8. **code_change/3** (task 3) — low priority, hot upgrades only
-9. **Old directory cleanup** (task 4) — housekeeping
+9. **start_phases** (task 4) — low priority, only if phased startup is needed

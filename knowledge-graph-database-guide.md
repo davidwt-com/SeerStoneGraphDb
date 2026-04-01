@@ -251,6 +251,12 @@ Result: Can query "find all blue things"
 ```json
 {
   "reference_number": "unique_permanent_id",
+  "attribute_value_pairs": [
+    {
+      "attribute": "ref_to_attribute_concept",
+      "value": "any data type value or construct"
+    }
+  ],
   "relationships": [
     {
       "characterization": "ref_to_attribute_concept",
@@ -261,7 +267,9 @@ Result: Can query "find all blue things"
 }
 ```
 
-Each relationship is a flat triple: `characterization` is the arc label (an attribute Nref), `value` is the target concept (an Nref), and `reciprocal` is the arc label as seen from the target back to this node (also an attribute Nref). `reciprocal` is a sibling of `value`, not nested inside it.
+Each attribute value pair, with the attribute nref, the value of any type, from simple native to complex.  The attribute node would have definition(s) of these values.
+
+Each relationship is a flat triple: `characterization` is the arc label (an attribute Nref), `value` is the target concept (an Nref), and `reciprocal` is the arc label as seen from the target back to this node (also an attribute Nref).
 
 ### Value Types
 
