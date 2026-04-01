@@ -23,9 +23,10 @@ Graph nodes are identified by **Nrefs** (plain `integer()`, allocated by
       value     => Value}
   ],
   relationships => [
-    #{characterization => AttrNref,
-      value            => TargetNref,
-      reciprocal       => AttrNref2}
+    #{characterization      => AttrNref,
+      value                 => TargetNref,
+      reciprocal            => AttrNref2,
+      attribute_value_pairs => []}          %% optional; per-direction; [] = none
   ]
 }
 ```
@@ -42,6 +43,13 @@ attribute descriptors for scalar/external values stored directly on nodes.
 - Implement `create_relationship_attribute/2` (attribute + reciprocal)
 - Implement `create_relationship_type/1` and grouping of attributes under types
 - Implement lookup: `get_attribute/1`, `list_attributes/0`, `list_relationship_types/0`
+- At bootstrap, seed the `relationship_avp` flag attribute into the library. This is
+  a literal attribute whose presence (value `true`) in another attribute node's own
+  `attribute_value_pairs` marks that attribute as intended for use on relationship arcs.
+  `create_literal_attribute/2` (or a variant) must accept an optional
+  `#{relationship_avp => true}` marker stored as an AVP on the new attribute's record.
+  Relationship AVP attributes may be organized under their nearest general sibling
+  attribute in the library (e.g., `relationship_weight` as a child of `weight`).
 
 ### 1b. `graphdb_class` — Taxonomic Hierarchy
 
@@ -63,6 +71,10 @@ Creates and retrieves instance nodes; manages the "part of" hierarchy.
 - Define schema for instance nodes (name attr Nref, class Nref, compositional parent Nref, relationships)
 - Implement `create_instance/3` (name, class Nref, compositional parent Nref) — allocates Nref
 - Implement `add_relationship/4` (instance Nref, characterization Nref, target Nref, reciprocal Nref)
+  The relationship map stored must include `attribute_value_pairs => []` from day one so the
+  schema is consistent from the first write. Initial implementation always writes `[]`.
+  A later `add_relationship/5` (or an options-map variant) will accept a caller-supplied
+  AVP list for the arc; that is a following enhancement and is not required here.
 - Implement `get_instance/1`, `children/1`, `compositional_ancestors/1`
 - Implement full inheritance resolution: `resolve_value/2` (instance Nref, attribute Nref)
   following: local → class-bound → compositional ancestor chain → directly connected (one level)

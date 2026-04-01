@@ -139,22 +139,23 @@ Every graph record maps to:
       value     => Value}                    %% any term — literal or complex
   ],
   relationships => [
-    #{characterization => AttrNref,          %% ref to attribute concept (arc label)
-      value            => TargetNref,        %% ref to target concept
-      reciprocal       => AttrNref2}         %% arc label as seen from target back
+    #{characterization      => AttrNref,    %% ref to attribute concept (arc label)
+      value                 => TargetNref,  %% ref to target concept
+      reciprocal            => AttrNref2,   %% arc label as seen from target back
+      attribute_value_pairs => []}          %% optional; per-direction; [] = none
   ]
 }
 ```
 
 `attribute_value_pairs` carries literal and non-topological values (e.g., name strings, measurements, URLs). The value may be any Erlang term; the attribute node holds the definition of permissible value types. These pairs do **not** participate in graph traversal.
 
-`relationships` are graph-topology arcs. Each is a flat triple: `characterization` is the arc label (an attribute Nref), `value` is the target concept (an Nref), and `reciprocal` is the arc label as seen from the target back to this node (also an attribute Nref).
+`relationships` are graph-topology arcs. Each is a flat triple plus an optional per-arc metadata list: `characterization` is the arc label (an attribute Nref), `value` is the target concept (an Nref), `reciprocal` is the arc label as seen from the target back to this node (also an attribute Nref), and `attribute_value_pairs` is an optional list of per-direction metadata pairs (provenance, weights, flags, revisions, active time frames, etc.). The AVP list does not inherit and does not participate in graph traversal by default; a future traversal-condition mechanism may allow certain AVPs to gate or modify traversal.
 
 ### graphdb Worker Responsibilities
 
 | Module             | Knowledge model role                                                                           |
 |--------------------|------------------------------------------------------------------------------------------------|
-| `graphdb_attr`     | Maintains the attribute library (name attributes, literal attributes, relationship attributes, relationship types) |
+| `graphdb_attr`     | Maintains the attribute library (name attributes, literal attributes, relationship attributes, relationship types); literal attributes used as relationship arc metadata are identified by carrying a `relationship_avp => true` AVP on their own attribute node record |
 | `graphdb_class`    | Manages the taxonomic hierarchy: class nodes, qualifying characteristics, inheritance          |
 | `graphdb_instance` | Creates and retrieves instance nodes; manages compositional hierarchy                          |
 | `graphdb_rules`    | Stores and enforces graph rules (pattern recognition, relationship constraints)                |

@@ -127,6 +127,42 @@ Relationship Type: Location
 └── Attribute: "location of" (for locations)
 ```
 
+### Relationship Metadata (Per-Arc Attribute/Value Pairs)
+
+Each relationship entry may carry an optional `attribute_value_pairs` list that holds metadata about that specific arc. This list is **per-direction (asymmetric)**: each node stores its own AVPs on its own copy of the arc independently of the AVPs stored on the reciprocal entry at the target node.
+
+**Use cases:**
+
+| Category          | Example attributes                             |
+|-------------------|------------------------------------------------|
+| Provenance        | `source`, `asserted_by`, `confidence_source`   |
+| Weights / scores  | `weight`, `strength`, `probability`            |
+| Flags             | `is_inferred`, `is_verified`, `is_deprecated`  |
+| Revisions         | `version`, `last_modified_by`, `change_reason` |
+| Active time frame | `valid_from`, `valid_to`, `created_at`         |
+
+**Rules:**
+
+- The field is optional. Absent is equivalent to an empty list. No Nref is allocated for the arc itself; the relationship remains a flat structure inside the owning node's record.
+- Relationship AVPs do **not** inherit. They are not propagated by any inheritance mechanism.
+- Relationship AVPs do not participate in graph traversal by default. However, certain AVPs (e.g., a `valid_to` time frame or an `is_deprecated` flag) are explicitly reserved for a future traversal-condition mechanism that may gate or modify traversal based on their values. This capability is not ruled out by this design.
+- Because the relationship has no Nref of its own, attribute nodes referenced in a relationship's AVP list are sourced from the same attribute library as all other attribute nodes.
+
+**Attribute library organization for relationship AVP attributes:**
+
+Relationship AVP attributes are **literal attributes**. They are identified in the library by carrying a `relationship_avp` AVP — value `true` — on their own attribute node record:
+
+```
+Attribute node: "relationship_weight"
+  attribute_value_pairs:
+    #{attribute => NameAttrNref,           value => <<"relationship_weight">>}
+    #{attribute => RelationshipAvpFlagNref, value => true}
+```
+
+This flag is itself a literal attribute (`relationship_avp`) seeded into the attribute library at bootstrap. Its presence (value `true`) marks an attribute as intended for use on relationship arcs rather than on node records directly. Absent means not a relationship AVP attribute.
+
+Relationship AVP attributes may be organized as **children of their nearest general sibling attribute** in the library. For example, a `relationship_weight` attribute (arc-specific) is a sibling or child of a general `weight` literal attribute, distinguished from it by the `relationship_avp` flag.
+
 ---
 
 ## Hierarchy Systems
@@ -261,7 +297,8 @@ Result: Can query "find all blue things"
     {
       "characterization": "ref_to_attribute_concept",
       "value": "ref_to_target_concept",
-      "reciprocal": "ref_to_reciprocal_attribute"
+      "reciprocal": "ref_to_reciprocal_attribute",
+      "attribute_value_pairs": []
     }
   ]
 }
@@ -270,6 +307,8 @@ Result: Can query "find all blue things"
 Each attribute value pair, with the attribute nref, the value of any type, from simple native to complex.  The attribute node would have definition(s) of these values.
 
 Each relationship is a flat triple: `characterization` is the arc label (an attribute Nref), `value` is the target concept (an Nref), and `reciprocal` is the arc label as seen from the target back to this node (also an attribute Nref).
+
+The optional `attribute_value_pairs` list on a relationship carries per-arc metadata (provenance, weights, flags, revisions, active time frames, etc.). It is absent or empty when not needed. See **Relationship Metadata** under Relationship Design for the full specification.
 
 ### Value Types
 
@@ -410,6 +449,7 @@ Class = Class Name Attribute + Instance Name Attribute + Qualifying Characterist
 **Relationship Completeness:**
 ```
 Relationship = Characterization + Value + [Reciprocal Characterization]
+             + [AVP list (optional, per-direction)]
 ```
 
 ---
