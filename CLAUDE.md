@@ -136,14 +136,22 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 Every graph record maps to:
 ```erlang
 #{
-  nref          => Nref,              %% unique positive integer
+  nref                 => Nref,              %% unique positive integer
+  attribute_value_pairs => [
+    #{attribute => AttrNref,                 %% ref to attribute concept
+      value     => Value}                    %% any term — literal or complex
+  ],
   relationships => [
-    #{characterization => AttrNref,   %% ref to attribute concept
-      value            => TargetNref, %% ref to target concept
-      reciprocal       => AttrNref2}  %% ref to reciprocal attribute
+    #{characterization => AttrNref,          %% ref to attribute concept (arc label)
+      value            => TargetNref,        %% ref to target concept
+      reciprocal       => AttrNref2}         %% arc label as seen from target back
   ]
 }
 ```
+
+`attribute_value_pairs` carries literal and non-topological values (e.g., name strings, measurements, URLs). The value may be any Erlang term; the attribute node holds the definition of permissible value types. These pairs do **not** participate in graph traversal.
+
+`relationships` are graph-topology arcs. Each is a flat triple: `characterization` is the arc label (an attribute Nref), `value` is the target concept (an Nref), and `reciprocal` is the arc label as seen from the target back to this node (also an attribute Nref).
 
 ### graphdb Worker Responsibilities
 
