@@ -39,6 +39,7 @@ Instance Node
 ├── Class Membership (taxonomic parent)
 ├── Compositional Parent (part-of parent)
 └── Relationships (connections to other instances)
+└── Attributes with values
 ```
 
 > Uniqueness is provided by the **Reference Number (Nref)**, not the name. Two instances may share the same name and be distinguished only by their position in the graph.
@@ -54,7 +55,7 @@ Groups of instances sharing the same attributes. The primary building block of t
 **Requirements:**
 - Each class requires a **class name attribute** (distinguishes class from siblings)
 - Each class requires an **instance name attribute** (for naming instances)
-- May have qualifying characteristics (attributes defining the class)
+- May have qualifying characteristics (attributes defining the class and defining the instances of the classes)
 
 **Structure:**
 ```
@@ -62,8 +63,12 @@ Class Node (Taxonomic Hierarchy)
 ├── Class Name Attribute
 ├── Instance Name Attribute
 ├── Qualifying Characteristics
+  ├── Attributes with class values
+  └── Attributes (both relationships and literals) for instances
 └── Subclasses (child classes)
 ```
+
+A class must contain all the attributes that instances may instantiate.  These are inherited by derived classes (subclasses) and by instances of the class or subclasses.
 
 **Class vs Instance Determination:**
 > Test: `"X is a [concept]"` must make sense.
@@ -78,7 +83,7 @@ Provide names, values, and relationship connection points.
 | Type                        | Purpose                                                                                     |
 |-----------------------------|---------------------------------------------------------------------------------------------|
 | **Name Attributes**         | Label/value pairs for naming classes and instances                                          |
-| **Relationship Attributes** | Characterize connections between instances                                                  |
+| **Relationship Attributes** | Characterize connections between instances, or generally between nodes                      |
 | **Literal Attributes**      | Attributes whose values are raw data — numbers, strings, URLs, filenames, or other scalar types — stored directly on a node rather than as a reference to another node. Literal attributes are not part of the graph topology; they carry no Reference Numbers and participate in no relationships. Examples: temperature readings, measurements, weighted scores, URLs, filenames. |
 
 **Organization:**
@@ -155,7 +160,7 @@ Relationship AVP attributes are **literal attributes**. They are identified in t
 ```
 Attribute node: "relationship_weight"
   attribute_value_pairs:
-    #{attribute => NameAttrNref,           value => <<"relationship_weight">>}
+    #{attribute => NameAttrNref, value => <<"relationship_weight">>}
     #{attribute => RelationshipAvpFlagNref, value => true}
 ```
 
