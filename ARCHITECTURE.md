@@ -139,32 +139,32 @@ Nrefs are assigned breadth-first. Attribute nodes under **Names** provide the `N
  6      ├── Names (attribute)
  7      ├── Literals (attribute)              ← children TBD
  8      └── Relationships (attribute)
-            (children of Names:)
+            (children of Names — Attribute before Class:)
  9          ├── Category Name Attributes (attribute)
-10          ├── Class Name Attributes (attribute)
-11          ├── Instance Name Attributes (attribute)
-12          └── Attribute Name Attributes (attribute)
-            (children of Relationships:)
+10          ├── Attribute Name Attributes (attribute)
+11          ├── Class Name Attributes (attribute)
+12          └── Instance Name Attributes (attribute)
+            (children of Relationships — Attribute before Class:)
 13          ├── Category Relationships (attribute)
-14          ├── Class Relationships (attribute)
-15          ├── Instance Relationships (attribute)
-16          └── Attribute Relationships (attribute)
-            (children of *Name Attributes — one Name per kind:)
-17              ├── Name  ← NameAttrNref for category nodes  (parent: 9)
-18              ├── Name  ← NameAttrNref for class nodes     (parent: 10)
-19              ├── Name  ← NameAttrNref for instance nodes  (parent: 11)
-20              └── Name  ← NameAttrNref for attribute nodes (parent: 12, self-ref)
-            (children of *Relationships — arc label nodes, strict BFS order:)
-21              ├── Parent    category compositional arc label  (parent: 13)
-22              ├── Child     category compositional arc label  (parent: 13)
-23              ├── Parent    class compositional arc label     (parent: 14)
-24              ├── Child     class compositional arc label     (parent: 14)
-25              ├── Parent    instance compositional arc label  (parent: 15)
-26              ├── Child     instance compositional arc label  (parent: 15)
-27              ├── Class     instance→class membership arc    (parent: 15)
-28              ├── Instance  class→instances membership arc   (parent: 15)
-29              ├── Parent    attribute compositional arc label (parent: 16, self-ref)
-30              └── Child     attribute compositional arc label (parent: 16, self-ref)
+14          ├── Attribute Relationships (attribute)
+15          ├── Class Relationships (attribute)
+16          └── Instance Relationships (attribute)
+            (children of *Name Attributes — one Name per kind, BFS:)
+17              ├── Name  ← NameAttrNref for category nodes   (parent:  9)
+18              ├── Name  ← NameAttrNref for attribute nodes  (parent: 10, self-ref)
+19              ├── Name  ← NameAttrNref for class nodes      (parent: 11)
+20              └── Name  ← NameAttrNref for instance nodes   (parent: 12)
+            (children of *Relationships — arc label nodes, BFS:)
+21              ├── Parent    category  compositional arc label (parent: 13)
+22              ├── Child     category  compositional arc label (parent: 13)
+23              ├── Parent    attribute compositional arc label (parent: 14, self-ref)
+24              ├── Child     attribute compositional arc label (parent: 14, self-ref)
+25              ├── Parent    class     compositional arc label (parent: 15)
+26              ├── Child     class     compositional arc label (parent: 15)
+27              ├── Parent    instance  compositional arc label (parent: 16)
+28              ├── Child     instance  compositional arc label (parent: 16)
+29              ├── Class     instance→class membership arc    (parent: 16)
+30              └── Instance  class→instances membership arc   (parent: 16)
 ```
 
 ### NameAttrNref quick-reference
@@ -172,9 +172,9 @@ Nrefs are assigned breadth-first. Attribute nodes under **Names** provide the `N
 | Kind | NameAttrNref |
 |---|---|
 | `category` | 17 |
-| `class` | 18 |
-| `instance` | 19 |
-| `attribute` | 20 |
+| `attribute` | 18 |
+| `class` | 19 |
+| `instance` | 20 |
 
 ### Compositional arc labels quick-reference
 
@@ -183,25 +183,25 @@ Arc labels used in `{relationship, ParentNref, ChildArcNref, [], ParentArcNref, 
 | Child kind | ChildArcNref | ParentArcNref |
 |---|---|---|
 | `category` | 22 (Child/CatRel) | 21 (Parent/CatRel) |
-| `class` | 24 (Child/ClassRel) | 23 (Parent/ClassRel) |
-| `instance` | 26 (Child/InstRel) | 25 (Parent/InstRel) |
-| `attribute` | 30 (Child/AttrRel) | 29 (Parent/AttrRel) |
+| `attribute` | 24 (Child/AttrRel) | 23 (Parent/AttrRel) |
+| `class` | 26 (Child/ClassRel) | 25 (Parent/ClassRel) |
+| `instance` | 28 (Child/InstRel) | 27 (Parent/InstRel) |
 
-The last two rows under Attribute Relationships (nrefs 29 and 30) are self-referential: the arc label attribute nodes for "attribute" compositional arcs are themselves attribute nodes whose own parent arc label is nref 29. This is consistent — the system uses its own arc label vocabulary to describe itself.
+The attribute row (nrefs 23 and 24) is self-referential: the arc label attribute nodes for "attribute" compositional arcs are themselves attribute nodes whose own parent arc label is nref 23. This is consistent — the system uses its own arc label vocabulary to describe itself.
 
 ### Instance-to-class membership arc labels
 
 | Nref | Name | Direction | Usage |
 |---|---|---|---|
-| 27 | Class | instance → its class | `characterization` on the instance→class row |
-| 28 | Instance | class → its instances | `characterization` on the class→instance row |
+| 29 | Class | instance → its class | `characterization` on the instance→class row |
+| 30 | Instance | class → its instances | `characterization` on the class→instance row |
 
 Usage in the relationships table:
 ```erlang
-%% Writing instance membership: {relationship, InstNref, 27, [], 28, ClassNref, []}
+%% Writing instance membership: {relationship, InstNref, 29, [], 30, ClassNref, []}
 %% Expands to:
-%%   Row 1: source=InstNref,  characterization=27 (Class),    target=ClassNref, reciprocal=28
-%%   Row 2: source=ClassNref, characterization=28 (Instance), target=InstNref,  reciprocal=27
+%%   Row 1: source=InstNref,  characterization=29 (Class),    target=ClassNref, reciprocal=30
+%%   Row 2: source=ClassNref, characterization=30 (Instance), target=InstNref,  reciprocal=29
 ```
 
 These are the only arc labels that cross the taxonomic/compositional boundary. `graphdb_instance:create_instance/3` writes this relationship pair atomically alongside the node record.
