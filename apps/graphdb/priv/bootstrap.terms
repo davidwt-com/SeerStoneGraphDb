@@ -6,7 +6,7 @@
 %% nodes table is empty.  After a successful load, nref_server:set_floor/1 is
 %% called and the file is never consulted again.
 %%
-%% Pre-assigned nrefs: 1-28 (nodes).
+%% Pre-assigned nrefs: 1-30 (nodes).
 %% Relationship record IDs are allocated by nref_server:get_nref/0, which
 %% starts at nref_start (10000) because {nref_start,...} is processed first.
 %%
@@ -83,6 +83,12 @@
 {node, 27, attribute, 16, {20, "Parent"}, []}.  %% attribute Parent arc label
 {node, 28, attribute, 16, {20, "Child"},  []}.  %% attribute Child  arc label
 
+%% Level 4 -- Instance-to-class membership arc labels (children of Instance Relationships)
+%% Note: strictly BFS these would fall between nrefs 24 and 25, but 25-28 are already
+%% assigned; continuing from 29 is correct -- do not renumber existing nrefs.
+{node, 29, attribute, 15, {20, "Class"},    []}.  %% arc label: instance -> its class
+{node, 30, attribute, 15, {20, "Instance"}, []}.  %% arc label: class -> its instances
+
 %% =========================================================================
 %% Compositional arcs
 %%
@@ -125,5 +131,7 @@
 {relationship, 14, 28, [], 27, 24, []}.  %% Class Relationships     -> Child
 {relationship, 15, 28, [], 27, 25, []}.  %% Instance Relationships  -> Parent
 {relationship, 15, 28, [], 27, 26, []}.  %% Instance Relationships  -> Child
+{relationship, 15, 28, [], 27, 29, []}.  %% Instance Relationships  -> Class
+{relationship, 15, 28, [], 27, 30, []}.  %% Instance Relationships  -> Instance
 {relationship, 16, 28, [], 27, 27, []}.  %% Attribute Relationships -> Parent (arc label self-ref)
 {relationship, 16, 28, [], 27, 28, []}.  %% Attribute Relationships -> Child  (arc label self-ref)
