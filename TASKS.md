@@ -8,7 +8,7 @@ modernization work is complete. The architecture has been fully designed
 
 ## Architecture Summary (read ARCHITECTURE.md for full detail)
 
-- **Two database roles**: *Environment* (categories, attributes, classes, languages — shared, schema-level) and *Project* (instances and their relationships — one database per project, independent)
+- **Two database roles**: *Environment* (categories, attributes, classes, languages — shared, living schema that grows over time) and *Project* (instances and their relationships — one database per project, independent). Only category nodes are immutable; all other environment nodes grow freely at runtime. Only bootstrap nrefs (1–30) and a small number of explicitly seeded runtime nrefs (e.g., `target_kind`) are referenced by nref constant in code — all other runtime-added nodes are treated generically.
 - **Storage**: Mnesia for all six `graphdb_*` workers (two tables per database: `nodes`, `relationships`)
 - **nref spaces**: Environment allocator starts at 10000 (protected by `{nref_start, 10000}` in bootstrap.terms). Project allocators start at **1** — no pre-assigned nrefs, no bootstrap file, no floor needed
 - **Cross-database nref resolution**: `characterization` and `reciprocal` fields always reference environment nrefs; `target_nref` is routed to environment or project based on the arc label's `target_kind` AVP (see ARCHITECTURE.md Section 6)
