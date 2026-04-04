@@ -82,13 +82,14 @@ This module is called by `graphdb_mgr:init/1` when the Mnesia `nodes` table is e
 - Call `file:consult/1` on the bootstrap file; validate all terms
 - Validate that exactly one `{nref_start, N}` directive is present and that all node
   nrefs are `< N`; fail fast otherwise
-- Partition terms into nodes and relationships; enforce processing order:
-  1. `category` nodes
-  2. `attribute` nodes
-  3. `class` nodes
-  4. `instance` nodes
-  5. `relationship` records (includes compositional arcs for category and attribute nodes)
-  6. `{nref_start, N}` directive — call `nref_server:set_floor(N)` last, after all data written
+- Process in this order:
+  1. `{nref_start, N}` directive — call `nref_server:set_floor(N)` **first** so subsequent
+     `get_nref/0` calls for relationship IDs return `>= N`, never colliding with pre-assigned nrefs
+  2. `category` nodes
+  3. `attribute` nodes
+  4. `class` nodes
+  5. `instance` nodes
+  6. `relationship` records — each gets an ID via `get_nref()`; two directed rows per term, atomic
 - Write each node to Mnesia in a transaction
 - Expand each `{relationship, N1, R1, AVPs1, R2, N2, AVPs2}` term into two directed
   `relationship` records; write both atomically in the same Mnesia transaction
@@ -97,10 +98,10 @@ This module is called by `graphdb_mgr:init/1` when the Mnesia `nodes` table is e
   graphdb_bootstrap:load() -> ok | {error, Reason :: term()}.
   ```
 
-**Bootstrap file (content deferred):**
-File: `apps/graphdb/priv/bootstrap.terms`
-Create the priv directory and a placeholder file. Populate with actual nodes/relationships
-when the user supplies the bootstrap tree content.
+**Bootstrap file: DONE**
+`apps/graphdb/priv/bootstrap.terms` is fully written: 28 nodes (nrefs 1–28, BFS) and
+27 compositional relationship pairs. See ARCHITECTURE.md Section 4 for the nref table
+and arc label quick-reference.
 
 ---
 
