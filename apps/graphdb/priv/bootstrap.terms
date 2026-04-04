@@ -18,10 +18,14 @@
 %%
 %% Compositional arc labels -- {relationship, ParentNref, ChildArcNref, [],
 %%                                            ParentArcNref, ChildNref, []}
-%%   category  child: ChildArc=22 (Child/CatRel),  ParentArc=21 (Parent/CatRel)
-%%   attribute child: ChildArc=28 (Child/AttrRel), ParentArc=27 (Parent/AttrRel)
+%%   category  child: ChildArc=22 (Child/CatRel),   ParentArc=21 (Parent/CatRel)
+%%   attribute child: ChildArc=30 (Child/AttrRel),  ParentArc=29 (Parent/AttrRel)
 %%   class     child: ChildArc=24 (Child/ClassRel), ParentArc=23 (Parent/ClassRel)
 %%   instance  child: ChildArc=26 (Child/InstRel),  ParentArc=25 (Parent/InstRel)
+%%
+%% Instance-to-class membership arc labels:
+%%   instance -> class: characterization=27 (Class)
+%%   class -> instance: characterization=28 (Instance)
 %%
 %% Each {relationship,...} term expands to two directed rows written atomically.
 
@@ -73,21 +77,17 @@
 {node, 19, attribute, 11, {20, "Name"}, []}.  %% NameAttrNref for instance nodes
 {node, 20, attribute, 12, {20, "Name"}, []}.  %% NameAttrNref for attribute nodes (self-ref)
 
-%% Level 4 -- Arc label pairs (one Parent + one Child per relationship type)
-{node, 21, attribute, 13, {20, "Parent"}, []}.  %% category Parent arc label
-{node, 22, attribute, 13, {20, "Child"},  []}.  %% category Child  arc label
-{node, 23, attribute, 14, {20, "Parent"}, []}.  %% class    Parent arc label
-{node, 24, attribute, 14, {20, "Child"},  []}.  %% class    Child  arc label
-{node, 25, attribute, 15, {20, "Parent"}, []}.  %% instance Parent arc label
-{node, 26, attribute, 15, {20, "Child"},  []}.  %% instance Child  arc label
-{node, 27, attribute, 16, {20, "Parent"}, []}.  %% attribute Parent arc label
-{node, 28, attribute, 16, {20, "Child"},  []}.  %% attribute Child  arc label
-
-%% Level 4 -- Instance-to-class membership arc labels (children of Instance Relationships)
-%% Note: strictly BFS these would fall between nrefs 24 and 25, but 25-28 are already
-%% assigned; continuing from 29 is correct -- do not renumber existing nrefs.
-{node, 29, attribute, 15, {20, "Class"},    []}.  %% arc label: instance -> its class
-{node, 30, attribute, 15, {20, "Instance"}, []}.  %% arc label: class -> its instances
+%% Level 4 -- Arc label nodes (BFS order: CatRel, ClassRel, InstRel, AttrRel children)
+{node, 21, attribute, 13, {20, "Parent"},   []}.  %% category compositional Parent arc label
+{node, 22, attribute, 13, {20, "Child"},    []}.  %% category compositional Child  arc label
+{node, 23, attribute, 14, {20, "Parent"},   []}.  %% class    compositional Parent arc label
+{node, 24, attribute, 14, {20, "Child"},    []}.  %% class    compositional Child  arc label
+{node, 25, attribute, 15, {20, "Parent"},   []}.  %% instance compositional Parent arc label
+{node, 26, attribute, 15, {20, "Child"},    []}.  %% instance compositional Child  arc label
+{node, 27, attribute, 15, {20, "Class"},    []}.  %% instance -> class membership arc label
+{node, 28, attribute, 15, {20, "Instance"}, []}.  %% class -> instances membership arc label
+{node, 29, attribute, 16, {20, "Parent"},   []}.  %% attribute compositional Parent arc label (self-ref)
+{node, 30, attribute, 16, {20, "Child"},    []}.  %% attribute compositional Child  arc label (self-ref)
 
 %% =========================================================================
 %% Compositional arcs
@@ -101,37 +101,37 @@
 {relationship,  1, 22, [], 21,  4, []}.  %% Root -> Languages
 {relationship,  1, 22, [], 21,  5, []}.  %% Root -> Projects
 
-%% Attributes -> attribute children  (ChildArc=28, ParentArc=27)
-{relationship,  2, 28, [], 27,  6, []}.  %% Attributes -> Names
-{relationship,  2, 28, [], 27,  7, []}.  %% Attributes -> Literals
-{relationship,  2, 28, [], 27,  8, []}.  %% Attributes -> Relationships
+%% Attributes -> attribute children  (ChildArc=30, ParentArc=29)
+{relationship,  2, 30, [], 29,  6, []}.  %% Attributes -> Names
+{relationship,  2, 30, [], 29,  7, []}.  %% Attributes -> Literals
+{relationship,  2, 30, [], 29,  8, []}.  %% Attributes -> Relationships
 
 %% Names -> attribute children
-{relationship,  6, 28, [], 27,  9, []}.  %% Names -> Category Name Attributes
-{relationship,  6, 28, [], 27, 10, []}.  %% Names -> Class Name Attributes
-{relationship,  6, 28, [], 27, 11, []}.  %% Names -> Instance Name Attributes
-{relationship,  6, 28, [], 27, 12, []}.  %% Names -> Attribute Name Attributes
+{relationship,  6, 30, [], 29,  9, []}.  %% Names -> Category Name Attributes
+{relationship,  6, 30, [], 29, 10, []}.  %% Names -> Class Name Attributes
+{relationship,  6, 30, [], 29, 11, []}.  %% Names -> Instance Name Attributes
+{relationship,  6, 30, [], 29, 12, []}.  %% Names -> Attribute Name Attributes
 
 %% Relationships -> attribute children
-{relationship,  8, 28, [], 27, 13, []}.  %% Relationships -> Category Relationships
-{relationship,  8, 28, [], 27, 14, []}.  %% Relationships -> Class Relationships
-{relationship,  8, 28, [], 27, 15, []}.  %% Relationships -> Instance Relationships
-{relationship,  8, 28, [], 27, 16, []}.  %% Relationships -> Attribute Relationships
+{relationship,  8, 30, [], 29, 13, []}.  %% Relationships -> Category Relationships
+{relationship,  8, 30, [], 29, 14, []}.  %% Relationships -> Class Relationships
+{relationship,  8, 30, [], 29, 15, []}.  %% Relationships -> Instance Relationships
+{relationship,  8, 30, [], 29, 16, []}.  %% Relationships -> Attribute Relationships
 
 %% *NameAttributes -> Name  (attribute child)
-{relationship,  9, 28, [], 27, 17, []}.  %% Category Name Attributes -> Name
-{relationship, 10, 28, [], 27, 18, []}.  %% Class Name Attributes    -> Name
-{relationship, 11, 28, [], 27, 19, []}.  %% Instance Name Attributes -> Name
-{relationship, 12, 28, [], 27, 20, []}.  %% Attribute Name Attributes -> Name
+{relationship,  9, 30, [], 29, 17, []}.  %% Category Name Attributes -> Name
+{relationship, 10, 30, [], 29, 18, []}.  %% Class Name Attributes    -> Name
+{relationship, 11, 30, [], 29, 19, []}.  %% Instance Name Attributes -> Name
+{relationship, 12, 30, [], 29, 20, []}.  %% Attribute Name Attributes -> Name
 
-%% *Relationships -> Parent / Child arc label nodes  (attribute child)
-{relationship, 13, 28, [], 27, 21, []}.  %% Category Relationships  -> Parent
-{relationship, 13, 28, [], 27, 22, []}.  %% Category Relationships  -> Child
-{relationship, 14, 28, [], 27, 23, []}.  %% Class Relationships     -> Parent
-{relationship, 14, 28, [], 27, 24, []}.  %% Class Relationships     -> Child
-{relationship, 15, 28, [], 27, 25, []}.  %% Instance Relationships  -> Parent
-{relationship, 15, 28, [], 27, 26, []}.  %% Instance Relationships  -> Child
-{relationship, 15, 28, [], 27, 29, []}.  %% Instance Relationships  -> Class
-{relationship, 15, 28, [], 27, 30, []}.  %% Instance Relationships  -> Instance
-{relationship, 16, 28, [], 27, 27, []}.  %% Attribute Relationships -> Parent (arc label self-ref)
-{relationship, 16, 28, [], 27, 28, []}.  %% Attribute Relationships -> Child  (arc label self-ref)
+%% *Relationships -> arc label child nodes  (attribute child)
+{relationship, 13, 30, [], 29, 21, []}.  %% Category Relationships  -> Parent
+{relationship, 13, 30, [], 29, 22, []}.  %% Category Relationships  -> Child
+{relationship, 14, 30, [], 29, 23, []}.  %% Class Relationships     -> Parent
+{relationship, 14, 30, [], 29, 24, []}.  %% Class Relationships     -> Child
+{relationship, 15, 30, [], 29, 25, []}.  %% Instance Relationships  -> Parent
+{relationship, 15, 30, [], 29, 26, []}.  %% Instance Relationships  -> Child
+{relationship, 15, 30, [], 29, 27, []}.  %% Instance Relationships  -> Class
+{relationship, 15, 30, [], 29, 28, []}.  %% Instance Relationships  -> Instance
+{relationship, 16, 30, [], 29, 29, []}.  %% Attribute Relationships -> Parent (arc label self-ref)
+{relationship, 16, 30, [], 29, 30, []}.  %% Attribute Relationships -> Child  (arc label self-ref)

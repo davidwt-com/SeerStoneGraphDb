@@ -171,7 +171,7 @@ only in the `relationships` table — no flag or count on the node record is nee
 **Sub-tasks:**
 - Implement `create_instance/3` (name, class Nref, compositional parent Nref) — allocates Nref;
   atomically writes the node record AND the instance→class membership relationship pair using
-  arc labels nref=29 (Class) and nref=30 (Instance) from the bootstrap scaffold
+  arc labels nref=27 (Class) and nref=28 (Instance) from the bootstrap scaffold
 - Implement `add_relationship/4` (source Nref, characterization Nref, target Nref, reciprocal Nref):
   - Allocates an id Nref for the relationship record
   - Writes two directed `relationship` rows atomically (one per direction)
