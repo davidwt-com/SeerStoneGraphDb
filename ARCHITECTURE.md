@@ -258,10 +258,12 @@ Conclusion: the secondary index on `target_nref` provides everything the flag wo
 
 | Role | Content | Mutability |
 |---|---|---|
-| **Environment database** | All category, attribute, class, and language nodes; the bootstrap scaffold; arc label definitions | Bootstrap nodes immutable; classes and attributes added at runtime |
+| **Environment database** | All category, attribute, class, and language nodes; the bootstrap scaffold; arc label definitions | Category nodes: immutable (bootstrap only). All other nodes grow freely at runtime. |
 | **Project database** | Instance nodes and their relationships; one database per project | Fully mutable at runtime |
 
-The environment is shared across all projects. It is the single source of truth for the knowledge schema — arc labels, class definitions, name attributes, and the category scaffold.
+The environment is shared across all projects. It is the single source of truth for the knowledge schema — arc labels, class definitions, name attributes, and the category scaffold. It is a **living, growing database**: new literal attributes, relationship attributes, and classes are added over time as the knowledge base evolves. Only the category nodes (nrefs 1–5) are permanently fixed.
+
+**Code understanding of nrefs**: Only the bootstrap nrefs (1–30) and a small number of explicitly seeded runtime nrefs (e.g., `target_kind`) are referenced directly by nref constant in the implementation. All other runtime-added attributes, classes, and languages are treated generically by the code — their meaning lives in the graph itself, not in the source.
 
 ### What lives where
 
@@ -276,6 +278,8 @@ The environment is shared across all projects. It is the single source of truth 
 | Instance compositional arcs | Project |
 | Instance user-defined arcs | Project |
 | Bootstrap compositional arcs (scaffold) | Environment |
+| Runtime attribute compositional arcs (new attrs added to library) | Environment |
+| Runtime class taxonomy arcs | Environment |
 
 ### nref spaces
 
@@ -335,7 +339,14 @@ Built-in resolution for the 30 bootstrap arc labels:
 
 ### Environment relationships table write policy
 
-The environment database's `relationships` table is written **only during bootstrap**. After the bootstrap load completes, no runtime operation writes to it — adding new classes or attributes does not require new arcs in the environment relationship table (class taxonomy arcs are the one exception: `graphdb_class:create_class/2` writes a parent→child arc pair in the environment when a new class is created). Project databases never write to the environment relationships table.
+The environment relationships table is written at bootstrap and continues to be written at runtime as the knowledge base grows:
+
+- **Bootstrap**: all 29 compositional arc pairs for the category/attribute scaffold
+- **Runtime — new attribute**: `graphdb_attr` writes a parent→child arc pair placing the new attribute node in its correct position in the attribute library tree
+- **Runtime — new class**: `graphdb_class:create_class/2` writes a parent→child arc pair in the class taxonomy
+- **Runtime — new language**: similarly writes compositional arcs under the Languages category
+
+Project databases **never** write to the environment relationships table. All instance-level arcs, including class-membership pairs, are written to the project database only.
 
 ---
 
