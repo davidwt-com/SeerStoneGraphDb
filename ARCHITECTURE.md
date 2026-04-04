@@ -100,7 +100,7 @@ This separation is critical: embedding relationships as a list inside the node r
 ```erlang
 -record(node, {
   nref,                   %% integer() — primary key
-  kind,                   %% attribute | class | instance
+  kind,                   %% category | attribute | class | instance
   parent,                 %% integer() | undefined (undefined = root only)
   attribute_value_pairs   %% [#{attribute => Nref, value => term()}]
 }).
@@ -108,11 +108,57 @@ This separation is critical: embedding relationships as a list inside the node r
 
 Secondary index: `parent` — enables efficient `children/1` queries.
 
+### Node kinds
+
+| Kind | Description | Creatable at runtime? |
+|---|---|---|
+| `category` | Permanent top-level organisational scaffold; forms the skeleton of the entire graph | **No — bootstrap only** |
+| `attribute` | Named concept used as an arc label, name attribute, or literal attribute descriptor | Yes |
+| `class` | Type/schema node; manages the taxonomic ("is a") hierarchy | Yes |
+| `instance` | Concrete entity; managed by the compositional ("part of") hierarchy | Yes |
+
+`category` nodes cannot be created, modified, or deleted via any runtime API. `graphdb_mgr` exposes no `create_category` function. Attempts to write a `category` node outside of `graphdb_bootstrap` are rejected.
+
 ### Root node
 
 - Nref = **1** (first and lowest possible nref; pre-assigned in the bootstrap file)
-- `parent = undefined`
+- `kind = category`, `parent = undefined`
 - The only node in the database where `parent` is `undefined`
+
+### Bootstrap tree skeleton
+
+The bootstrap file defines the following permanent category/attribute scaffold. All nrefs are pre-assigned (values TBD when user supplies content). Attribute nodes under **Names** provide the `NameAttrNref` values used in node records; attribute nodes under **Relationships** provide the `characterization`/`reciprocal` arc labels used in the `relationships` table.
+
+```
+Root (category)
+├── Attributes (category)
+│   ├── Names (attribute)
+│   │   ├── Category Name Attributes (attribute)
+│   │   │   └── Name (attribute)          ← NameAttrNref for category nodes
+│   │   ├── Class Name Attributes (attribute)
+│   │   │   └── Name (attribute)          ← NameAttrNref for class nodes
+│   │   ├── Instance Name Attributes (attribute)
+│   │   │   └── Name (attribute)          ← NameAttrNref for instance nodes
+│   │   └── Attribute Name Attributes (attribute)
+│   │       └── Name (attribute)          ← NameAttrNref for attribute nodes
+│   ├── Literals (attribute)              ← children TBD
+│   └── Relationships (attribute)
+│       ├── Category Relationships (attribute)
+│       │   ├── Parent (attribute)        ← characterization for category parent→child arc
+│       │   └── Child (attribute)         ← reciprocal for category parent→child arc
+│       ├── Class Relationships (attribute)
+│       │   ├── Parent (attribute)
+│       │   └── Child (attribute)
+│       ├── Instance Relationships (attribute)
+│       │   ├── Parent (attribute)
+│       │   └── Child (attribute)
+│       └── Attribute Relationships (attribute)
+│           ├── Parent (attribute)
+│           └── Child (attribute)
+├── Classes (category)
+├── Languages (category)
+└── Projects (category)
+```
 
 ---
 
@@ -134,6 +180,17 @@ Secondary index: `parent` — enables efficient `children/1` queries.
 Secondary indexes: `source_nref`, `target_nref`.
 
 A logical bidirectional edge is expressed as **two** `relationship` records — one for each direction — written atomically in the same Mnesia transaction. The `graphdb_bootstrap` loader does this expansion when processing `{relationship, ...}` terms from the bootstrap file.
+
+### Arc storage by node kind
+
+| Kind | `parent` field | `relationship` table records |
+|---|---|---|
+| `category` | Yes — fast tree traversal | **Yes** — explicit arc records using Category Relationships/Parent + Child labels; both directions written atomically |
+| `attribute` | Yes | Yes — using Attribute Relationships/Parent + Child labels |
+| `class` | Yes | TBD — to be decided when class node implementation begins |
+| `instance` | Yes | Yes — user-defined arcs via `add_relationship/4` |
+
+Category and attribute compositional arcs are written as explicit `{relationship, ...}` terms in `bootstrap.terms`. The loader writes them like any other relationship — no special-casing. The `parent` field provides O(1) tree traversal; the `relationships` table provides arc-query consistency (finding all inbound arcs via `index_read` on `target_nref`).
 
 ### Additional-parents flag/count: Decision — Not needed
 
@@ -221,11 +278,12 @@ the persisted counter is already above the floor, so this function is never call
 
 The loader processes the file in section order:
 
-1. `attribute` nodes
-2. `class` nodes
-3. `instance` nodes
-4. `relationship` records
-5. `nref_start` directive — `nref_server:set_floor/1` called last, after all data is written
+1. `category` nodes
+2. `attribute` nodes
+3. `class` nodes
+4. `instance` nodes
+5. `relationship` records (includes compositional arcs for category and attribute nodes)
+6. `nref_start` directive — `nref_server:set_floor/1` called last, after all data is written
 
 ### File location
 
@@ -238,14 +296,21 @@ Configurable via `bootstrap_file` key in `default.config`. Default value:
 %% bootstrap.terms — SeerStoneGraphDb bootstrap data
 %% Copyright (c) SeerStone, Inc. 2008
 
-%% --- Root and attribute nodes ---
-{node, 1, attribute, undefined, {2, "Root"},  []}.
-{node, 2, attribute, 1,         {2, "Name"},  []}.
+%% --- Category nodes ---
+{node, 1, category, undefined, {CatNameAttrNref, "Root"},       []}.
+{node, 2, category, 1,         {CatNameAttrNref, "Attributes"}, []}.
+%% ... Classes, Languages, Projects ...
 
-%% --- Bidirectional relationship ---
-{relationship, 10, 20, [], 21, 11, []}.
+%% --- Attribute nodes ---
+{node, 10, attribute, 2, {AttrNameAttrNref, "Names"}, []}.
+%% ... etc ...
 
-%% --- nref floor: allocator will not issue any nref below this value ---
+%% --- Relationship records (includes category and attribute compositional arcs) ---
+%%     Each {relationship,...} expands to two directed rows written atomically.
+{relationship, 1, CatParentNref, [], CatChildNref, 2, []}.  %% Root → Attributes arc
+%% ... etc ...
+
+%% --- nref floor ---
 {nref_start, 10000}.
 ```
 
@@ -260,10 +325,18 @@ File: `apps/graphdb/src/graphdb_bootstrap.erl`
 1. Called from `graphdb_mgr:init/1` when the Mnesia `nodes` table is empty
 2. Reads `bootstrap_file` path from application env
 3. Calls `file:consult/1`, validates all terms
-4. Partitions terms into nodes and relationships; processes in section order
-5. Writes all node records to Mnesia (`nodes` table)
-6. Expands each `{relationship,...}` term into two directed `relationship` records; writes atomically
-7. Logs progress and any validation errors
+4. Validates that exactly one `{nref_start, N}` directive is present and all node nrefs are `< N`
+5. Partitions terms into nodes and relationships; processes in section order:
+   `category` → `attribute` → `class` → `instance` → `relationship` → `nref_start`
+6. Writes all node records to Mnesia (`nodes` table)
+7. Expands each `{relationship,...}` term into two directed `relationship` records; writes atomically
+8. Calls `nref_server:set_floor(N)` as the final step
+9. Logs progress and any validation errors
+
+### Category-only enforcement
+
+After bootstrap completes, `graphdb_mgr` enforces that no runtime call can create, update,
+or delete a `category` node. Any such attempt returns `{error, category_nodes_are_immutable}`.
 
 ### Public API
 
@@ -315,6 +388,7 @@ SeerStoneGraphDb/
 
 1. `default.config` — add `log_path`, `bootstrap_file`, `mnesia dir` keys
 2. `nref_server` / `nref_allocator` — add `set_floor/1` API
+2a. `apps/graphdb/priv/bootstrap.terms` — create placeholder; populate when user supplies nrefs
 3. ~~Delete stale `.dets` files~~ — **done**
 4. `graphdb_bootstrap` — implement loader; includes Mnesia schema/table creation
 5. `graphdb_mgr` — bootstrap detection in `init/1`; read `bootstrap_file` from env; call loader

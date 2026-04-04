@@ -13,8 +13,10 @@ modernization work is complete. The architecture has been fully designed
 - **Dictionary**: Stays on ETS
 - **Bootstrap**: `graphdb_bootstrap` module loads `bootstrap.terms` on first startup; `{nref_start, 10000}` directive lives in the bootstrap file, not in config
 - **Config**: `default.config` is the single runtime config; gains `log_path`, `bootstrap_file`, and `{mnesia, [{dir, "data"}]}`
-- **Root node**: nref = 1; stored in `bootstrap.terms`; only node with `parent = undefined`
-- **Relationships**: Stored in a separate Mnesia table (not embedded in node records); indexed on `source_nref` and `target_nref`; logical bidirectional edge = two directed rows written atomically
+- **Node kinds**: `category | attribute | class | instance`; `category` is bootstrap-only and immutable at runtime
+- **Root node**: nref = 1; `kind = category`; only node with `parent = undefined`
+- **Bootstrap tree**: category/attribute scaffold pre-built at first startup (see ARCHITECTURE.md Section 4 for full tree)
+- **Relationships**: Separate Mnesia table; indexed on `source_nref` and `target_nref`; logical bidirectional edge = two directed rows written atomically; category and attribute compositional arcs are written as explicit relationship records in `bootstrap.terms` as well as being expressed in the `parent` field
 
 ---
 
@@ -70,6 +72,7 @@ This module is called by `graphdb_mgr:init/1` when the Mnesia `nodes` table is e
 - Define Mnesia record types:
   ```erlang
   -record(node, {nref, kind, parent, attribute_value_pairs}).
+  %% kind :: category | attribute | class | instance
   -record(relationship, {id, source_nref, characterization, target_nref, reciprocal, avps}).
   ```
 - Implement Mnesia schema and table creation (called once at first startup):
@@ -80,11 +83,12 @@ This module is called by `graphdb_mgr:init/1` when the Mnesia `nodes` table is e
 - Validate that exactly one `{nref_start, N}` directive is present and that all node
   nrefs are `< N`; fail fast otherwise
 - Partition terms into nodes and relationships; enforce processing order:
-  1. `attribute` nodes
-  2. `class` nodes
-  3. `instance` nodes
-  4. `relationship` records
-  5. `{nref_start, N}` directive — call `nref_server:set_floor(N)` last, after all data written
+  1. `category` nodes
+  2. `attribute` nodes
+  3. `class` nodes
+  4. `instance` nodes
+  5. `relationship` records (includes compositional arcs for category and attribute nodes)
+  6. `{nref_start, N}` directive — call `nref_server:set_floor(N)` last, after all data written
 - Write each node to Mnesia in a transaction
 - Expand each `{relationship, N1, R1, AVPs1, R2, N2, AVPs2}` term into two directed
   `relationship` records; write both atomically in the same Mnesia transaction
@@ -109,6 +113,8 @@ File: `apps/graphdb/src/graphdb_mgr.erl`
 - If empty (first startup): call `graphdb_bootstrap:load/0`; halt with error if it fails
 - Define the public API (the single entry point for callers outside `graphdb`):
   - Delegate to `graphdb_attr`, `graphdb_class`, `graphdb_instance` etc.
+  - Reject any runtime request to create, modify, or delete a `category` node with
+    `{error, category_nodes_are_immutable}`
 - Implement transaction-like sequencing: allocate Nref via `nref_server:get_nref/0`
   → write record → confirm Nref
 

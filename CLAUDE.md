@@ -106,12 +106,13 @@ This database is an implementation of the knowledge graph model described in
 
 | Concept                     | Erlang mapping                                                                                   |
 |-----------------------------|--------------------------------------------------------------------------------------------------|
-| **Node / Concept**          | A record identified by an Nref (positive integer)                                                |
+| **Node / Concept**          | A record identified by an Nref (positive integer); `kind` is one of `category \| attribute \| class \| instance` |
+| **Category Node**           | Permanent top-level organisational scaffold; forms the skeleton of the entire graph; **bootstrap-only** — cannot be created, modified, or deleted at runtime |
 | **Instance Node**           | Concrete entity: has a name attribute, class membership, compositional parent, and relationships |
 | **Class Node**              | Type/schema: has a class name attribute, instance name attribute, and qualifying characteristics |
 | **Attribute Node**          | Name attribute, relationship attribute, or literal attribute stored in the attribute library     |
-| **Relationship (Arc)**      | Reciprocal connection between instances; stored as `{Characterization, Value, Reciprocal}`       |
-| **Reference Number (Nref)** | Globally unique `integer()` allocated by `nref_server:get_nref/0`                                |
+| **Relationship (Arc)**      | Reciprocal connection between nodes; stored as two directed rows in the `relationships` Mnesia table |
+| **Reference Number (Nref)** | Globally unique `integer()` allocated by `nref_server:get_nref/0`; bootstrap nrefs are pre-assigned (all `< nref_start`) |
 
 ### Hierarchy Systems
 
@@ -130,22 +131,29 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 
 ### Record Structure
 
-Every graph record maps to:
+Every graph node is stored as a Mnesia record:
 ```erlang
-#{
-  nref                 => Nref,              %% unique positive integer
-  attribute_value_pairs => [
-    #{attribute => AttrNref,                 %% ref to attribute concept
-      value     => Value}                    %% any term — literal or complex
-  ],
-  relationships => [
-    #{characterization      => AttrNref,    %% ref to attribute concept (arc label)
-      value                 => TargetNref,  %% ref to target concept
-      reciprocal            => AttrNref2,   %% arc label as seen from target back
-      attribute_value_pairs => []}          %% optional; per-direction; [] = none
-  ]
-}
+-record(node, {
+  nref,                   %% integer() — unique positive integer; primary key
+  kind,                   %% category | attribute | class | instance
+  parent,                 %% integer() | undefined  (undefined = root node only)
+  attribute_value_pairs   %% [#{attribute => AttrNref, value => Value}]
+}).
 ```
+
+Relationships are stored in a separate Mnesia table (not embedded in the node record):
+```erlang
+-record(relationship, {
+  id,               %% integer() — primary key (nref allocated normally)
+  source_nref,      %% integer() — arc origin
+  characterization, %% integer() — arc label (an attribute nref)
+  target_nref,      %% integer() — arc target
+  reciprocal,       %% integer() — arc label as seen from target back
+  avps              %% [#{attribute => AttrNref, value => Value}] — per-direction metadata
+}).
+```
+
+A logical bidirectional edge is two `relationship` rows written atomically (one per direction). Secondary indexes on `source_nref` and `target_nref` make forward and reverse traversal O(1).
 
 `attribute_value_pairs` carries literal and non-topological values (e.g., name strings, measurements, URLs). The value may be any Erlang term; the attribute node holds the definition of permissible value types. These pairs do **not** participate in graph traversal.
 
@@ -181,11 +189,17 @@ See `TASKS.md` for the full task list and priority order.
 `apps/seerstone/priv/default.config`:
 ```erlang
 [{seerstone_graph_db, [
-  {app_port, 8080},
-  {data_path, "data"},
-  {index_path, "index"}
+  {app_port,       8080},
+  {log_path,       "log"},
+  {data_path,      "data"},
+  {bootstrap_file, "apps/graphdb/priv/bootstrap.terms"}
+]},
+ {mnesia, [
+  {dir, "data"}
 ]}].
 ```
+
+Both relative and absolute paths are accepted for `log_path`, `data_path`, and `bootstrap_file`. Relative paths resolve from the OTP release root.
 
 ## CI
 
@@ -205,6 +219,7 @@ GitHub Actions workflow at `.github/workflows/ci.yml`:
 
 | Technology | Used by | Purpose |
 |---|---|---|
+| Mnesia | `graphdb_*` workers | Graph node and relationship storage; `disc_copies` for RAM-speed reads with persistence |
 | DETS | `nref_allocator`, `nref_server` | Persistent disk-based term storage |
 | ETS | `dictionary_imp` | In-memory term storage |
 | ETS tab2file | `dictionary_imp` | Persistent serialization of ETS tables |
