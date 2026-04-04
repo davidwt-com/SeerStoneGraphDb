@@ -8,15 +8,18 @@ modernization work is complete. The architecture has been fully designed
 
 ## Architecture Summary (read ARCHITECTURE.md for full detail)
 
-- **Storage**: Mnesia for all six `graphdb_*` workers (two tables: `nodes`, `relationships`)
-- **nref layer**: Stays on DETS; `nref_server` gains `set_floor/1` API called once by bootstrap loader
+- **Two database roles**: *Environment* (categories, attributes, classes, languages — shared, schema-level) and *Project* (instances and their relationships — one database per project, independent)
+- **Storage**: Mnesia for all six `graphdb_*` workers (two tables per database: `nodes`, `relationships`)
+- **nref spaces**: Environment allocator starts at 10000 (protected by `{nref_start, 10000}` in bootstrap.terms). Project allocators start at **1** — no pre-assigned nrefs, no bootstrap file, no floor needed
+- **Cross-database nref resolution**: `characterization` and `reciprocal` fields always reference environment nrefs; `target_nref` is routed to environment or project based on the arc label's `target_kind` AVP (see ARCHITECTURE.md Section 6)
+- **nref layer**: Environment allocator stays on DETS; `nref_server` gains `set_floor/1` API called once by bootstrap loader. Project allocators are a separate concern (TBD)
 - **Dictionary**: Stays on ETS
-- **Bootstrap**: `graphdb_bootstrap` module loads `bootstrap.terms` on first startup; `{nref_start, 10000}` directive lives in the bootstrap file, not in config
+- **Bootstrap**: `graphdb_bootstrap` loads `bootstrap.terms` on first environment-database startup; `{nref_start, 10000}` directive is first term in that file
 - **Config**: `default.config` is the single runtime config; gains `log_path`, `bootstrap_file`, and `{mnesia, [{dir, "data"}]}`
 - **Node kinds**: `category | attribute | class | instance`; `category` is bootstrap-only and immutable at runtime
 - **Root node**: nref = 1; `kind = category`; only node with `parent = undefined`
-- **Bootstrap tree**: category/attribute scaffold pre-built at first startup (see ARCHITECTURE.md Section 4 for full tree)
-- **Relationships**: Separate Mnesia table; indexed on `source_nref` and `target_nref`; logical bidirectional edge = two directed rows written atomically; category and attribute compositional arcs are written as explicit relationship records in `bootstrap.terms` as well as being expressed in the `parent` field
+- **Bootstrap tree**: category/attribute scaffold pre-built at first environment startup (see ARCHITECTURE.md Section 4 for full tree)
+- **Relationships**: Separate Mnesia table; indexed on `source_nref` and `target_nref`; bidirectional edge = two directed rows written atomically; class/instance relationships stored in project database, not environment
 
 ---
 
@@ -132,14 +135,19 @@ naming and relationships. Attribute nodes live in the `nodes` Mnesia table with
 **Sub-tasks:**
 - Implement `create_name_attribute/1` (name) — allocates Nref, stores attribute node
 - Implement `create_literal_attribute/2` (name, type) — stores type in AVPs
-- Implement `create_relationship_attribute/2` (attribute + reciprocal) — pair of attribute nodes
+- Implement `create_relationship_attribute/3` (name, reciprocal name, target_kind) — pair of
+  attribute nodes; `target_kind :: category | attribute | class | instance` specifies which
+  database the arc's `target_nref` lives in. This annotation is stored as an AVP on the
+  arc label attribute node and is used by the query engine to route target lookups to the
+  correct database (environment vs. project). All built-in arc labels (nrefs 21–30) carry
+  this annotation; it is required for all user-defined relationship attributes.
 - Implement `create_relationship_type/1` and grouping of attributes under types
 - Implement lookup: `get_attribute/1`, `list_attributes/0`, `list_relationship_types/0`
-- At bootstrap, the `relationship_avp` flag attribute must be seeded: this is a literal
-  attribute whose presence (value `true`) in another attribute node's own AVPs marks that
-  attribute as intended for use on relationship arcs. `create_literal_attribute/2` (or a
-  variant) must accept an optional `#{relationship_avp => true}` marker stored as an AVP
-  on the new attribute's record.
+- At bootstrap, seed the `target_kind` literal attribute into the `Literals` subtree (nref 7):
+  this is the attribute used to annotate all arc label nodes with their target database context
+- At bootstrap, the `relationship_avp` flag attribute must be seeded: a literal attribute
+  whose presence (value `true`) in another attribute node's own AVPs marks that attribute
+  as intended for use on relationship arcs
 
 ---
 
