@@ -1,6 +1,6 @@
 # Architectural Design Proposal — SeerStoneGraphDb
 
-> **Status:** Design phase complete — all questions resolved. Stale DETS files deleted. Bootstrap node content deferred by user. Ready for implementation.
+> **Status:** Design phase complete — all questions resolved. Bootstrap nrefs assigned (BFS, 1–28). `apps/graphdb/priv/bootstrap.terms` written. Ready for implementation.
 
 ---
 
@@ -125,40 +125,67 @@ Secondary index: `parent` — enables efficient `children/1` queries.
 - `kind = category`, `parent = undefined`
 - The only node in the database where `parent` is `undefined`
 
-### Bootstrap tree skeleton
+### Bootstrap tree skeleton — nrefs assigned (BFS, 1–28)
 
-The bootstrap file defines the following permanent category/attribute scaffold. All nrefs are pre-assigned (values TBD when user supplies content). Attribute nodes under **Names** provide the `NameAttrNref` values used in node records; attribute nodes under **Relationships** provide the `characterization`/`reciprocal` arc labels used in the `relationships` table.
+Nrefs are assigned breadth-first. Attribute nodes under **Names** provide the `NameAttrNref` values used in node records; attribute nodes under **Relationships** provide the `characterization`/`reciprocal` arc labels used in the `relationships` table.
 
 ```
-Root (category)
-├── Attributes (category)
-│   ├── Names (attribute)
-│   │   ├── Category Name Attributes (attribute)
-│   │   │   └── Name (attribute)          ← NameAttrNref for category nodes
-│   │   ├── Class Name Attributes (attribute)
-│   │   │   └── Name (attribute)          ← NameAttrNref for class nodes
-│   │   ├── Instance Name Attributes (attribute)
-│   │   │   └── Name (attribute)          ← NameAttrNref for instance nodes
-│   │   └── Attribute Name Attributes (attribute)
-│   │       └── Name (attribute)          ← NameAttrNref for attribute nodes
-│   ├── Literals (attribute)              ← children TBD
-│   └── Relationships (attribute)
-│       ├── Category Relationships (attribute)
-│       │   ├── Parent (attribute)        ← characterization for category parent→child arc
-│       │   └── Child (attribute)         ← reciprocal for category parent→child arc
-│       ├── Class Relationships (attribute)
-│       │   ├── Parent (attribute)
-│       │   └── Child (attribute)
-│       ├── Instance Relationships (attribute)
-│       │   ├── Parent (attribute)
-│       │   └── Child (attribute)
-│       └── Attribute Relationships (attribute)
-│           ├── Parent (attribute)
-│           └── Child (attribute)
-├── Classes (category)
-├── Languages (category)
-└── Projects (category)
+ 1  Root (category)
+ 2  ├── Attributes (category)
+ 3  ├── Classes (category)
+ 4  ├── Languages (category)
+ 5  └── Projects (category)
+        (children of Attributes:)
+ 6      ├── Names (attribute)
+ 7      ├── Literals (attribute)              ← children TBD
+ 8      └── Relationships (attribute)
+            (children of Names:)
+ 9          ├── Category Name Attributes (attribute)
+10          ├── Class Name Attributes (attribute)
+11          ├── Instance Name Attributes (attribute)
+12          └── Attribute Name Attributes (attribute)
+            (children of Relationships:)
+13          ├── Category Relationships (attribute)
+14          ├── Class Relationships (attribute)
+15          ├── Instance Relationships (attribute)
+16          └── Attribute Relationships (attribute)
+            (children of *Name Attributes — one Name per kind:)
+17              ├── Name  ← NameAttrNref for category nodes  (parent: 9)
+18              ├── Name  ← NameAttrNref for class nodes     (parent: 10)
+19              ├── Name  ← NameAttrNref for instance nodes  (parent: 11)
+20              └── Name  ← NameAttrNref for attribute nodes (parent: 12, self-ref)
+            (children of *Relationships — Parent + Child per type:)
+21              ├── Parent  category arc label   (parent: 13)
+22              ├── Child   category arc label   (parent: 13)
+23              ├── Parent  class arc label      (parent: 14)
+24              ├── Child   class arc label      (parent: 14)
+25              ├── Parent  instance arc label   (parent: 15)
+26              ├── Child   instance arc label   (parent: 15)
+27              ├── Parent  attribute arc label  (parent: 16, self-ref arc label)
+28              └── Child   attribute arc label  (parent: 16, self-ref arc label)
 ```
+
+### NameAttrNref quick-reference
+
+| Kind | NameAttrNref |
+|---|---|
+| `category` | 17 |
+| `class` | 18 |
+| `instance` | 19 |
+| `attribute` | 20 |
+
+### Compositional arc labels quick-reference
+
+Arc labels used in `{relationship, ParentNref, ChildArcNref, [], ParentArcNref, ChildNref, []}` terms. `ChildArcNref` is the characterization on the parent→child directed row; `ParentArcNref` is the characterization on the child→parent directed row.
+
+| Child kind | ChildArcNref | ParentArcNref |
+|---|---|---|
+| `category` | 22 (Child/CatRel) | 21 (Parent/CatRel) |
+| `attribute` | 28 (Child/AttrRel) | 27 (Parent/AttrRel) |
+| `class` | 24 (Child/ClassRel) | 23 (Parent/ClassRel) |
+| `instance` | 26 (Child/InstRel) | 25 (Parent/InstRel) |
+
+The last two rows under Attribute Relationships (nrefs 27 and 28) are self-referential: the arc label attribute nodes for "attribute" compositional arcs are themselves attribute nodes whose own parent arc label is nref 27. This is consistent — the system uses its own arc label vocabulary to describe itself.
 
 ---
 
@@ -246,18 +273,18 @@ the persisted counter is already above the floor, so this function is never call
 ### Record schema
 
 ```erlang
-%% Floor directive — must appear exactly once; processed last by the loader:
+%% Floor directive — must appear exactly once; processed FIRST by the loader:
 {nref_start, N}.
 %%
-%%   N :: integer()  — after bootstrap completes, calls nref_server:set_floor(N)
-%%                     so the allocator never issues any nref below N.
-%%                     All pre-assigned nrefs in the file must be < N.
+%%   N :: integer()  — calls nref_server:set_floor(N) before any other processing
+%%                     so subsequent get_nref/0 calls (for relationship IDs) return >= N.
+%%                     All pre-assigned node nrefs in the file must be < N.
 
 %% Node record:
 {node, Nref, Kind, ParentNref, {NameAttrNref, NameValue}, [{AttrNref, Value}]}.
 %%
 %%   Nref         :: integer()              — pre-assigned nref for this node
-%%   Kind         :: attribute | class | instance
+%%   Kind         :: category | attribute | class | instance
 %%   ParentNref   :: integer() | undefined  — undefined for root (nref=1) only
 %%   NameAttrNref :: integer()              — nref of the name attribute concept
 %%   NameValue    :: string() | binary()    — the node's name
@@ -276,43 +303,23 @@ the persisted counter is already above the floor, so this function is never call
 
 ### Processing order
 
-The loader processes the file in section order:
+The loader processes the file in this section order:
 
-1. `category` nodes
-2. `attribute` nodes
-3. `class` nodes
-4. `instance` nodes
-5. `relationship` records (includes compositional arcs for category and attribute nodes)
-6. `nref_start` directive — `nref_server:set_floor/1` called last, after all data is written
+1. `nref_start` directive — `nref_server:set_floor(N)` called **first**; subsequent `get_nref/0` calls for relationship IDs return `>= N`, avoiding collision with pre-assigned node nrefs
+2. `category` nodes
+3. `attribute` nodes
+4. `class` nodes
+5. `instance` nodes
+6. `relationship` records — each gets an ID via `nref_server:get_nref()`; expands to two directed rows written atomically
 
 ### File location
 
 Configurable via `bootstrap_file` key in `default.config`. Default value:
 `"apps/graphdb/priv/bootstrap.terms"`
 
-### Example
+### File
 
-```erlang
-%% bootstrap.terms — SeerStoneGraphDb bootstrap data
-%% Copyright (c) SeerStone, Inc. 2008
-
-%% --- Category nodes ---
-{node, 1, category, undefined, {CatNameAttrNref, "Root"},       []}.
-{node, 2, category, 1,         {CatNameAttrNref, "Attributes"}, []}.
-%% ... Classes, Languages, Projects ...
-
-%% --- Attribute nodes ---
-{node, 10, attribute, 2, {AttrNameAttrNref, "Names"}, []}.
-%% ... etc ...
-
-%% --- Relationship records (includes category and attribute compositional arcs) ---
-%%     Each {relationship,...} expands to two directed rows written atomically.
-{relationship, 1, CatParentNref, [], CatChildNref, 2, []}.  %% Root → Attributes arc
-%% ... etc ...
-
-%% --- nref floor ---
-{nref_start, 10000}.
-```
+`apps/graphdb/priv/bootstrap.terms` — fully written; contains all 28 nodes (nrefs 1–28) and 27 compositional relationship pairs. See that file for the authoritative content.
 
 ---
 
@@ -326,11 +333,9 @@ File: `apps/graphdb/src/graphdb_bootstrap.erl`
 2. Reads `bootstrap_file` path from application env
 3. Calls `file:consult/1`, validates all terms
 4. Validates that exactly one `{nref_start, N}` directive is present and all node nrefs are `< N`
-5. Partitions terms into nodes and relationships; processes in section order:
-   `category` → `attribute` → `class` → `instance` → `relationship` → `nref_start`
-6. Writes all node records to Mnesia (`nodes` table)
-7. Expands each `{relationship,...}` term into two directed `relationship` records; writes atomically
-8. Calls `nref_server:set_floor(N)` as the final step
+5. Calls `nref_server:set_floor(N)` **first** — subsequent `get_nref/0` calls return `>= N`
+6. Writes nodes to Mnesia in section order: `category` → `attribute` → `class` → `instance`
+7. Expands each `{relationship,...}` term into two directed `relationship` records; each gets an ID via `get_nref()`; writes both rows atomically
 9. Logs progress and any validation errors
 
 ### Category-only enforcement
@@ -357,7 +362,7 @@ All questions resolved. No blockers for implementation.
 | Who sets Mnesia `dir`? | Set directly in `default.config` under `{mnesia, [{dir, "data"}]}` — no code needed |
 | `nref_start` placement | Directive `{nref_start, 10000}` in `bootstrap.terms` — not in config; one-time value belongs with the bootstrap data |
 | Stale DETS files | Deleted (`graphdb_attr.dets`, `graphdb_attr_index.dets`, `graphdb_attr_types.dets`) |
-| Bootstrap file content | Deferred — user will supply when ready |
+| Bootstrap file content | **Done** — `apps/graphdb/priv/bootstrap.terms` written; nrefs 1–28, BFS |
 
 ---
 
@@ -379,7 +384,7 @@ SeerStoneGraphDb/
 │   ├── graphdb_language.erl         IMPLEMENT — query parser and executor
 │   └── graphdb_bootstrap.erl        CREATE — bootstrap file loader (new module)
 └── apps/graphdb/priv/
-    └── bootstrap.terms              CREATE — bootstrap node/relationship data (content TBD)
+    └── bootstrap.terms              DONE — 28 nodes (nrefs 1–28, BFS), 27 relationship pairs
 ```
 
 ---
@@ -388,11 +393,10 @@ SeerStoneGraphDb/
 
 1. `default.config` — add `log_path`, `bootstrap_file`, `mnesia dir` keys
 2. `nref_server` / `nref_allocator` — add `set_floor/1` API
-2a. `apps/graphdb/priv/bootstrap.terms` — create placeholder; populate when user supplies nrefs
 3. ~~Delete stale `.dets` files~~ — **done**
+3a. ~~`apps/graphdb/priv/bootstrap.terms`~~ — **done** (nrefs 1–28, BFS)
 4. `graphdb_bootstrap` — implement loader; includes Mnesia schema/table creation
 5. `graphdb_mgr` — bootstrap detection in `init/1`; read `bootstrap_file` from env; call loader
-6. `apps/graphdb/priv/bootstrap.terms` — write from user-supplied content (deferred)
 7. `graphdb_attr` — implement attribute library (Mnesia-backed)
 8. `graphdb_class` — implement taxonomic hierarchy (Mnesia-backed)
 9. `graphdb_instance` — implement compositional hierarchy + inheritance (Mnesia-backed)
@@ -407,9 +411,8 @@ SeerStoneGraphDb/
 To resume this session, start a new OpenCode session in this repository and paste:
 
 ```
-We are resuming an architecture design session for SeerStoneGraphDb.
-Read ARCHITECTURE.md for the full design decisions and TASKS.md for the task list.
-All structural questions are resolved. The next action is to begin implementation
-in the order listed in ARCHITECTURE.md Section 11, starting at step 1.
-Bootstrap file content (step 6) is deferred — skip it and continue with step 7.
+We are resuming implementation of SeerStoneGraphDb.
+Read ARCHITECTURE.md for full design decisions and TASKS.md for the task list.
+All design questions are resolved. bootstrap.terms is complete (nrefs 1-28, BFS).
+Begin implementation in the order listed in ARCHITECTURE.md Section 11, starting at step 1.
 ```
