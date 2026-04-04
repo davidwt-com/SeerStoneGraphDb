@@ -252,33 +252,130 @@ Conclusion: the secondary index on `target_nref` provides everything the flag wo
 
 ---
 
-## 6. nref Layer Changes
+## 6. Multi-Database Architecture
 
-### `nref_allocator` changes
+### Two database roles
 
-No startup changes required. The allocator initialises its counter from whatever is
-persisted in DETS (defaulting to 1 on a fresh node). It does not read `nref_start` from
-config — that value is handled entirely by the bootstrap loader as a one-time operation.
+| Role | Content | Mutability |
+|---|---|---|
+| **Environment database** | All category, attribute, class, and language nodes; the bootstrap scaffold; arc label definitions | Bootstrap nodes immutable; classes and attributes added at runtime |
+| **Project database** | Instance nodes and their relationships; one database per project | Fully mutable at runtime |
+
+The environment is shared across all projects. It is the single source of truth for the knowledge schema — arc labels, class definitions, name attributes, and the category scaffold.
+
+### What lives where
+
+| Concept | Database |
+|---|---|
+| Category nodes (nrefs 1–5) | Environment |
+| Attribute nodes (nrefs 6–30, 10000+) | Environment |
+| Class nodes (runtime, 10000+) | Environment |
+| Language nodes | Environment |
+| Instance nodes | Project |
+| Class-membership relationship pairs | Project |
+| Instance compositional arcs | Project |
+| Instance user-defined arcs | Project |
+| Bootstrap compositional arcs (scaffold) | Environment |
+
+### nref spaces
+
+| Database | nref range | nref_start | Allocator start |
+|---|---|---|---|
+| Environment | 1–30 (bootstrap) + 10000+ (runtime) | 10000 (in `bootstrap.terms`) | 10000 after bootstrap load |
+| Project | 1+ | None — no bootstrap file | **1** |
+
+Project databases have no pre-assigned nrefs and no bootstrap file. Their nref allocator starts at 1 and increments freely. Numerical overlap with environment nrefs (e.g., both may have a node with nref=10001) is not a problem because every nref lookup is routed to a specific database determined by context — see **Cross-database nref resolution** below.
+
+### The Projects node (nref 5)
+
+The `Projects` category node (nref 5) in the environment database is the organisational anchor for all projects. Two access modes exist:
+
+**Known projects** — listed as child nodes of the Projects node in the environment database. Each child node contains everything needed to locate and open the project database (connection info, path, credentials, etc.). At runtime, that environment node is *overlaid* by the root node of the actual project database: queries that arrive at the environment's project-stub node are transparently forwarded to the project's own root.
+
+**Private/unknown projects** — not listed in the environment database. Only users who have been given access to the project can open it. For those users the project root appears as a virtual child of the Projects node, not backed by any node in the environment database.
+
+In both cases, whether a project appears under the Projects node is optional and independent of whether the project database itself exists and is operational.
+
+### Cross-database nref resolution
+
+All nrefs are plain `integer()` values; there is no database tag embedded in the integer. Context determines which database to query for each field:
+
+| Relationship field | Always in |
+|---|---|
+| `source_nref` | Same database as the relationship record |
+| `characterization` | Environment (entire attribute library lives there) |
+| `reciprocal` | Environment |
+| `target_nref` | Determined by the arc label's `target_kind` annotation |
+
+**`target_kind` annotation**: Every arc label attribute node in the environment must carry a literal AVP specifying what kind of node its arc targets. Since `kind` determines the database, this resolves the lookup:
+
+| target_kind value | Target database |
+|---|---|
+| `category` | Environment |
+| `attribute` | Environment |
+| `class` | Environment |
+| `instance` | Project |
+
+This annotation is stored in the `Literals` subtree (nref 7) of the environment attribute library. It must be present on all built-in arc labels at bootstrap time and required for all user-defined arc labels at creation time via `graphdb_attr`.
+
+Built-in resolution for the 30 bootstrap arc labels:
+
+| Nref | Arc label | target_kind |
+|---|---|---|
+| 21 | Parent/CatRel | `category` |
+| 22 | Child/CatRel | `category` |
+| 23 | Parent/AttrRel | `attribute` |
+| 24 | Child/AttrRel | `attribute` |
+| 25 | Parent/ClassRel | `class` |
+| 26 | Child/ClassRel | `class` |
+| 27 | Parent/InstRel | `instance` |
+| 28 | Child/InstRel | `instance` |
+| 29 | Class | `class` |
+| 30 | Instance | `instance` |
+
+### Environment relationships table write policy
+
+The environment database's `relationships` table is written **only during bootstrap**. After the bootstrap load completes, no runtime operation writes to it — adding new classes or attributes does not require new arcs in the environment relationship table (class taxonomy arcs are the one exception: `graphdb_class:create_class/2` writes a parent→child arc pair in the environment when a new class is created). Project databases never write to the environment relationships table.
+
+---
+
+## 7. nref Layer Changes
+
+### Environment database allocator
+
+The environment allocator (`nref_server` / `nref_allocator`) is started by the `nref`
+OTP application. Its DETS counter is initialised from disk on startup (defaulting to 1 on
+a fresh node). `graphdb_bootstrap` calls `nref_server:set_floor(10000)` as the first step
+of a bootstrap load, advancing the counter to 10000 and persisting it. On all subsequent
+startups the persisted counter is already ≥ 10000, so `set_floor` has no effect.
+
+### Project database allocators
+
+Each project database manages its own nref counter independently. Project allocators
+**start at 1** — there are no pre-assigned bootstrap nrefs in a project database, so no
+floor is needed. The `nref` application as currently designed serves the environment
+database. Project nref allocation is a separate concern to be designed when the
+project-database layer is implemented; the simplest approach is a per-project DETS file
+holding the counter, mirroring the environment allocator's design.
 
 ### `nref_server` — new `set_floor/1` API
 
-One new public function is needed, called once by `graphdb_bootstrap` after all bootstrap
-nodes and relationships are written:
+One new public function is needed on the environment allocator, called once by
+`graphdb_bootstrap`:
 
 ```erlang
 %% Advance the nref counter to at least Floor.
 %% No-op if the counter is already >= Floor.
-%% Called once by graphdb_bootstrap at the end of a successful bootstrap run.
+%% Called once by graphdb_bootstrap before writing any nodes or relationships.
 nref_server:set_floor(Floor :: integer()) -> ok.
 ```
 
 This atomically sets the DETS counter to `max(current_counter, Floor)`, ensuring the
-allocator will never issue any nref in the bootstrap range. On all subsequent startups
-the persisted counter is already above the floor, so this function is never called again.
+environment allocator never issues any nref in the bootstrap range 1–9999.
 
 ---
 
-## 7. Bootstrap Init File
+## 8. Bootstrap Init File  *(environment database only)*
 
 ### Format: Erlang Terms via `file:consult/1`
 
@@ -338,11 +435,11 @@ Configurable via `bootstrap_file` key in `default.config`. Default value:
 
 ### File
 
-`apps/graphdb/priv/bootstrap.terms` — fully written; contains all 28 nodes (nrefs 1–28) and 27 compositional relationship pairs. See that file for the authoritative content.
+`apps/graphdb/priv/bootstrap.terms` — fully written; contains all 30 nodes (nrefs 1–30) and 29 compositional relationship pairs. See that file for the authoritative content.
 
 ---
 
-## 8. New Module: `graphdb_bootstrap`
+## 9. New Module: `graphdb_bootstrap`
 
 File: `apps/graphdb/src/graphdb_bootstrap.erl`
 
@@ -371,7 +468,7 @@ graphdb_bootstrap:load() -> ok | {error, Reason :: term()}.
 
 ---
 
-## 9. Open Questions
+## 10. Open Questions
 
 All questions resolved. No blockers for implementation.
 
@@ -385,7 +482,7 @@ All questions resolved. No blockers for implementation.
 
 ---
 
-## 10. Files Affected
+## 11. Files Affected
 
 ```
 SeerStoneGraphDb/
@@ -408,7 +505,7 @@ SeerStoneGraphDb/
 
 ---
 
-## 11. Implementation Order
+## 12. Implementation Order
 
 1. `default.config` — add `log_path`, `bootstrap_file`, `mnesia dir` keys
 2. `nref_server` / `nref_allocator` — add `set_floor/1` API
@@ -433,5 +530,5 @@ To resume this session, start a new OpenCode session in this repository and past
 We are resuming implementation of SeerStoneGraphDb.
 Read ARCHITECTURE.md for full design decisions and TASKS.md for the task list.
 All design questions are resolved. bootstrap.terms is complete (nrefs 1-28, BFS).
-Begin implementation in the order listed in ARCHITECTURE.md Section 11, starting at step 1.
+Begin implementation in the order listed in ARCHITECTURE.md Section 12, starting at step 1.
 ```
