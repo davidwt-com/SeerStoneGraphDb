@@ -12,7 +12,7 @@ modernization work is complete. The architecture has been fully designed
 - **nref layer**: Stays on DETS; `nref_allocator` gains a config-driven floor (`nref_start`)
 - **Dictionary**: Stays on ETS
 - **Bootstrap**: `graphdb_bootstrap` module loads `bootstrap.terms` on first startup
-- **Config**: `default.config` is the single runtime config; gains `log_path`, `bootstrap_file`, `nref_start`
+- **Config**: `default.config` is the single runtime config; gains `log_path`, `bootstrap_file`, `nref_start = 10000`, and `{mnesia, [{dir, "data"}]}`
 - **Root node**: nref = 1; stored in `bootstrap.terms`; only node with `parent = undefined`
 - **Relationships**: Stored in a separate Mnesia table (not embedded in node records); indexed on `source_nref` and `target_nref`; logical bidirectional edge = two directed rows written atomically
 
@@ -24,13 +24,20 @@ modernization work is complete. The architecture has been fully designed
 
 File: `apps/seerstone/priv/default.config`
 
-Add the following keys to the `seerstone_graph_db` env:
+Add the following keys. Both relative and absolute paths are accepted for path values;
+relative paths resolve from the OTP release root.
 
 ```erlang
-{log_path,       "log"},
-{data_path,      "data"},
-{bootstrap_file, "apps/graphdb/priv/bootstrap.terms"},
-{nref_start,     1000}
+[{seerstone_graph_db, [
+  {app_port,       8080},
+  {log_path,       "log"},
+  {data_path,      "data"},
+  {bootstrap_file, "apps/graphdb/priv/bootstrap.terms"},
+  {nref_start,     10000}
+]},
+ {mnesia, [
+  {dir, "data"}    %% must match data_path; Mnesia reads this from its own app env
+]}].
 ```
 
 ### 0b. Update `nref_allocator` — config-driven nref floor
@@ -43,15 +50,10 @@ File: `apps/nref/src/nref_allocator.erl`
 - Bootstrap nrefs (all below `nref_start`) are written directly to Mnesia by
   `graphdb_bootstrap` — they never pass through `get_nref/0`
 
-### 0c. Delete stale DETS files
+### 0c. ~~Delete stale DETS files~~ — DONE
 
-Remove from the repository root:
-- `graphdb_attr.dets`
-- `graphdb_attr_index.dets`
-- `graphdb_attr_types.dets`
-
-These were produced by a prior AI session. The code that wrote them no longer exists.
-They will be superseded by Mnesia.
+`graphdb_attr.dets`, `graphdb_attr_index.dets`, `graphdb_attr_types.dets` deleted from
+the repository root. `nref_allocator.dets` and `nref_server.dets` are retained (live).
 
 ---
 
@@ -232,7 +234,7 @@ Correct for the present configuration; revisit if phased startup is desired.
 |---|---|---|
 | 0a | Update `default.config` | — |
 | 0b | Update `nref_allocator` (nref floor) | 0a |
-| 0c | Delete stale DETS files | — |
+| ~~0c~~ | ~~Delete stale DETS files~~ — **done** | — |
 | 1 | `graphdb_bootstrap` + Mnesia schema | 0a |
 | 2 | `graphdb_mgr` startup wiring | 1 |
 | 3 | `graphdb_attr` | 1, 2 |

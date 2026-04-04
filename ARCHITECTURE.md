@@ -1,6 +1,6 @@
 # Architectural Design Proposal — SeerStoneGraphDb
 
-> **Status:** Design phase — all structural questions resolved. Bootstrap node content delayed by user; no code written yet.
+> **Status:** Design phase complete — all questions resolved. Stale DETS files deleted. Bootstrap node content deferred by user. Ready for implementation.
 
 ---
 
@@ -13,7 +13,7 @@
 | `dictionary_imp` | Implemented; not yet wired to `dictionary_server` or `term_server` |
 | `dictionary_server`, `term_server` | Stubs |
 | All 6 `graphdb_*` workers | Empty gen_server stubs — no graph logic |
-| Stale DETS files on disk | `graphdb_attr.dets`, `graphdb_attr_index.dets`, `graphdb_attr_types.dets` — produced by a prior AI session; code no longer exists; delete before first Mnesia run |
+| Stale DETS files on disk | `graphdb_attr.dets`, `graphdb_attr_index.dets`, `graphdb_attr_types.dets` — deleted; were produced by a prior AI session, superseded by Mnesia |
 
 ---
 
@@ -29,16 +29,27 @@ Extend the existing `apps/seerstone/priv/default.config` with four new keys unde
   {log_path,       "log"},
   {data_path,      "data"},
   {bootstrap_file, "apps/graphdb/priv/bootstrap.terms"},
-  {nref_start,     1000}          %% allocator will not issue any nref below this value
+  {nref_start,     10000}         %% allocator will not issue any nref below this value
+]},
+ {mnesia, [
+  {dir, "data"}                   %% Mnesia reads its own dir from its app env
 ]}].
 ```
 
 | Key | Purpose |
 |---|---|
 | `log_path` | Directory for log files |
-| `data_path` | Directory for Mnesia database files (also where DETS files for nref live) |
+| `data_path` | Directory for Mnesia database files and nref DETS files |
 | `bootstrap_file` | Path to the bootstrap `.terms` file; read on first startup when schema is empty |
-| `nref_start` | Inclusive lower bound; the nref allocator's counter starts at this value and never issues nrefs below it |
+| `nref_start` | Inclusive lower bound; the nref allocator's counter starts at this value and never issues nrefs below it. Default: `10000` |
+
+### Path resolution
+
+Both relative and absolute paths are accepted for `log_path`, `data_path`, and `bootstrap_file`. Relative paths are resolved from the OTP release root at runtime (standard OTP convention). Absolute paths take effect as-is. Use relative paths for packaged releases; absolute paths for development overrides.
+
+### Mnesia dir configuration
+
+Mnesia reads its storage directory from its own application env key `{mnesia, dir}`. This is set directly in `default.config` (alongside the `seerstone_graph_db` env) so no code needs to call `application:set_env/3` for it. The value must match `data_path`.
 
 ### nref_start replaces the compile-time constant
 
@@ -244,12 +255,15 @@ graphdb_bootstrap:load() -> ok | {error, Reason :: term()}.
 
 ## 9. Open Questions
 
-All structural questions from the previous session are now resolved. Remaining questions:
+All questions resolved. No blockers for implementation.
 
-- [ ] **Config file format for paths**: Should `log_path`, `data_path`, `bootstrap_file` use paths relative to the release root, or absolute paths? (Relative is typical for OTP releases; absolute for dev convenience.)
-- [ ] **Mnesia `data_path` integration**: Mnesia requires `application:set_env(mnesia, dir, DataPath)` before `mnesia:start()`. Which module is responsible for this — `graphdb_mgr`, a new `graphdb_schema` module, or `seerstone_sup`?
-- [ ] **Bootstrap file content**: Deferred — user will supply when ready.
-- [ ] **Stale DETS files** (`graphdb_attr.dets` etc.): Delete from repository now, or leave for the implementer to clean up?
+| Question | Answer |
+|---|---|
+| Path format for `log_path`, `data_path`, `bootstrap_file` | Both relative and absolute accepted; relative resolved from OTP release root |
+| Who sets Mnesia `dir`? | Set directly in `default.config` under `{mnesia, [{dir, "data"}]}` — no code needed |
+| `nref_start` value | `10000` |
+| Stale DETS files | Deleted (`graphdb_attr.dets`, `graphdb_attr_index.dets`, `graphdb_attr_types.dets`) |
+| Bootstrap file content | Deferred — user will supply when ready |
 
 ---
 
@@ -269,21 +283,17 @@ SeerStoneGraphDb/
 │   ├── graphdb_rules.erl            IMPLEMENT — rule storage and enforcement
 │   ├── graphdb_language.erl         IMPLEMENT — query parser and executor
 │   └── graphdb_bootstrap.erl        CREATE — bootstrap file loader (new module)
-├── apps/graphdb/priv/
-│   └── bootstrap.terms              CREATE — bootstrap node/relationship data (content TBD)
-└── [root]/
-    ├── graphdb_attr.dets            DELETE — stale; replaced by Mnesia
-    ├── graphdb_attr_index.dets      DELETE — stale; replaced by Mnesia
-    └── graphdb_attr_types.dets      DELETE — stale; replaced by Mnesia
+└── apps/graphdb/priv/
+    └── bootstrap.terms              CREATE — bootstrap node/relationship data (content TBD)
 ```
 
 ---
 
 ## 11. Implementation Order
 
-1. `default.config` — add `log_path`, `bootstrap_file`, `nref_start` keys
+1. `default.config` — add `log_path`, `bootstrap_file`, `nref_start = 10000`, `mnesia dir` keys
 2. `nref_allocator` — read `nref_start` from env; init counter floor
-3. Delete stale `.dets` files
+3. ~~Delete stale `.dets` files~~ — **done**
 4. `graphdb_bootstrap` — implement loader; includes Mnesia schema/table creation
 5. `graphdb_mgr` — bootstrap detection in `init/1`; read `bootstrap_file` from env; call loader
 6. `apps/graphdb/priv/bootstrap.terms` — write from user-supplied content (deferred)
