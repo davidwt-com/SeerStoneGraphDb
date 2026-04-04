@@ -1,6 +1,6 @@
 # Architectural Design Proposal — SeerStoneGraphDb
 
-> **Status:** Design phase complete — all questions resolved. Bootstrap nrefs assigned (BFS, 1–28). `apps/graphdb/priv/bootstrap.terms` written. Ready for implementation.
+> **Status:** Design phase complete — all questions resolved. Bootstrap nrefs assigned (BFS, 1–30). `apps/graphdb/priv/bootstrap.terms` written. Ready for implementation.
 
 ---
 
@@ -125,7 +125,7 @@ Secondary index: `parent` — enables efficient `children/1` queries.
 - `kind = category`, `parent = undefined`
 - The only node in the database where `parent` is `undefined`
 
-### Bootstrap tree skeleton — nrefs assigned (BFS, 1–28)
+### Bootstrap tree skeleton — nrefs assigned (BFS, 1–30)
 
 Nrefs are assigned breadth-first. Attribute nodes under **Names** provide the `NameAttrNref` values used in node records; attribute nodes under **Relationships** provide the `characterization`/`reciprocal` arc labels used in the `relationships` table.
 
@@ -154,15 +154,18 @@ Nrefs are assigned breadth-first. Attribute nodes under **Names** provide the `N
 18              ├── Name  ← NameAttrNref for class nodes     (parent: 10)
 19              ├── Name  ← NameAttrNref for instance nodes  (parent: 11)
 20              └── Name  ← NameAttrNref for attribute nodes (parent: 12, self-ref)
-            (children of *Relationships — Parent + Child per type:)
-21              ├── Parent  category arc label   (parent: 13)
-22              ├── Child   category arc label   (parent: 13)
-23              ├── Parent  class arc label      (parent: 14)
-24              ├── Child   class arc label      (parent: 14)
-25              ├── Parent  instance arc label   (parent: 15)
-26              ├── Child   instance arc label   (parent: 15)
-27              ├── Parent  attribute arc label  (parent: 16, self-ref arc label)
-28              └── Child   attribute arc label  (parent: 16, self-ref arc label)
+            (children of *Relationships — arc label nodes:)
+21              ├── Parent    category compositional arc label  (parent: 13)
+22              ├── Child     category compositional arc label  (parent: 13)
+23              ├── Parent    class compositional arc label     (parent: 14)
+24              ├── Child     class compositional arc label     (parent: 14)
+25              ├── Parent    instance compositional arc label  (parent: 15)
+26              ├── Child     instance compositional arc label  (parent: 15)
+27              ├── Parent    attribute compositional arc label (parent: 16, self-ref)
+28              ├── Child     attribute compositional arc label (parent: 16, self-ref)
+            (continued — added after initial BFS; out of strict level order:)
+29              ├── Class     instance→class membership arc    (parent: 15)
+30              └── Instance  class→instances membership arc   (parent: 15)
 ```
 
 ### NameAttrNref quick-reference
@@ -186,6 +189,23 @@ Arc labels used in `{relationship, ParentNref, ChildArcNref, [], ParentArcNref, 
 | `instance` | 26 (Child/InstRel) | 25 (Parent/InstRel) |
 
 The last two rows under Attribute Relationships (nrefs 27 and 28) are self-referential: the arc label attribute nodes for "attribute" compositional arcs are themselves attribute nodes whose own parent arc label is nref 27. This is consistent — the system uses its own arc label vocabulary to describe itself.
+
+### Instance-to-class membership arc labels
+
+| Nref | Name | Direction | Usage |
+|---|---|---|---|
+| 29 | Class | instance → its class | `characterization` on the instance→class row |
+| 30 | Instance | class → its instances | `characterization` on the class→instance row |
+
+Usage in the relationships table:
+```erlang
+%% Writing instance membership: {relationship, InstNref, 29, [], 30, ClassNref, []}
+%% Expands to:
+%%   Row 1: source=InstNref,  characterization=29 (Class),    target=ClassNref, reciprocal=30
+%%   Row 2: source=ClassNref, characterization=30 (Instance), target=InstNref,  reciprocal=29
+```
+
+These are the only arc labels that cross the taxonomic/compositional boundary. `graphdb_instance:create_instance/3` writes this relationship pair atomically alongside the node record.
 
 ---
 
@@ -384,7 +404,7 @@ SeerStoneGraphDb/
 │   ├── graphdb_language.erl         IMPLEMENT — query parser and executor
 │   └── graphdb_bootstrap.erl        CREATE — bootstrap file loader (new module)
 └── apps/graphdb/priv/
-    └── bootstrap.terms              DONE — 28 nodes (nrefs 1–28, BFS), 27 relationship pairs
+    └── bootstrap.terms              DONE — 30 nodes (nrefs 1–30), 29 relationship pairs
 ```
 
 ---
