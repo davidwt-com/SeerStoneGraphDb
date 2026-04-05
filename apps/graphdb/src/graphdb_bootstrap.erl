@@ -91,6 +91,20 @@
 		load/0
 		]).
 
+%%---------------------------------------------------------------------
+%% Test-only exports (pure functions for EUnit)
+%%---------------------------------------------------------------------
+-ifdef(TEST).
+-export([
+		classify_terms/1,
+		sort_nodes_by_kind/1,
+		validate/2,
+		term_to_node/1,
+		expand_avps/1,
+		kind_order/1
+		]).
+-endif.
+
 
 %%=============================================================================
 %% Exported External API Functions
@@ -252,6 +266,8 @@ classify_terms([], NrefStart, Nodes, Rels) ->
 classify_terms([{nref_start, N} | Rest], undefined, Nodes, Rels)
 		when is_integer(N), N > 0 ->
 	classify_terms(Rest, N, Nodes, Rels);
+classify_terms([{nref_start, N} | _Rest], undefined, _Nodes, _Rels) ->
+	throw({error, {invalid_nref_start, N}});
 classify_terms([{nref_start, _} | _Rest], _Already, _Nodes, _Rels) ->
 	throw({error, duplicate_nref_start});
 classify_terms([{node, _, _, _, _, _} = Node | Rest], NrefStart, Nodes, Rels) ->
