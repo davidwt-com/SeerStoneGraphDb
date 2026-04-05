@@ -97,7 +97,7 @@ immutability guard, and read operations.
 
 ---
 
-## Task 3 — `graphdb_attr` — Attribute Library
+## ~~Task 3 — `graphdb_attr` — Attribute Library~~ — DONE
 
 File: `apps/graphdb/src/graphdb_attr.erl`
 
@@ -232,8 +232,8 @@ Correct for the present configuration; revisit if phased startup is desired.
 | ~~0c~~ | ~~Delete stale DETS files~~ — **done** | — |
 | ~~1~~ | ~~`graphdb_bootstrap` + Mnesia schema~~ — **done** | 0a, 0b |
 | ~~2~~ | ~~`graphdb_mgr` startup wiring~~ — **done** | 1 |
-| 3 | `graphdb_attr` ← **next** | 1, 2 |
-| 4 | `graphdb_class` | 3 |
+| ~~3~~ | ~~`graphdb_attr`~~ — **done** | 1, 2 |
+| 4 | `graphdb_class` ← **next** | 3 |
 | 5 | `graphdb_instance` | 3, 4 |
 | 6 | `graphdb_rules` | 5 |
 | 7 | `graphdb_language` | 5 |

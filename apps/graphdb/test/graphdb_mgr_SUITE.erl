@@ -137,7 +137,10 @@ groups() ->
 %%-----------------------------------------------------------------------------
 init_per_suite(Config) ->
 	{ok, OrigCwd} = file:get_cwd(),
-	ok = application:load(graphdb),
+	ok = case application:load(graphdb) of
+		ok -> ok;
+		{error, {already_loaded, graphdb}} -> ok
+	end,
 	PrivDir = code:priv_dir(graphdb),
 	BootstrapFile = filename:join(PrivDir, "bootstrap.terms"),
 	true = filelib:is_file(BootstrapFile),

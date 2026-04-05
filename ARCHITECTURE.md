@@ -546,6 +546,6 @@ To resume this session, start a new OpenCode session in this repository and past
 We are resuming implementation of SeerStoneGraphDb.
 Read ARCHITECTURE.md for full design decisions and TASKS.md for the task list.
 All design questions are resolved. bootstrap.terms is complete (nrefs 1-30, BFS).
-Tasks 0a-0c and Task 1 (graphdb_bootstrap) are done.
-Next task: Task 2 — graphdb_mgr startup wiring (step 5 in ARCHITECTURE.md Section 12).
+Tasks 0a-0c, Task 1 (graphdb_bootstrap), Task 2 (graphdb_mgr startup wiring), Task 3 (graphdb_attr) are done.
+Next task: Task 4 — `graphdb_class` — Taxonomic Hierarchy (step 8 in ARCHITECTURE.md Section 12).
 ```
