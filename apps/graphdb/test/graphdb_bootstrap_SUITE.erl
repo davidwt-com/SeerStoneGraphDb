@@ -404,18 +404,49 @@ load_nref_above_floor(Config) ->
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
-%% delete_dir_recursive(Dir) -> ok
+%% Safe scratch directory for test isolation.  All temp dirs are created
+%% under this path by init_per_testcase/2.
+%%-----------------------------------------------------------------------------
+-define(SCRATCH_SENTINEL, "_build/test/ct_scratch/").
+-define(DIR_PREFIX, "bootstrap_").
+
+
+%%-----------------------------------------------------------------------------
+%% delete_dir_recursive(Dir) -> ok | error({unsafe_delete, Dir})
 %%
 %% Recursively deletes a directory and all its contents.
+%%
+%% Safety: refuses to operate unless ALL of the following hold:
+%%   1. Dir is an absolute path
+%%   2. Dir contains the path segment "_build/test/ct_scratch/"
+%%   3. The leaf directory name starts with "bootstrap_"
+%%
+%% These guards ensure this function can never be misused to delete
+%% project source, home directories, or anything outside the test
+%% scratch area, even if called with a wrong argument.
 %%-----------------------------------------------------------------------------
 delete_dir_recursive(Dir) ->
+	case is_safe_scratch_dir(Dir) of
+		true  -> do_delete_dir(Dir);
+		false -> error({unsafe_delete, Dir})
+	end.
+
+is_safe_scratch_dir(Dir) ->
+	Abs = filename:absname(Dir),
+	IsAbsolute = (Abs =:= Dir),
+	ContainsSentinel = (string:find(Dir, ?SCRATCH_SENTINEL) =/= nomatch),
+	Leaf = filename:basename(Dir),
+	HasPrefix = lists:prefix(?DIR_PREFIX, Leaf),
+	IsAbsolute andalso ContainsSentinel andalso HasPrefix.
+
+do_delete_dir(Dir) ->
 	case filelib:is_dir(Dir) of
 		true ->
 			{ok, Entries} = file:list_dir(Dir),
 			lists:foreach(fun(E) ->
 				Path = filename:join(Dir, E),
 				case filelib:is_dir(Path) of
-					true  -> delete_dir_recursive(Path);
+					true  -> do_delete_dir(Path);
 					false -> file:delete(Path)
 				end
 			end, Entries),
