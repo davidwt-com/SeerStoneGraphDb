@@ -18,8 +18,8 @@ underway:
 | `dictionary` subsystem | `dictionary_imp` implemented; server stubs not yet wired |
 | `graphdb_bootstrap` | Fully implemented — Mnesia schema/table creation, bootstrap scaffold loader (30 nodes, 29 relationship pairs) |
 | `graphdb_mgr` | Implemented — bootstrap init, public read API (`get_node`, `get_relationships`), category immutability guard; write operations delegate to workers (pending) |
-| `graphdb_attr` | Gen_server stub — next to implement |
-| `graphdb_class` | Gen_server stub |
+| `graphdb_attr` | Implemented |
+| `graphdb_class` | Gen_server stub — next to implement |
 | `graphdb_instance` | Gen_server stub |
 | `graphdb_rules` | Gen_server stub |
 | `graphdb_language` | Gen_server stub |
@@ -278,4 +278,4 @@ Key conventions at a glance:
 - Module names follow the pattern: `name.erl`, `name_sup.erl`, `name_server.erl`, `name_imp.erl`
 - Graph nodes are identified by **Nrefs** — plain positive integers allocated by `nref_server:get_nref/0`
 - See `knowledge-graph-database-guide.md` for the knowledge model behind the graphdb workers
-- Feature work goes on `develop`; PRs target `main`
+- PRs target `main`

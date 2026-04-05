@@ -527,25 +527,12 @@ SeerStoneGraphDb/
 2. ~~`nref_server` / `nref_allocator` — add `set_floor/1` API~~ — **done**
 3. ~~Delete stale `.dets` files~~ — **done**
 3a. ~~`apps/graphdb/priv/bootstrap.terms`~~ — **done** (nrefs 1–30, BFS)
-4. ~~`graphdb_bootstrap` — implement loader; includes Mnesia schema/table creation~~ — **done**
-5. `graphdb_mgr` — bootstrap detection in `init/1`; read `bootstrap_file` from env; call loader ← **next**
-7. `graphdb_attr` — implement attribute library (Mnesia-backed)
+4. ~~`graphdb_bootstrap`~~ — **done** implement loader; includes Mnesia schema/table creation~~ — **done**
+5. ~~`graphdb_mgr`~~ — **done** bootstrap detection in `init/1`; read `bootstrap_file` from env; call loader ← **next**
+7. ~~`graphdb_attr` — implement attribute library (Mnesia-backed)
 8. `graphdb_class` — implement taxonomic hierarchy (Mnesia-backed)
 9. `graphdb_instance` — implement compositional hierarchy + inheritance (Mnesia-backed)
 10. `graphdb_mgr` — route public API calls to workers
 11. `graphdb_rules` — rule storage and enforcement
 12. `graphdb_language` — query parser and executor
 
----
-
-## Session Resume
-
-To resume this session, start a new OpenCode session in this repository and paste:
-
-```
-We are resuming implementation of SeerStoneGraphDb.
-Read ARCHITECTURE.md for full design decisions and TASKS.md for the task list.
-All design questions are resolved. bootstrap.terms is complete (nrefs 1-30, BFS).
-Tasks 0a-0c, Task 1 (graphdb_bootstrap), Task 2 (graphdb_mgr startup wiring), Task 3 (graphdb_attr) are done.
-Next task: Task 4 — `graphdb_class` — Taxonomic Hierarchy (step 8 in ARCHITECTURE.md Section 12).
-```

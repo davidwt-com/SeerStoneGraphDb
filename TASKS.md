@@ -241,3 +241,17 @@ Correct for the present configuration; revisit if phased startup is desired.
 | L1 | Non-normal start types | — |
 | L2 | `code_change/3` | — |
 | L3 | `start_phases` | — |
+
+---
+
+## Session Resume
+
+To resume this session, start a new claude or OpenCode session in this repository and paste:
+
+```
+We are resuming implementation of SeerStoneGraphDb.
+Read ARCHITECTURE.md for full design decisions and TASKS.md for the task list.
+All design questions are resolved. bootstrap.terms is complete (nrefs 1-30, BFS).
+Tasks 0a-0c, Task 1 (graphdb_bootstrap), Task 2 (graphdb_mgr startup wiring), Task 3 (graphdb_attr) are done.
+Next task: Task 4 — `graphdb_class` — Taxonomic Hierarchy (step 8 in ARCHITECTURE.md Section 12).
+```
