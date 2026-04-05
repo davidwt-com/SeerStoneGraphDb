@@ -69,6 +69,7 @@ Allocation preference: **reuse list first** (if ≥ block_size entries), then **
 nref_server:open(File)            %% open DETS file
 nref_server:close()               %% close DETS file
 nref_server:get_nref()            %% -> Nref (integer)
+nref_server:set_floor(Floor)      %% advance counter to max(current, Floor) — PENDING (Task 0b)
 nref_server:confirm_nref(Nref)    %% confirm single nref used
 nref_server:confirm_nrefs(List)   %% confirm list of nrefs used
 nref_server:reuse_nref(Nref)      %% mark nref for reuse
@@ -76,11 +77,17 @@ nref_server:reuse_nrefs(List)     %% mark list of nrefs for reuse
 nref_server:confirm_nref_block(Nref, Count)
 ```
 
+`set_floor/1` is a planned addition (Task 0b). It is called exactly once by
+`graphdb_bootstrap` as its first action, advancing the environment allocator counter
+to 10000 before any nodes or relationships are written. On subsequent startups the
+persisted DETS counter is already ≥ 10000 and the call is a no-op.
+
 ## NYI Status
 
-- **`nref.erl` callbacks** (`start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3`) are NYI stubs. These return `ok` and are correct for the current deployment model.
-- **`nref:start/2` non-normal clauses**: `?NYI` for `{takeover, Node}` and `{failover, Node}`. Only relevant in distributed/failover deployments. See `TASKS.md` task 2.
-- **`code_change/3`**: NYI in `nref_allocator.erl` and `nref_server.erl`. Only invoked during hot code upgrades. See `TASKS.md` task 3.
+- **`nref_server:set_floor/1`** — not yet implemented. Required by `graphdb_bootstrap` (Task 0b).
+- **`nref.erl` callbacks** (`start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3`) return `ok` (no-op stubs; correct for current deployment model).
+- **`nref:start/2` non-normal clauses**: `?NYI` for `{takeover, Node}` and `{failover, Node}`. Only relevant in distributed/failover deployments. See `TASKS.md` task L1.
+- **`code_change/3`**: NYI in `nref_allocator.erl` and `nref_server.erl`. Only invoked during hot code upgrades. See `TASKS.md` task L2.
 
 ## DETS File Location
 

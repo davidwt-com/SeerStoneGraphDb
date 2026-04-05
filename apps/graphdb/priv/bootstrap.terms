@@ -1,0 +1,137 @@
+%% Copyright (c) SeerStone, Inc. 2008
+%%
+%% bootstrap.terms -- SeerStoneGraphDb initial graph scaffold
+%%
+%% Loaded once by graphdb_bootstrap:load/0 on first startup when the Mnesia
+%% nodes table is empty.  After a successful load, nref_server:set_floor/1 is
+%% called and the file is never consulted again.
+%%
+%% Pre-assigned nrefs: 1-30 (nodes).
+%% Relationship record IDs are allocated by nref_server:get_nref/0, which
+%% starts at nref_start (10000) because {nref_start,...} is processed first.
+%%
+%% NameAttrNref by node kind:
+%%   category  => 17  (Name under Category Name Attributes)
+%%   attribute => 18  (Name under Attribute Name Attributes)
+%%   class     => 19  (Name under Class Name Attributes)
+%%   instance  => 20  (Name under Instance Name Attributes)
+%%
+%% Compositional arc labels -- {relationship, ParentNref, ChildArcNref, [],
+%%                                            ParentArcNref, ChildNref, []}
+%%   category  child: ChildArc=22 (Child/CatRel),  ParentArc=21 (Parent/CatRel)
+%%   attribute child: ChildArc=24 (Child/AttrRel), ParentArc=23 (Parent/AttrRel)
+%%   class     child: ChildArc=26 (Child/ClassRel), ParentArc=25 (Parent/ClassRel)
+%%   instance  child: ChildArc=28 (Child/InstRel),  ParentArc=27 (Parent/InstRel)
+%%
+%% Instance-to-class membership arc labels:
+%%   instance -> class: characterization=29 (Class)
+%%   class -> instance: characterization=30 (Instance)
+%%
+%% Each {relationship,...} term expands to two directed rows written atomically.
+
+%% -------------------------------------------------------------------------
+%% nref floor -- processed first; nref_server:set_floor(10000) is called so
+%% all subsequent get_nref/0 calls for relationship IDs return >= 10000.
+%% -------------------------------------------------------------------------
+{nref_start, 10000}.
+
+%% -------------------------------------------------------------------------
+%% Level 0 -- Root
+%% -------------------------------------------------------------------------
+{node,  1, category,  undefined, {17, "Root"}, []}.
+
+%% -------------------------------------------------------------------------
+%% Level 1 -- Root's children (category)
+%% -------------------------------------------------------------------------
+{node,  2, category,  1, {17, "Attributes"}, []}.
+{node,  3, category,  1, {17, "Classes"},    []}.
+{node,  4, category,  1, {17, "Languages"},  []}.
+{node,  5, category,  1, {17, "Projects"},   []}.
+
+%% -------------------------------------------------------------------------
+%% Level 2 -- Attributes' children (attribute)
+%% -------------------------------------------------------------------------
+{node,  6, attribute,  2, {18, "Names"},         []}.
+{node,  7, attribute,  2, {18, "Literals"},      []}.
+{node,  8, attribute,  2, {18, "Relationships"}, []}.
+
+%% -------------------------------------------------------------------------
+%% Level 3 -- Names' children (attribute) -- Attribute ordered before Class
+%% -------------------------------------------------------------------------
+{node,  9, attribute,  6, {18, "Category Name Attributes"},  []}.
+{node, 10, attribute,  6, {18, "Attribute Name Attributes"}, []}.
+{node, 11, attribute,  6, {18, "Class Name Attributes"},     []}.
+{node, 12, attribute,  6, {18, "Instance Name Attributes"},  []}.
+
+%% Level 3 -- Relationships' children (attribute) -- Attribute ordered before Class
+{node, 13, attribute,  8, {18, "Category Relationships"},  []}.
+{node, 14, attribute,  8, {18, "Attribute Relationships"}, []}.
+{node, 15, attribute,  8, {18, "Class Relationships"},     []}.
+{node, 16, attribute,  8, {18, "Instance Relationships"},  []}.
+
+%% -------------------------------------------------------------------------
+%% Level 4 -- Name attribute nodes (BFS follows new level-3 order)
+%% -------------------------------------------------------------------------
+{node, 17, attribute,  9, {18, "Name"}, []}.  %% NameAttrNref for category nodes
+{node, 18, attribute, 10, {18, "Name"}, []}.  %% NameAttrNref for attribute nodes (self-ref)
+{node, 19, attribute, 11, {18, "Name"}, []}.  %% NameAttrNref for class nodes
+{node, 20, attribute, 12, {18, "Name"}, []}.  %% NameAttrNref for instance nodes
+
+%% Level 4 -- Arc label nodes (BFS: CatRel, AttrRel, ClassRel, InstRel children)
+{node, 21, attribute, 13, {18, "Parent"},   []}.  %% category  compositional Parent arc label
+{node, 22, attribute, 13, {18, "Child"},    []}.  %% category  compositional Child  arc label
+{node, 23, attribute, 14, {18, "Parent"},   []}.  %% attribute compositional Parent arc label (self-ref)
+{node, 24, attribute, 14, {18, "Child"},    []}.  %% attribute compositional Child  arc label (self-ref)
+{node, 25, attribute, 15, {18, "Parent"},   []}.  %% class     compositional Parent arc label
+{node, 26, attribute, 15, {18, "Child"},    []}.  %% class     compositional Child  arc label
+{node, 27, attribute, 16, {18, "Parent"},   []}.  %% instance  compositional Parent arc label
+{node, 28, attribute, 16, {18, "Child"},    []}.  %% instance  compositional Child  arc label
+{node, 29, attribute, 16, {18, "Class"},    []}.  %% instance -> class membership arc label
+{node, 30, attribute, 16, {18, "Instance"}, []}.  %% class -> instances membership arc label
+
+%% =========================================================================
+%% Compositional arcs
+%%
+%% {relationship, ParentNref, ChildArcNref, [], ParentArcNref, ChildNref, []}
+%% =========================================================================
+
+%% Root -> category children  (ChildArc=22, ParentArc=21)
+{relationship,  1, 22, [], 21,  2, []}.  %% Root -> Attributes
+{relationship,  1, 22, [], 21,  3, []}.  %% Root -> Classes
+{relationship,  1, 22, [], 21,  4, []}.  %% Root -> Languages
+{relationship,  1, 22, [], 21,  5, []}.  %% Root -> Projects
+
+%% Attributes -> attribute children  (ChildArc=24, ParentArc=23)
+{relationship,  2, 24, [], 23,  6, []}.  %% Attributes -> Names
+{relationship,  2, 24, [], 23,  7, []}.  %% Attributes -> Literals
+{relationship,  2, 24, [], 23,  8, []}.  %% Attributes -> Relationships
+
+%% Names -> attribute children
+{relationship,  6, 24, [], 23,  9, []}.  %% Names -> Category Name Attributes
+{relationship,  6, 24, [], 23, 10, []}.  %% Names -> Attribute Name Attributes
+{relationship,  6, 24, [], 23, 11, []}.  %% Names -> Class Name Attributes
+{relationship,  6, 24, [], 23, 12, []}.  %% Names -> Instance Name Attributes
+
+%% Relationships -> attribute children
+{relationship,  8, 24, [], 23, 13, []}.  %% Relationships -> Category Relationships
+{relationship,  8, 24, [], 23, 14, []}.  %% Relationships -> Attribute Relationships
+{relationship,  8, 24, [], 23, 15, []}.  %% Relationships -> Class Relationships
+{relationship,  8, 24, [], 23, 16, []}.  %% Relationships -> Instance Relationships
+
+%% *NameAttributes -> Name  (attribute child)
+{relationship,  9, 24, [], 23, 17, []}.  %% Category Name Attributes  -> Name
+{relationship, 10, 24, [], 23, 18, []}.  %% Attribute Name Attributes -> Name
+{relationship, 11, 24, [], 23, 19, []}.  %% Class Name Attributes     -> Name
+{relationship, 12, 24, [], 23, 20, []}.  %% Instance Name Attributes  -> Name
+
+%% *Relationships -> arc label child nodes  (attribute child)
+{relationship, 13, 24, [], 23, 21, []}.  %% Category Relationships  -> Parent
+{relationship, 13, 24, [], 23, 22, []}.  %% Category Relationships  -> Child
+{relationship, 14, 24, [], 23, 23, []}.  %% Attribute Relationships -> Parent (arc label self-ref)
+{relationship, 14, 24, [], 23, 24, []}.  %% Attribute Relationships -> Child  (arc label self-ref)
+{relationship, 15, 24, [], 23, 25, []}.  %% Class Relationships     -> Parent
+{relationship, 15, 24, [], 23, 26, []}.  %% Class Relationships     -> Child
+{relationship, 16, 24, [], 23, 27, []}.  %% Instance Relationships  -> Parent
+{relationship, 16, 24, [], 23, 28, []}.  %% Instance Relationships  -> Child
+{relationship, 16, 24, [], 23, 29, []}.  %% Instance Relationships  -> Class
+{relationship, 16, 24, [], 23, 30, []}.  %% Instance Relationships  -> Instance

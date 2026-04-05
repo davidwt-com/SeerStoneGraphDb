@@ -27,6 +27,7 @@ SeerStoneGraphDb/
 ├── rebar.config       # rebar3 umbrella build configuration
 ├── rebar.lock         # Locked dependency versions
 ├── Makefile           # Convenience targets (compile, shell, release, clean, rebar3)
+├── ARCHITECTURE.md    # Full architectural design (all decisions resolved)
 ├── TASKS.md           # Inventory of remaining implementation work
 └── CLAUDE.md          # This file
 ```
@@ -38,24 +39,27 @@ seerstone (application)
   └── seerstone_sup (supervisor, one_for_one)
         └── database_sup (supervisor)
               ├── graphdb_sup (supervisor)
-              │     ├── graphdb_mgr       (gen_server stub)
-              │     ├── graphdb_rules     (gen_server stub)
-              │     ├── graphdb_attr      (gen_server stub)
-              │     ├── graphdb_class     (gen_server stub)
-              │     ├── graphdb_instance  (gen_server stub)
-              │     └── graphdb_language  (gen_server stub)
+              │     ├── graphdb_mgr       (gen_server — stub, implementation pending)
+              │     ├── graphdb_rules     (gen_server — stub, implementation pending)
+              │     ├── graphdb_attr      (gen_server — stub, implementation pending)
+              │     ├── graphdb_class     (gen_server — stub, implementation pending)
+              │     ├── graphdb_instance  (gen_server — stub, implementation pending)
+              │     └── graphdb_language  (gen_server — stub, implementation pending)
               └── dictionary_sup (supervisor)
-                    ├── dictionary_server (gen_server stub)
-                    └── term_server       (gen_server stub)
+                    ├── dictionary_server (gen_server — stub, not yet wired to dictionary_imp)
+                    └── term_server       (gen_server — stub, not yet wired to dictionary_imp)
 
 nref (application — started independently)
   └── nref_sup (supervisor)
-        ├── nref_allocator  (DETS-backed block allocator, gen_server)
-        └── nref_server     (serves nrefs to callers, gen_server)
+        ├── nref_allocator  (DETS-backed block allocator, gen_server — fully implemented)
+        └── nref_server     (serves nrefs to callers, gen_server — fully implemented)
 ```
 
 `nref_include.erl` has been deleted — it was Dallas's earlier unsupervised
 predecessor to `nref_server` and is fully superseded by it.
+
+`graphdb_bootstrap.erl` — new module to be created; loaded by `graphdb_mgr:init/1`
+on first startup when the Mnesia `nodes` table is empty.
 
 ## Common Coding Conventions
 
@@ -106,12 +110,75 @@ This database is an implementation of the knowledge graph model described in
 
 | Concept                     | Erlang mapping                                                                                   |
 |-----------------------------|--------------------------------------------------------------------------------------------------|
-| **Node / Concept**          | A record identified by an Nref (positive integer)                                                |
+| **Node / Concept**          | A record identified by an Nref (positive integer); `kind` is one of `category \| attribute \| class \| instance` |
+| **Category Node**           | Permanent top-level organisational scaffold; forms the skeleton of the entire graph; **bootstrap-only** — cannot be created, modified, or deleted at runtime |
 | **Instance Node**           | Concrete entity: has a name attribute, class membership, compositional parent, and relationships |
 | **Class Node**              | Type/schema: has a class name attribute, instance name attribute, and qualifying characteristics |
 | **Attribute Node**          | Name attribute, relationship attribute, or literal attribute stored in the attribute library     |
-| **Relationship (Arc)**      | Reciprocal connection between instances; stored as `{Characterization, Value, Reciprocal}`       |
-| **Reference Number (Nref)** | Globally unique `integer()` allocated by `nref_server:get_nref/0`                                |
+| **Relationship (Arc)**      | Reciprocal connection between nodes; stored as two directed rows in the `relationships` Mnesia table |
+| **Reference Number (Nref)** | Globally unique `integer()` allocated by `nref_server:get_nref/0`; bootstrap nrefs are pre-assigned (all `< nref_start`) |
+
+### Multi-Database Architecture
+
+Two database roles:
+
+| Role | Content | Mutability |
+|---|---|---|
+| **Environment database** | All category, attribute, class, and language nodes; bootstrap scaffold; arc label definitions | Category nodes: immutable (bootstrap-only). All other nodes grow freely at runtime. |
+| **Project database** | Instance nodes and their relationships; one database per project | Fully mutable at runtime |
+
+The environment is shared across all projects. Only bootstrap nrefs (1–30) and a small number of explicitly seeded runtime nrefs (e.g., `target_kind`) are referenced by nref constant in code — all other runtime-added nodes are treated generically.
+
+nref spaces:
+- **Environment**: bootstrap nrefs 1–30; runtime nrefs 10000+ (protected by `{nref_start, 10000}` in `bootstrap.terms`)
+- **Project**: allocator starts at **1** — no pre-assigned nrefs, no bootstrap file, no floor needed
+
+Cross-database nref resolution: `characterization` and `reciprocal` fields always reference environment nrefs; `target_nref` is routed to environment or project based on the arc label's `target_kind` AVP stored in the environment attribute library.
+
+### Bootstrap Nref Quick-Reference (BFS, nrefs 1–30)
+
+```
+ 1  Root (category)
+ 2  ├── Attributes (category)
+ 3  ├── Classes (category)
+ 4  ├── Languages (category)
+ 5  └── Projects (category)
+ 6      Names (attribute, parent: 2)
+ 7      Literals (attribute, parent: 2)
+ 8      Relationships (attribute, parent: 2)
+ 9      Category Name Attributes (attribute, parent: 6)
+10      Attribute Name Attributes (attribute, parent: 6)
+11      Class Name Attributes (attribute, parent: 6)
+12      Instance Name Attributes (attribute, parent: 6)
+13      Category Relationships (attribute, parent: 8)
+14      Attribute Relationships (attribute, parent: 8)
+15      Class Relationships (attribute, parent: 8)
+16      Instance Relationships (attribute, parent: 8)
+17      Name — NameAttrNref for category nodes (parent: 9)
+18      Name — NameAttrNref for attribute nodes (parent: 10, self-ref)
+19      Name — NameAttrNref for class nodes (parent: 11)
+20      Name — NameAttrNref for instance nodes (parent: 12)
+21      Parent — category compositional arc label (parent: 13)
+22      Child  — category compositional arc label (parent: 13)
+23      Parent — attribute compositional arc label (parent: 14, self-ref)
+24      Child  — attribute compositional arc label (parent: 14, self-ref)
+25      Parent — class compositional arc label (parent: 15)
+26      Child  — class compositional arc label (parent: 15)
+27      Parent — instance compositional arc label (parent: 16)
+28      Child  — instance compositional arc label (parent: 16)
+29      Class  — instance→class membership arc (parent: 16)
+30      Instance — class→instances membership arc (parent: 16)
+```
+
+NameAttrNref quick-reference: category=17, attribute=18, class=19, instance=20
+
+Compositional arc labels (`{relationship, ParentNref, ChildArcNref, [], ParentArcNref, ChildNref, []}`):
+- category child: ChildArc=22, ParentArc=21
+- attribute child: ChildArc=24, ParentArc=23
+- class child: ChildArc=26, ParentArc=25
+- instance child: ChildArc=28, ParentArc=27
+
+Instance-to-class membership arcs: characterization=29 (Class) instance→class; characterization=30 (Instance) class→instance. Written in the **project** database, not the environment.
 
 ### Hierarchy Systems
 
@@ -130,31 +197,39 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 
 ### Record Structure
 
-Every graph record maps to:
+Every graph node is stored as a Mnesia record:
 ```erlang
-#{
-  nref                 => Nref,              %% unique positive integer
-  attribute_value_pairs => [
-    #{attribute => AttrNref,                 %% ref to attribute concept
-      value     => Value}                    %% any term — literal or complex
-  ],
-  relationships => [
-    #{characterization => AttrNref,          %% ref to attribute concept (arc label)
-      value            => TargetNref,        %% ref to target concept
-      reciprocal       => AttrNref2}         %% arc label as seen from target back
-  ]
-}
+-record(node, {
+  nref,                   %% integer() — unique positive integer; primary key
+  kind,                   %% category | attribute | class | instance
+  parent,                 %% integer() | undefined  (undefined = root node only)
+  attribute_value_pairs   %% [#{attribute => AttrNref, value => Value}]
+}).
 ```
+
+Relationships are stored in a separate Mnesia table (not embedded in the node record):
+```erlang
+-record(relationship, {
+  id,               %% integer() — primary key (nref allocated normally)
+  source_nref,      %% integer() — arc origin
+  characterization, %% integer() — arc label (an attribute nref)
+  target_nref,      %% integer() — arc target
+  reciprocal,       %% integer() — arc label as seen from target back
+  avps              %% [#{attribute => AttrNref, value => Value}] — per-direction metadata
+}).
+```
+
+A logical bidirectional edge is two `relationship` rows written atomically (one per direction). Secondary indexes on `source_nref` and `target_nref` make forward and reverse traversal O(1).
 
 `attribute_value_pairs` carries literal and non-topological values (e.g., name strings, measurements, URLs). The value may be any Erlang term; the attribute node holds the definition of permissible value types. These pairs do **not** participate in graph traversal.
 
-`relationships` are graph-topology arcs. Each is a flat triple: `characterization` is the arc label (an attribute Nref), `value` is the target concept (an Nref), and `reciprocal` is the arc label as seen from the target back to this node (also an attribute Nref).
+`relationships` are graph-topology arcs. Each is a flat triple plus an optional per-arc metadata list: `characterization` is the arc label (an attribute Nref), `value` is the target concept (an Nref), `reciprocal` is the arc label as seen from the target back to this node (also an attribute Nref), and `attribute_value_pairs` is an optional list of per-direction metadata pairs (provenance, weights, flags, revisions, active time frames, etc.). The AVP list does not inherit and does not participate in graph traversal by default; a future traversal-condition mechanism may allow certain AVPs to gate or modify traversal.
 
 ### graphdb Worker Responsibilities
 
 | Module             | Knowledge model role                                                                           |
 |--------------------|------------------------------------------------------------------------------------------------|
-| `graphdb_attr`     | Maintains the attribute library (name attributes, literal attributes, relationship attributes, relationship types) |
+| `graphdb_attr`     | Maintains the attribute library (name attributes, literal attributes, relationship attributes, relationship types); literal attributes used as relationship arc metadata are identified by carrying a `relationship_avp => true` AVP on their own attribute node record |
 | `graphdb_class`    | Manages the taxonomic hierarchy: class nodes, qualifying characteristics, inheritance          |
 | `graphdb_instance` | Creates and retrieves instance nodes; manages compositional hierarchy                          |
 | `graphdb_rules`    | Stores and enforces graph rules (pattern recognition, relationship constraints)                |
@@ -165,14 +240,17 @@ Every graph record maps to:
 
 These are outstanding items — all previously known bugs have been fixed.
 
+- **`graphdb_bootstrap.erl`** — new module to be created; bootstrap file loader and Mnesia schema creator (Task 1)
 - **graphdb worker modules** — all six are gen_server stubs with no real implementation (`graphdb_mgr`, `graphdb_rules`, `graphdb_attr`, `graphdb_class`, `graphdb_instance`, `graphdb_language`)
+- **`dictionary_server` and `term_server`** — stubs not yet wired to `dictionary_imp` (Task 8)
+- **`nref_server:set_floor/1`** — new API to be added; called once by `graphdb_bootstrap` to advance the environment allocator counter to 10000 before writing any nodes (Task 0b)
 - **`seerstone:start/2` and `nref:start/2`** — non-normal start types (`{takeover,Node}`, `{failover,Node}`) hit `?NYI`; only relevant in distributed/failover deployments
 - **`code_change/3`** — NYI in all gen_server modules; only relevant for hot code upgrades
 - **App lifecycle callbacks** — `start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3` return `ok` (no-op) across all five app modules; correct for current deployment model
 
 ## Remaining Work
 
-The six graphdb worker modules are the primary remaining implementation work.
+The six graphdb worker modules and `graphdb_bootstrap` are the primary remaining implementation work.
 See `TASKS.md` for the full task list and priority order.
 
 ## Configuration
@@ -180,11 +258,17 @@ See `TASKS.md` for the full task list and priority order.
 `apps/seerstone/priv/default.config`:
 ```erlang
 [{seerstone_graph_db, [
-  {app_port, 8080},
-  {data_path, "data"},
-  {index_path, "index"}
+  {app_port,       8080},
+  {log_path,       "log"},
+  {data_path,      "data"},
+  {bootstrap_file, "apps/graphdb/priv/bootstrap.terms"}
+]},
+ {mnesia, [
+  {dir, "data"}
 ]}].
 ```
+
+Both relative and absolute paths are accepted for `log_path`, `data_path`, and `bootstrap_file`. Relative paths resolve from the OTP release root.
 
 ## CI
 
@@ -204,6 +288,7 @@ GitHub Actions workflow at `.github/workflows/ci.yml`:
 
 | Technology | Used by | Purpose |
 |---|---|---|
+| Mnesia | `graphdb_*` workers | Graph node and relationship storage; `disc_copies` for RAM-speed reads with persistence |
 | DETS | `nref_allocator`, `nref_server` | Persistent disk-based term storage |
 | ETS | `dictionary_imp` | In-memory term storage |
 | ETS tab2file | `dictionary_imp` | Persistent serialization of ETS tables |

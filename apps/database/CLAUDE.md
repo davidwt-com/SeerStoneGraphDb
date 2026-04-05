@@ -37,14 +37,13 @@ seerstone_sup (one_for_one, MaxR=5, MaxT=5000)
 
 ## NYI Status
 
-The following callbacks in `database.erl` are stubs:
+The following callbacks in `database.erl` return `ok` (no-op stubs; correct for
+the current deployment model — no phased startup, no pre-shutdown hooks needed):
 
-- `start_phase/3` — NYI
-- `prep_stop/1` — NYI
-- `stop/1` — NYI
-- `config_change/3` — NYI
-
-`database_sup:init/1` child specs for `graphdb_sup` and `dictionary_sup` need to be verified / completed.
+- `start_phase/3`
+- `prep_stop/1`
+- `stop/1`
+- `config_change/3`
 
 ## Key Design Notes
 
@@ -63,6 +62,6 @@ erlc apps/database/src/database_sup.erl apps/database/src/database.erl
 
 ## Remaining Work
 
-See `apps/graphdb/CLAUDE.md` and `TASKS.md` task 1 for the graphdb worker
-implementation work that must complete before this application is fully
-functional.
+See `apps/graphdb/CLAUDE.md` and `TASKS.md` for the graphdb worker implementation
+work (Tasks 0–7) and `dictionary_server`/`term_server` wiring (Task 8) that must
+complete before this application is fully functional.
