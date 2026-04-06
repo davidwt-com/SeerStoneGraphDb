@@ -124,7 +124,7 @@ naming and relationships. Attribute nodes live in the `nodes` Mnesia table with
 
 ---
 
-## Task 4 — `graphdb_class` — Taxonomic Hierarchy
+## ~~Task 4 — `graphdb_class` — Taxonomic Hierarchy~~ — DONE
 
 File: `apps/graphdb/src/graphdb_class.erl`
 
@@ -136,6 +136,7 @@ inheritance. Class nodes live in the `nodes` table with `kind = class`.
 - Implement `add_qualifying_characteristic/2` (class Nref, attribute Nref)
 - Implement `get_class/1`, `subclasses/1`, `ancestors/1`
 - Implement class-level attribute inheritance: `inherited_attributes/1`
+- Seeds `qualifying_characteristic` literal attribute under Literals (nref 7)
 
 ---
 
@@ -233,8 +234,8 @@ Correct for the present configuration; revisit if phased startup is desired.
 | ~~1~~ | ~~`graphdb_bootstrap` + Mnesia schema~~ — **done** | 0a, 0b |
 | ~~2~~ | ~~`graphdb_mgr` startup wiring~~ — **done** | 1 |
 | ~~3~~ | ~~`graphdb_attr`~~ — **done** | 1, 2 |
-| 4 | `graphdb_class` ← **next** | 3 |
-| 5 | `graphdb_instance` | 3, 4 |
+| ~~4~~ | ~~`graphdb_class`~~ — **done** | 3 |
+| 5 | `graphdb_instance` ← **next** | 3, 4 |
 | 6 | `graphdb_rules` | 5 |
 | 7 | `graphdb_language` | 5 |
 | 8 | `dictionary_server` / `term_server` | — (independent) |
@@ -252,6 +253,6 @@ To resume this session, start a new claude or OpenCode session in this repositor
 We are resuming implementation of SeerStoneGraphDb.
 Read ARCHITECTURE.md for full design decisions and TASKS.md for the task list.
 All design questions are resolved. bootstrap.terms is complete (nrefs 1-30, BFS).
-Tasks 0a-0c, Task 1 (graphdb_bootstrap), Task 2 (graphdb_mgr startup wiring), Task 3 (graphdb_attr) are done.
-Next task: Task 4 — `graphdb_class` — Taxonomic Hierarchy (step 8 in ARCHITECTURE.md Section 12).
+Tasks 0a-0c, Task 1 (graphdb_bootstrap), Task 2 (graphdb_mgr startup wiring), Task 3 (graphdb_attr), Task 4 (graphdb_class) are done.
+Next task: Task 5 — `graphdb_instance` — Compositional Hierarchy and Inheritance (step 9 in ARCHITECTURE.md Section 12).
 ```

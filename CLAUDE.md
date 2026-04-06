@@ -49,7 +49,7 @@ seerstone (application)
               │     ├── graphdb_mgr       (gen_server — implemented: bootstrap init, read API, category guard)
               │     ├── graphdb_rules     (gen_server — stub, implementation pending)
               │     ├── graphdb_attr      (gen_server — implemented: seeds + create/lookup API)
-              │     ├── graphdb_class     (gen_server — stub, implementation pending)
+              │     ├── graphdb_class     (gen_server — implemented: taxonomic hierarchy, QC inheritance)
               │     ├── graphdb_instance  (gen_server — stub, implementation pending)
               │     └── graphdb_language  (gen_server — stub, implementation pending)
               └── dictionary_sup (supervisor)
@@ -247,7 +247,7 @@ A logical bidirectional edge is two `relationship` rows written atomically (one 
 
 These are outstanding items — all previously known bugs have been fixed.
 
-- **graphdb worker modules** — five remain as gen_server stubs with no real implementation (`graphdb_rules`, `graphdb_attr`, `graphdb_class`, `graphdb_instance`, `graphdb_language`)
+- **graphdb worker modules** — three remain as gen_server stubs with no real implementation (`graphdb_rules`, `graphdb_instance`, `graphdb_language`)
 - **`graphdb_mgr` write operations** — `create_attribute/3`, `create_class/2`, `create_instance/3`, `add_relationship/4`, `delete_node/1`, `update_node_avps/2` return `{error, not_implemented}` pending worker implementation (Tasks 3–5); read operations and category guard are fully functional
 - **`dictionary_server` and `term_server`** — stubs not yet wired to `dictionary_imp` (Task 8)
 - **`seerstone:start/2` and `nref:start/2`** — non-normal start types (`{takeover,Node}`, `{failover,Node}`) hit `?NYI`; only relevant in distributed/failover deployments
