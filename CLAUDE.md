@@ -247,17 +247,17 @@ A logical bidirectional edge is two `relationship` rows written atomically (one 
 
 These are outstanding items — all previously known bugs have been fixed.
 
-- **graphdb worker modules** — two remain as gen_server stubs with no real implementation (`graphdb_rules`, `graphdb_language`)
+- **graphdb worker modules** — `graphdb_language` remains as a gen_server stub; `graphdb_rules` is a stub deferred to Enhancements
 - **`graphdb_mgr` write operations** — `create_attribute/3`, `create_class/2`, `create_instance/3`, `add_relationship/4`, `delete_node/1`, `update_node_avps/2` return `{error, not_implemented}` pending worker implementation (Tasks 3–5); read operations and category guard are fully functional
-- **`dictionary_server` and `term_server`** — stubs not yet wired to `dictionary_imp` (Task 8)
-- **`seerstone:start/2` and `nref:start/2`** — non-normal start types (`{takeover,Node}`, `{failover,Node}`) hit `?NYI`; only relevant in distributed/failover deployments
-- **`code_change/3`** — NYI in all gen_server modules; only relevant for hot code upgrades
+- **`dictionary_server` and `term_server`** — stubs not yet wired to `dictionary_imp` (Task 7)
+- **`seerstone:start/2` and `nref:start/2`**, **`code_change/3`** — deferred to Enhancements (E2, E3 in TASKS.md)
 - **App lifecycle callbacks** — `start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3` return `ok` (no-op) across all five app modules; correct for current deployment model
 
 ## Remaining Work
 
-The five remaining graphdb worker modules are the primary implementation work.
-`graphdb_bootstrap` (Task 1) and `graphdb_mgr` startup wiring (Task 2) are done.
+Tasks 0a–0c and Tasks 1–5 are complete. Two implementation tasks remain:
+Task 6 (`graphdb_language` — query language) and Task 7 (wire `dictionary_server` / `term_server`
+to `dictionary_imp`). `graphdb_rules` is deferred to the Enhancements section of TASKS.md.
 See `TASKS.md` for the full task list and priority order.
 
 ## Configuration

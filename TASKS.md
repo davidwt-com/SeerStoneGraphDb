@@ -168,21 +168,7 @@ only in the `relationships` table — no flag or count on the node record is nee
 
 ---
 
-## Task 6 — `graphdb_rules` — Graph Rules
-
-File: `apps/graphdb/src/graphdb_rules.erl`
-
-Stores and enforces graph rules; supports pattern recognition and learning.
-
-**Sub-tasks:**
-- Define rule record schema (pattern: list of relationship constraints)
-- Implement `create_rule/2` (name, pattern spec)
-- Implement `check_rule/2` (rule Nref, candidate instance Nref)
-- Implement `suggest_relationships/1` — scan rules against new instance, suggest likely relationships
-
----
-
-## Task 7 — `graphdb_language` — Query Language
+## Task 6 — `graphdb_language` — Query Language
 
 File: `apps/graphdb/src/graphdb_language.erl`
 
@@ -196,31 +182,12 @@ Parses and executes graph queries against the node network.
 
 ---
 
-## Task 8 — `dictionary_server` and `term_server` — Wire to `dictionary_imp`
+## Task 7 — `dictionary_server` and `term_server` — Wire to `dictionary_imp`
 
 Files: `apps/dictionary/src/dictionary_server.erl`, `apps/dictionary/src/term_server.erl`
 
 `dictionary_imp` is fully implemented but neither server stub is wired to it.
 Implement delegation from each gen_server to the relevant `dictionary_imp` functions.
-
----
-
-## Lower Priority
-
-### L1. `seerstone:start/2` and `nref:start/2` — non-normal start types NYI
-
-Both hit `?NYI` for `{takeover, Node}` and `{failover, Node}` start types.
-Only relevant in a distributed/failover OTP deployment.
-
-### L2. `code_change/3` — NYI in all gen_server modules
-
-Applies to: `nref_allocator`, `nref_server`, and all six `graphdb_*` workers.
-Only invoked during a hot code upgrade.
-
-### L3. `seerstone.app.src` — `start_phases` not defined
-
-None of the `.app.src` files define `start_phases`, so `start_phase/3` is never called.
-Correct for the present configuration; revisit if phased startup is desired.
 
 ---
 
@@ -236,12 +203,8 @@ Correct for the present configuration; revisit if phased startup is desired.
 | ~~3~~ | ~~`graphdb_attr`~~ — **done** | 1, 2 |
 | ~~4~~ | ~~`graphdb_class`~~ — **done** | 3 |
 | ~~5~~ | ~~`graphdb_instance`~~ — **done** | 3, 4 |
-| 6 | `graphdb_rules` ← **next** | 5 |
-| 7 | `graphdb_language` | 5 |
-| 8 | `dictionary_server` / `term_server` | — (independent) |
-| L1 | Non-normal start types | — |
-| L2 | `code_change/3` | — |
-| L3 | `start_phases` | — |
+| 6 | `graphdb_language` ← **next** | 5 |
+| 7 | `dictionary_server` / `term_server` | — (independent) |
 
 ---
 
@@ -254,5 +217,41 @@ We are resuming implementation of SeerStoneGraphDb.
 Read ARCHITECTURE.md for full design decisions and TASKS.md for the task list.
 All design questions are resolved. bootstrap.terms is complete (nrefs 1-30, BFS).
 Tasks 0a-0c, Task 1 (graphdb_bootstrap), Task 2 (graphdb_mgr startup wiring), Task 3 (graphdb_attr), Task 4 (graphdb_class), Task 5 (graphdb_instance) are done.
-Next task: Task 6 — `graphdb_rules` — Graph Rules (step 11 in ARCHITECTURE.md Section 12).
+Next task: Task 6 — `graphdb_language` — Query Language (step 12 in ARCHITECTURE.md Section 12).
 ```
+
+---
+
+## Enhancements
+
+These items are deferred — not required for a functional first release.
+
+### E1. `graphdb_rules` — Graph Rules
+
+File: `apps/graphdb/src/graphdb_rules.erl`
+
+Stores and enforces graph rules; supports pattern recognition and learning.
+The knowledge guide describes three concepts: pattern detection (identify recurring
+relationship patterns), pattern storage (store patterns as relationships), and
+pattern application (suggest relationships based on learned patterns).
+
+**Sub-tasks:**
+- Define rule record schema (pattern: list of relationship constraints)
+- Implement `create_rule/2` (name, pattern spec)
+- Implement `check_rule/2` (rule Nref, candidate instance Nref)
+- Implement `suggest_relationships/1` — scan rules against new instance, suggest likely relationships
+
+### E2. Non-normal OTP start types
+
+`seerstone:start/2` and `nref:start/2` both hit `?NYI` for `{takeover, Node}` and
+`{failover, Node}` start types. Only relevant in a distributed/failover OTP deployment.
+
+### E3. `code_change/3` — Hot code upgrades
+
+NYI in all gen_server modules (`nref_allocator`, `nref_server`, all six `graphdb_*` workers).
+Only invoked during a hot code upgrade via OTP release handling.
+
+### E4. `start_phases` / `start_phase/3`
+
+None of the `.app.src` files define `start_phases`, so `start_phase/3` is never called.
+Correct for the present configuration; revisit if phased startup is desired.
