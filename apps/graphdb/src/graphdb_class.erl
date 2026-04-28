@@ -175,7 +175,7 @@ start_link() ->
 %%-----------------------------------------------------------------------------
 %% create_class(Name, ParentClassNref) -> {ok, Nref} | {error, term()}
 %%
-%% Creates a new class node in the environment database.  ParentClassNref
+%% Creates a new class node in the ontology.  ParentClassNref
 %% is either the Classes category (nref 3) for top-level classes or
 %% another class node's nref for subclasses.  Writes the node record and
 %% a compositional parent/child arc pair atomically.

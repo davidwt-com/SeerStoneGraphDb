@@ -173,7 +173,7 @@ get_relationships(Nref, Direction) ->
 %%-----------------------------------------------------------------------------
 %% create_attribute(Name, ParentNref, AVPs) -> {ok, Nref} | {error, term()}
 %%
-%% Creates a new attribute node in the environment database.
+%% Creates a new attribute node in the ontology.
 %% Delegates to graphdb_attr (not yet implemented).
 %%
 %% Transaction-like sequencing (when implemented):
@@ -188,7 +188,7 @@ create_attribute(Name, ParentNref, AVPs) ->
 %%-----------------------------------------------------------------------------
 %% create_class(Name, ParentClassNref) -> {ok, Nref} | {error, term()}
 %%
-%% Creates a new class node in the environment database.
+%% Creates a new class node in the ontology.
 %% Delegates to graphdb_class (not yet implemented).
 %%-----------------------------------------------------------------------------
 create_class(Name, ParentClassNref) ->

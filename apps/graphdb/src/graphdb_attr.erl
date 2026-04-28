@@ -198,7 +198,7 @@ create_literal_attribute(Name, Type) ->
 %% category | attribute | class | instance and is stored as an AVP
 %% keyed by the seeded `target_kind` attribute on both nodes.  The
 %% query engine uses this annotation to route target lookups between
-%% the environment and project databases.
+%% the ontology and project (instance space).
 %%-----------------------------------------------------------------------------
 create_relationship_attribute(Name, ReciprocalName, TargetKind) ->
 	case valid_target_kind(TargetKind) of
@@ -274,7 +274,7 @@ seeded_nrefs() ->
 %% init/1
 %%
 %% Ensures the three seeded literal attributes exist in the
-%% environment database and caches their nrefs in state.  Idempotent:
+%% ontology and caches their nrefs in state.  Idempotent:
 %% on restart, detects the existing seeds by name under the Literals
 %% subtree and reuses their nrefs.
 %%-----------------------------------------------------------------------------
