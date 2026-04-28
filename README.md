@@ -121,31 +121,57 @@ nref (application — started independently)
 
 ## Knowledge Model
 
-SeerStoneGraphDb implements the knowledge graph model described in
-`knowledge-graph-database-guide.md` (derived from US patents 5,379,366;
-5,594,837; 5,878,406 — Noyes; and Cogito knowledge center documentation).
+The architecture is described in [`the-knowledge-network.md`](the-knowledge-network.md),
+derived from US patents 5,379,366; 5,594,837; 5,878,406 (Noyes) and Cogito knowledge
+center documentation.
+
+The foundational inversion: *knowledge is primary; documents are projections of it.*
+A field report, a data table, and a research abstract are not stored artifacts —
+they are different renderings of the same underlying knowledge, always consistent
+because they share one source of truth.
+
+### Two Bodies of Knowledge
+
+| Body | Contents | Scope |
+|---|---|---|
+| **Ontology** | All classes, attributes, templates, rules, and languages — the definitional knowledge | Shared across all projects |
+| **Project** (instance space) | All concrete instances, their values, compositions, and connections | One per deployment domain |
+
+The same ontology can serve multiple projects across unrelated domains. All
+domain-specific behavior lives in the ontology; the kernel contains none of it.
 
 ### Node Types
 
-| Type               | Description                                                                                                          |
-|--------------------|----------------------------------------------------------------------------------------------------------------------|
-| **Instance Node**  | Concrete entity — has a name attribute, class membership, compositional parent, and relationships to other instances |
-| **Class Node**     | Type/schema — has a class name attribute, an instance name attribute, and qualifying characteristics                 |
-| **Attribute Node** | Name attribute, relationship attribute, or literal attribute stored in the attribute library                         |
+Every entity in the system — class, attribute, rule, template, or instance — is a
+**concept node** with a stable, unique identity (an Nref).
 
-### Hierarchy Systems
+| Type               | Where defined | Description                                                                                          |
+|--------------------|---------------|------------------------------------------------------------------------------------------------------|
+| **Class Node**     | Ontology      | Groups all instances sharing the same attributes; carries a class name attribute, an instance name attribute, and qualifying characteristics |
+| **Instance Node**  | Project       | Concrete member of a class — has a name, class membership, a position in the composition tree, and connections to other instances |
+| **Attribute Node** | Ontology      | Name attribute (human-readable label), relationship attribute (arc characterization), or literal attribute (raw data — numbers, strings, URLs) |
 
-- **Taxonomic hierarchy** ("is a") — class structure; child inherits all parent attributes and adds distinguishing qualifiers
-- **Compositional hierarchy** ("part of") — instance structure; big things composed of smaller things
-- The two hierarchies are **perpendicular** — they intersect only at instance-to-class membership
+### Four Relationship Types
 
-### Relationships
+| Type | Description |
+|---|---|
+| **Taxonomy (IS-A)** | Class specialisation hierarchy; multiple inheritance supported. "Golden Retriever IS-A Dog IS-A Mammal." |
+| **Composition (PART-OF)** | Instance containment tree; explicit and queryable. "Nucleus PART-OF Cell PART-OF Tissue." |
+| **Connection (ASSOCIATE)** | Lateral arcs between instances — reciprocal (both directions named independently), **template-scoped** (template context permanently recorded as part of the connection's identity, preventing semantic conflation), and metadata-capable (per-arc provenance, confidence, validity). |
+| **Instantiation (IS-INSTANCE-OF)** | The link from a project instance to its class(es) in the ontology. One instance may belong to multiple classes simultaneously. |
 
-All relationships are **reciprocal**. Each arc stores:
-```
-{Characterization, Value, ReciprocalCharacterization}
-```
-Example: Ford→makes→Taurus / Taurus→made-by→Ford
+IS-A and PART-OF are **perpendicular** — they intersect only at the point where
+an instance declares its class membership.
+
+### Templates
+
+A **template** is a named semantic context defined on a class in the ontology — an
+active concept node, not a blank form. It determines which attributes of a class are
+relevant in a given context, how they are expressed, and what connections made through
+it mean. The same class may have multiple templates; each produces a different projection
+of the same underlying knowledge. Because the template context is permanently recorded
+as part of a connection's identity, two connections between the same pair of instances
+via different templates remain semantically distinct and non-conflated.
 
 ### Inheritance
 
@@ -153,7 +179,7 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 
 1. **Local values** (highest priority — override all else)
 2. **Class-level bound values** (values explicitly bound at the class)
-3. **Compositional ancestors** (unbroken chain upward only)
+3. **Compositional ancestors** (unbroken PART-OF chain upward only)
 4. **Directly connected nodes** (one level deep only; lowest priority)
 
 ### graphdb Workers
@@ -289,5 +315,5 @@ Key conventions at a glance:
 - Every module uses `?NYI(X)` and `?UEM(F, X)` macros for unimplemented paths
 - Module names follow the pattern: `name.erl`, `name_sup.erl`, `name_server.erl`, `name_imp.erl`
 - Graph nodes are identified by **Nrefs** — plain positive integers allocated by `nref_server:get_nref/0`
-- See `knowledge-graph-database-guide.md` for the knowledge model behind the graphdb workers
+- See `the-knowledge-network.md` for the knowledge model behind the graphdb workers
 - PRs target `main`
