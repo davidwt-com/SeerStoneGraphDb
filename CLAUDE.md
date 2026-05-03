@@ -297,6 +297,31 @@ GitHub Actions workflow at `.github/workflows/ci.yml`:
 - Development branch: `develop`
 - Feature work goes on `develop`; PRs target `main`
 
+## Documentation
+
+`ARCHITECTURE.md` must reflect the current high-level shape of the code.
+Keep it current — but at architectural altitude, not implementation
+detail.
+
+**Update `ARCHITECTURE.md` when:**
+- The Mnesia schema changes (record fields added/removed/renamed).
+- The OTP supervision tree changes (new/removed workers, supervisor
+  reorganisation).
+- A worker's public API contract changes meaningfully (signatures,
+  return shapes, ownership boundaries).
+- A new module is added or an existing one is removed.
+- An architectural decision is made or revised (storage technology,
+  cross-module routing, identity/allocation strategy).
+
+**Don't update `ARCHITECTURE.md` for:**
+- Internal refactors that don't change the contract.
+- Bug fixes, style changes, comment edits, test additions.
+- Implementation progress within an already-described component.
+
+The canonical spec is `the-knowledge-network.md` — it does **not** track
+the code. Outstanding work lives in `TASKS-CRITICAL.md`,
+`TASKS-HIGH.md`, `TASKS-MEDIUM.md`, and `TASKS-LOW.md`.
+
 ## Storage Technologies Used
 
 | Technology | Used by | Purpose |
