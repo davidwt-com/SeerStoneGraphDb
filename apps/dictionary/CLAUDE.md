@@ -42,7 +42,7 @@ Keys are stored as **binaries** (`list_to_binary(Key)` is applied internally).
 **`dictionary_server.erl` and `term_server.erl`** — both are gen_server stubs not yet
 wired to `dictionary_imp`. No `dictionary_imp` functions are called from either server.
 Implementing delegation from each gen_server to the relevant `dictionary_imp` functions
-is Task 8. See `TASKS.md`.
+is Task 7 in `TASKS-LOW.md`.
 
 **`dictionary.erl` callbacks** — `start_phase/3`, `prep_stop/1`, `stop/1`,
 `config_change/3` return `ok` (no-op stubs; correct for current deployment model).

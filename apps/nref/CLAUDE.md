@@ -86,8 +86,8 @@ persisted DETS counter is already ≥ 10000 and the call is a no-op.
 
 - **`nref_server:set_floor/1`** — not yet implemented. Required by `graphdb_bootstrap` (Task 0b).
 - **`nref.erl` callbacks** (`start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3`) return `ok` (no-op stubs; correct for current deployment model).
-- **`nref:start/2` non-normal clauses**: `?NYI` for `{takeover, Node}` and `{failover, Node}`. Only relevant in distributed/failover deployments. See `TASKS.md` task L1.
-- **`code_change/3`**: NYI in `nref_allocator.erl` and `nref_server.erl`. Only invoked during hot code upgrades. See `TASKS.md` task L2.
+- **`nref:start/2` non-normal clauses**: `?NYI` for `{takeover, Node}` and `{failover, Node}`. Only relevant in distributed/failover deployments. See `TASKS-LOW.md` E2.
+- **`code_change/3`**: NYI in `nref_allocator.erl` and `nref_server.erl`. Only invoked during hot code upgrades. See `TASKS-LOW.md` E3.
 
 ## DETS File Location
 

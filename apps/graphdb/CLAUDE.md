@@ -261,7 +261,7 @@ All six worker modules (`graphdb_mgr`, `graphdb_rules`, `graphdb_attr`, `graphdb
 ## Key Design Notes
 
 - `graphdb_sup` receives `StartArgs` from `database:start/2`, unlike `seerstone_sup` which takes no args
-- Implement in dependency order: `graphdb_bootstrap` → `graphdb_mgr` (startup wiring) → `graphdb_attr` → `graphdb_class` → `graphdb_instance` → `graphdb_rules` → `graphdb_language` → `graphdb_mgr` (full routing). See `TASKS.md` for the detailed breakdown.
+- `graphdb_bootstrap`, `graphdb_mgr` (startup + read API), `graphdb_attr`, `graphdb_class`, and `graphdb_instance` are implemented. Remaining work is grouped by severity in `TASKS-CRITICAL.md`, `TASKS-HIGH.md`, `TASKS-MEDIUM.md`, and `TASKS-LOW.md` at the project root.
 - Consult `the-knowledge-network.md` for the full model spec before implementing
 
 ## Compile
@@ -276,5 +276,8 @@ erlc apps/graphdb/src/graphdb_sup.erl apps/graphdb/src/graphdb.erl
 
 ## Remaining Work
 
-`graphdb_bootstrap.erl` must be created and all six worker stubs implemented.
-See `TASKS.md` for the full task list and priority order.
+`graphdb_bootstrap.erl` is implemented; `graphdb_mgr`, `graphdb_attr`,
+`graphdb_class`, and `graphdb_instance` are implemented. Outstanding work
+(template support, multi-inheritance, query language, rules engine, etc.)
+is grouped by severity in `TASKS-CRITICAL.md`, `TASKS-HIGH.md`,
+`TASKS-MEDIUM.md`, and `TASKS-LOW.md` at the project root.

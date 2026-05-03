@@ -35,7 +35,10 @@ SeerStoneGraphDb/
 ├── rebar.lock         # Locked dependency versions
 ├── Makefile           # Convenience targets (compile, shell, release, clean, rebar3)
 ├── ARCHITECTURE.md    # Full architectural design (all decisions resolved)
-├── TASKS.md           # Inventory of remaining implementation work
+├── TASKS-CRITICAL.md  # Schema-level tasks (must land before live data)
+├── TASKS-HIGH.md      # Inheritance/membership correctness bugs
+├── TASKS-MEDIUM.md    # Semantic departures + query language + rules engine
+├── TASKS-LOW.md       # Polish, perf, OTP plumbing, dictionary wiring
 └── CLAUDE.md          # This file
 ```
 
@@ -247,18 +250,21 @@ A logical bidirectional edge is two `relationship` rows written atomically (one 
 
 These are outstanding items — all previously known bugs have been fixed.
 
-- **graphdb worker modules** — `graphdb_language` remains as a gen_server stub; `graphdb_rules` is a stub deferred to Enhancements
-- **`graphdb_mgr` write operations** — `create_attribute/3`, `create_class/2`, `create_instance/3`, `add_relationship/4`, `delete_node/1`, `update_node_avps/2` return `{error, not_implemented}` pending worker implementation (Tasks 3–5); read operations and category guard are fully functional
-- **`dictionary_server` and `term_server`** — stubs not yet wired to `dictionary_imp` (Task 7)
-- **`seerstone:start/2` and `nref:start/2`**, **`code_change/3`** — deferred to Enhancements (E2, E3 in TASKS.md)
+- **graphdb worker modules** — `graphdb_language` is a gen_server stub (TASKS-MEDIUM Task 6); `graphdb_rules` is a stub (TASKS-MEDIUM E1)
+- **`graphdb_mgr` write operations** — `create_attribute/3`, `create_class/2`, `create_instance/3`, `add_relationship/4`, `delete_node/1`, `update_node_avps/2` return `{error, not_implemented}` pending L4 routing work
+- **`dictionary_server` and `term_server`** — stubs not yet wired to `dictionary_imp` (TASKS-LOW Task 7)
+- **`seerstone:start/2` and `nref:start/2`**, **`code_change/3`** — deferred (TASKS-LOW E2, E3)
 - **App lifecycle callbacks** — `start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3` return `ok` (no-op) across all five app modules; correct for current deployment model
 
 ## Remaining Work
 
-Tasks 0a–0c and Tasks 1–5 are complete. Two implementation tasks remain:
-Task 6 (`graphdb_language` — query language) and Task 7 (wire `dictionary_server` / `term_server`
-to `dictionary_imp`). `graphdb_rules` is deferred to the Enhancements section of TASKS.md.
-See `TASKS.md` for the full task list and priority order.
+Remaining tasks are organised by severity in four files: `TASKS-CRITICAL.md`,
+`TASKS-HIGH.md`, `TASKS-MEDIUM.md`, `TASKS-LOW.md`. Critical items are
+schema-level departures from `the-knowledge-network.md` and should land
+before any database ships with live data. High items are correctness bugs
+in inheritance and class membership. Medium covers semantic gaps plus the
+query language (Task 6) and rules engine (E1). Low covers polish,
+performance, OTP plumbing, and dictionary wiring (Task 7).
 
 ## Configuration
 
