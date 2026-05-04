@@ -15,14 +15,14 @@ application:start(nref).
 
 ## Files
 
-| File | Description |
-|---|---|
-| `nref.erl` | OTP `application` behaviour callback — starts `nref_sup` |
-| `nref_sup.erl` | OTP `supervisor` callback — supervises allocator and servers |
-| `nref_allocator.erl` | Block-level nref allocator backed by DETS |
-| `nref_server.erl` | Per-request nref server; client of `nref_allocator` |
+| File                   | Description                                                                                |
+| ---------------------- | ------------------------------------------------------------------------------------------ |
+| `nref.erl`             | OTP `application` behaviour callback — starts `nref_sup`                                   |
+| `nref_sup.erl`         | OTP `supervisor` callback — supervises allocator and servers                               |
+| `nref_allocator.erl`   | Block-level nref allocator backed by DETS                                                  |
+| `nref_server.erl`      | Per-request nref server; client of `nref_allocator`                                        |
 | ~~`nref_include.erl`~~ | Deleted — was Dallas's earlier unsupervised predecessor to `nref_server`; fully superseded |
-| `nref_allocator.dets` | Persistent DETS storage for allocator state |
+| `nref_allocator.dets`  | Persistent DETS storage for allocator state                                                |
 
 ## Architecture
 
@@ -39,13 +39,13 @@ nref (application)
 
 The DETS file stores these keys:
 
-| Key | Type | Description |
-|---|---|---|
-| `block_size` | `integer()` | Number of nrefs per allocated block (default: 500) |
-| `free` | `integer()` | Next nref available for fresh allocation |
-| `reuse` | `[Count \| Nrefs]` | List with count prefix: nrefs available for reuse |
-| `confirm` | `[Nref]` | Nrefs allocated but not yet confirmed as used |
-| `allocated` | `[{Start, End}]` | Outstanding allocated blocks awaiting confirmation |
+| Key          | Type               | Description                                        |
+| ------------ | ------------------ | -------------------------------------------------- |
+| `block_size` | `integer()`        | Number of nrefs per allocated block (default: 500) |
+| `free`       | `integer()`        | Next nref available for fresh allocation           |
+| `reuse`      | `[Count \| Nrefs]` | List with count prefix: nrefs available for reuse  |
+| `confirm`    | `[Nref]`           | Nrefs allocated but not yet confirmed as used      |
+| `allocated`  | `[{Start, End}]`   | Outstanding allocated blocks awaiting confirmation |
 
 ### Key API
 

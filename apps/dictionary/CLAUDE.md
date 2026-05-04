@@ -6,13 +6,13 @@ The `dictionary` application manages **in-memory, file-backed key-value dictiona
 
 ## Files
 
-| File | Description |
-|---|---|
-| `dictionary.erl` | OTP `application` behaviour callback module |
-| `dictionary_sup.erl` | OTP `supervisor` callback module |
-| `dictionary_imp.erl` | Core implementation: ETS-backed CRUD + process lifecycle |
-| `dictionary_server.erl` | gen_server worker stub |
-| `term_server.erl` | gen_server worker stub |
+| File                    | Description                                              |
+| ----------------------- | -------------------------------------------------------- |
+| `dictionary.erl`        | OTP `application` behaviour callback module              |
+| `dictionary_sup.erl`    | OTP `supervisor` callback module                         |
+| `dictionary_imp.erl`    | Core implementation: ETS-backed CRUD + process lifecycle |
+| `dictionary_server.erl` | gen_server worker stub                                   |
+| `term_server.erl`       | gen_server worker stub                                   |
 
 ## dictionary_imp — Key API
 

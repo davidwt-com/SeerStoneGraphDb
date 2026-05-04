@@ -118,24 +118,24 @@ This database is an implementation of the knowledge graph model described in
 
 ### Core Concepts
 
-| Concept                     | Erlang mapping                                                                                   |
-|-----------------------------|--------------------------------------------------------------------------------------------------|
-| **Node / Concept**          | A record identified by an Nref (positive integer); `kind` is one of `category \| attribute \| class \| instance` |
+| Concept                     | Erlang mapping                                                                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Node / Concept**          | A record identified by an Nref (positive integer); `kind` is one of `category \| attribute \| class \| instance`                                             |
 | **Category Node**           | Permanent top-level organisational scaffold; forms the skeleton of the entire graph; **bootstrap-only** — cannot be created, modified, or deleted at runtime |
-| **Instance Node**           | Concrete entity: has a name attribute, class membership, compositional parent, and relationships |
-| **Class Node**              | Type/schema: has a class name attribute, instance name attribute, and qualifying characteristics |
-| **Attribute Node**          | Name attribute, relationship attribute, or literal attribute stored in the attribute library     |
-| **Relationship (Arc)**      | Reciprocal connection between nodes; stored as two directed rows in the `relationships` Mnesia table |
-| **Reference Number (Nref)** | Globally unique `integer()` allocated by `nref_server:get_nref/0`; bootstrap nrefs are pre-assigned (all `< nref_start`) |
+| **Instance Node**           | Concrete entity: has a name attribute, class membership, compositional parent, and relationships                                                             |
+| **Class Node**              | Type/schema: has a class name attribute, instance name attribute, and qualifying characteristics                                                             |
+| **Attribute Node**          | Name attribute, relationship attribute, or literal attribute stored in the attribute library                                                                 |
+| **Relationship (Arc)**      | Reciprocal connection between nodes; stored as two directed rows in the `relationships` Mnesia table                                                         |
+| **Reference Number (Nref)** | Globally unique `integer()` allocated by `nref_server:get_nref/0`; bootstrap nrefs are pre-assigned (all `< nref_start`)                                     |
 
 ### Multi-Database Architecture
 
 Two database roles:
 
-| Role | Content | Mutability |
-|---|---|---|
-| **Ontology** | All category, attribute, class, and language nodes; bootstrap scaffold; arc label definitions | Category nodes: immutable (bootstrap-only). All other nodes grow freely at runtime. |
-| **Project (instance space)** | Instance nodes and their relationships; one database per project | Fully mutable at runtime |
+| Role                         | Content                                                                                       | Mutability                                                                          |
+| ---------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| **Ontology**                 | All category, attribute, class, and language nodes; bootstrap scaffold; arc label definitions | Category nodes: immutable (bootstrap-only). All other nodes grow freely at runtime. |
+| **Project (instance space)** | Instance nodes and their relationships; one database per project                              | Fully mutable at runtime                                                            |
 
 The environment is shared across all projects. Only bootstrap nrefs (1–30) and a small number of explicitly seeded runtime nrefs (e.g., `target_kind`) are referenced by nref constant in code — all other runtime-added nodes are treated generically.
 
@@ -237,14 +237,14 @@ A logical bidirectional edge is two `relationship` rows written atomically (one 
 
 ### graphdb Worker Responsibilities
 
-| Module             | Knowledge model role                                                                           |
-|--------------------|------------------------------------------------------------------------------------------------|
+| Module             | Knowledge model role                                                                                                                                                                                                                                                    |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `graphdb_attr`     | Maintains the attribute library (name attributes, literal attributes, relationship attributes, relationship types); literal attributes used as relationship arc metadata are identified by carrying a `relationship_avp => true` AVP on their own attribute node record |
-| `graphdb_class`    | Manages the taxonomic hierarchy: class nodes, qualifying characteristics, inheritance          |
-| `graphdb_instance` | Creates and retrieves instance nodes; manages compositional hierarchy                          |
-| `graphdb_rules`    | Stores and enforces graph rules (pattern recognition, relationship constraints)                |
-| `graphdb_language` | Parses and executes graph queries against the node network                                     |
-| `graphdb_mgr`      | Primary coordinator: routes operations across the other five workers                           |
+| `graphdb_class`    | Manages the taxonomic hierarchy: class nodes, qualifying characteristics, inheritance                                                                                                                                                                                   |
+| `graphdb_instance` | Creates and retrieves instance nodes; manages compositional hierarchy                                                                                                                                                                                                   |
+| `graphdb_rules`    | Stores and enforces graph rules (pattern recognition, relationship constraints)                                                                                                                                                                                         |
+| `graphdb_language` | Parses and executes graph queries against the node network                                                                                                                                                                                                              |
+| `graphdb_mgr`      | Primary coordinator: routes operations across the other five workers                                                                                                                                                                                                    |
 
 ## Known Incomplete Areas (NYI)
 
@@ -324,9 +324,9 @@ the code. Outstanding work lives in `TASKS-CRITICAL.md`,
 
 ## Storage Technologies Used
 
-| Technology | Used by | Purpose |
-|---|---|---|
-| Mnesia | `graphdb_*` workers | Graph node and relationship storage; `disc_copies` for RAM-speed reads with persistence |
-| DETS | `nref_allocator`, `nref_server` | Persistent disk-based term storage |
-| ETS | `dictionary_imp` | In-memory term storage |
-| ETS tab2file | `dictionary_imp` | Persistent serialization of ETS tables |
+| Technology   | Used by                         | Purpose                                                                                 |
+| ------------ | ------------------------------- | --------------------------------------------------------------------------------------- |
+| Mnesia       | `graphdb_*` workers             | Graph node and relationship storage; `disc_copies` for RAM-speed reads with persistence |
+| DETS         | `nref_allocator`, `nref_server` | Persistent disk-based term storage                                                      |
+| ETS          | `dictionary_imp`                | In-memory term storage                                                                  |
+| ETS tab2file | `dictionary_imp`                | Persistent serialization of ETS tables                                                  |

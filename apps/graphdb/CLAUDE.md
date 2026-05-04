@@ -6,17 +6,17 @@
 
 ## Files
 
-| File                       | Description                                               |
-|----------------------------|-----------------------------------------------------------|
-| `graphdb.erl`              | OTP `application` behaviour callback module               |
-| `graphdb_sup.erl`          | OTP `supervisor` behaviour callback module                |
-| `graphdb_bootstrap.erl`    | Bootstrap file loader + Mnesia schema creator (implemented) |
-| `graphdb_mgr.erl`          | Primary coordinator gen_server (stub)                     |
-| `graphdb_rules.erl`        | Graph rules gen_server (stub)                             |
-| `graphdb_attr.erl`         | Attribute library gen_server (stub)                       |
-| `graphdb_class.erl`        | Taxonomic hierarchy gen_server (stub)                     |
-| `graphdb_instance.erl`     | Instance/compositional hierarchy gen_server (stub)        |
-| `graphdb_language.erl`     | Query language gen_server (stub)                          |
+| File                    | Description                                                 |
+| ----------------------- | ----------------------------------------------------------- |
+| `graphdb.erl`           | OTP `application` behaviour callback module                 |
+| `graphdb_sup.erl`       | OTP `supervisor` behaviour callback module                  |
+| `graphdb_bootstrap.erl` | Bootstrap file loader + Mnesia schema creator (implemented) |
+| `graphdb_mgr.erl`       | Primary coordinator gen_server (stub)                       |
+| `graphdb_rules.erl`     | Graph rules gen_server (stub)                               |
+| `graphdb_attr.erl`      | Attribute library gen_server (stub)                         |
+| `graphdb_class.erl`     | Taxonomic hierarchy gen_server (stub)                       |
+| `graphdb_instance.erl`  | Instance/compositional hierarchy gen_server (stub)          |
+| `graphdb_language.erl`  | Query language gen_server (stub)                            |
 
 `apps/graphdb/priv/bootstrap.terms` — Erlang Terms file fully written; contains 30 nodes
 (nrefs 1–30, BFS) and 29 compositional relationship pairs. Loaded at first ontology startup.
@@ -41,10 +41,10 @@ database_sup -> graphdb_sup:start_link(StartArgs) -> graphdb_sup:init/1
 
 Two database roles operate in parallel:
 
-| Role | Content | Mutability |
-|---|---|---|
-| **Ontology** | All category, attribute, class, and language nodes; bootstrap scaffold; arc label definitions | Category nodes: immutable (bootstrap-only). All other nodes grow freely at runtime. |
-| **Project (instance space)** | Instance nodes and their relationships; one per project | Fully mutable at runtime |
+| Role                         | Content                                                                                       | Mutability                                                                          |
+| ---------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| **Ontology**                 | All category, attribute, class, and language nodes; bootstrap scaffold; arc label definitions | Category nodes: immutable (bootstrap-only). All other nodes grow freely at runtime. |
+| **Project (instance space)** | Instance nodes and their relationships; one per project                                       | Fully mutable at runtime                                                            |
 
 The ontology is shared across all projects and is a **living, growing database**: new literal attributes, relationship attributes, and classes are added over time. Only category nodes (nrefs 1–5) are permanently fixed.
 
@@ -62,12 +62,12 @@ The six workers collectively implement the knowledge graph model. Every node in 
 
 ### Node Types
 
-| Type                | Description                                                                                                                   | Creatable at runtime? |
-|---------------------|-------------------------------------------------------------------------------------------------------------------------------|-----------------------|
-| **Category Node**   | Permanent top-level organisational scaffold; forms the skeleton of the entire graph (nrefs 1–5)                               | **No — bootstrap only** |
-| **Attribute Node**  | Name or relationship label stored in the attribute library. Used as arc labels (`characterization`/`reciprocal`) in relationships | Yes |
-| **Class Node**      | Type/schema. Has a class name attribute, instance name attribute, and qualifying characteristics.                             | Yes |
-| **Instance Node**   | Concrete entity. Has a name attribute, class membership (taxonomic parent), compositional parent ("part of"), and relationships | Yes |
+| Type               | Description                                                                                                                       | Creatable at runtime?   |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| **Category Node**  | Permanent top-level organisational scaffold; forms the skeleton of the entire graph (nrefs 1–5)                                   | **No — bootstrap only** |
+| **Attribute Node** | Name or relationship label stored in the attribute library. Used as arc labels (`characterization`/`reciprocal`) in relationships | Yes                     |
+| **Class Node**     | Type/schema. Has a class name attribute, instance name attribute, and qualifying characteristics.                                 | Yes                     |
+| **Instance Node**  | Concrete entity. Has a name attribute, class membership (taxonomic parent), compositional parent ("part of"), and relationships   | Yes                     |
 
 `category` nodes cannot be created, modified, or deleted via any runtime API. `graphdb_mgr` rejects such attempts with `{error, category_nodes_are_immutable}`.
 

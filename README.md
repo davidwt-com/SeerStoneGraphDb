@@ -12,17 +12,17 @@ The project compiles clean with zero warnings (OTP 27 / rebar3 3.24). The
 architecture is fully designed (see `ARCHITECTURE.md`). Implementation is
 underway:
 
-| Component | Status |
-|---|---|
-| `nref` subsystem | Fully implemented (DETS-backed ID allocator with `set_floor/1`) |
-| `dictionary` subsystem | `dictionary_imp` implemented; server stubs not yet wired (Task 7) |
-| `graphdb_bootstrap` | Fully implemented — Mnesia schema/table creation, bootstrap scaffold loader (30 nodes, 29 relationship pairs) |
-| `graphdb_mgr` | Implemented — bootstrap init, public read API (`get_node`, `get_relationships`), category immutability guard; write operations delegate to workers |
-| `graphdb_attr` | Fully implemented — attribute library (name, literal, relationship attributes, relationship types) |
-| `graphdb_class` | Fully implemented — taxonomic hierarchy, qualifying characteristics, class-level inheritance |
-| `graphdb_instance` | Fully implemented — compositional hierarchy, instance-to-class membership, four-level inheritance resolution |
-| `graphdb_rules` | Gen_server stub — deferred to Enhancements (pattern recognition, relationship constraints) |
-| `graphdb_language` | Gen_server stub — next to implement (Task 6) |
+| Component              | Status                                                                                                                                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nref` subsystem       | Fully implemented (DETS-backed ID allocator with `set_floor/1`)                                                                                    |
+| `dictionary` subsystem | `dictionary_imp` implemented; server stubs not yet wired (Task 7)                                                                                  |
+| `graphdb_bootstrap`    | Fully implemented — Mnesia schema/table creation, bootstrap scaffold loader (30 nodes, 29 relationship pairs)                                      |
+| `graphdb_mgr`          | Implemented — bootstrap init, public read API (`get_node`, `get_relationships`), category immutability guard; write operations delegate to workers |
+| `graphdb_attr`         | Fully implemented — attribute library (name, literal, relationship attributes, relationship types)                                                 |
+| `graphdb_class`        | Fully implemented — taxonomic hierarchy, qualifying characteristics, class-level inheritance                                                       |
+| `graphdb_instance`     | Fully implemented — compositional hierarchy, instance-to-class membership, four-level inheritance resolution                                       |
+| `graphdb_rules`        | Gen_server stub — deferred to Enhancements (pattern recognition, relationship constraints)                                                         |
+| `graphdb_language`     | Gen_server stub — next to implement (Task 6)                                                                                                       |
 
 **156 tests** (62 EUnit + 94 Common Test) — all passing. See
 `TASKS-CRITICAL.md`, `TASKS-HIGH.md`, `TASKS-MEDIUM.md`, and `TASKS-LOW.md`
@@ -113,13 +113,13 @@ nref (application — started independently)
 
 ## Make Targets
 
-| Target | Description |
-|---|---|
-| `make compile` | Compile all applications |
-| `make shell` | Start an Erlang shell with all apps on the code path |
+| Target         | Description                                               |
+| -------------- | --------------------------------------------------------- |
+| `make compile` | Compile all applications                                  |
+| `make shell`   | Start an Erlang shell with all apps on the code path      |
 | `make release` | Build a self-contained production release under `_build/` |
-| `make clean` | Remove all build artifacts |
-| `make rebar3` | Download the rebar3 escript into the project root |
+| `make clean`   | Remove all build artifacts                                |
+| `make rebar3`  | Download the rebar3 escript into the project root         |
 
 ---
 
@@ -136,10 +136,10 @@ because they share one source of truth.
 
 ### Two Bodies of Knowledge
 
-| Body | Contents | Scope |
-|---|---|---|
-| **Ontology** | All classes, attributes, templates, rules, and languages — the definitional knowledge | Shared across all projects |
-| **Project** (instance space) | All concrete instances, their values, compositions, and connections | One per deployment domain |
+| Body                         | Contents                                                                              | Scope                      |
+| ---------------------------- | ------------------------------------------------------------------------------------- | -------------------------- |
+| **Ontology**                 | All classes, attributes, templates, rules, and languages — the definitional knowledge | Shared across all projects |
+| **Project** (instance space) | All concrete instances, their values, compositions, and connections                   | One per deployment domain  |
 
 The same ontology can serve multiple projects across unrelated domains. All
 domain-specific behavior lives in the ontology; the kernel contains none of it.
@@ -149,20 +149,20 @@ domain-specific behavior lives in the ontology; the kernel contains none of it.
 Every entity in the system — class, attribute, rule, template, or instance — is a
 **concept node** with a stable, unique identity (an Nref).
 
-| Type               | Where defined | Description                                                                                          |
-|--------------------|---------------|------------------------------------------------------------------------------------------------------|
-| **Class Node**     | Ontology      | Groups all instances sharing the same attributes; carries a class name attribute, an instance name attribute, and qualifying characteristics |
-| **Instance Node**  | Project       | Concrete member of a class — has a name, class membership, a position in the composition tree, and connections to other instances |
+| Type               | Where defined | Description                                                                                                                                    |
+| ------------------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Class Node**     | Ontology      | Groups all instances sharing the same attributes; carries a class name attribute, an instance name attribute, and qualifying characteristics   |
+| **Instance Node**  | Project       | Concrete member of a class — has a name, class membership, a position in the composition tree, and connections to other instances              |
 | **Attribute Node** | Ontology      | Name attribute (human-readable label), relationship attribute (arc characterization), or literal attribute (raw data — numbers, strings, URLs) |
 
 ### Four Relationship Types
 
-| Type | Description |
-|---|---|
-| **Taxonomy (IS-A)** | Class specialisation hierarchy; multiple inheritance supported. "Golden Retriever IS-A Dog IS-A Mammal." |
-| **Composition (PART-OF)** | Instance containment tree; explicit and queryable. "Nucleus PART-OF Cell PART-OF Tissue." |
-| **Connection (ASSOCIATE)** | Lateral arcs between instances — reciprocal (both directions named independently), **template-scoped** (template context permanently recorded as part of the connection's identity, preventing semantic conflation), and metadata-capable (per-arc provenance, confidence, validity). |
-| **Instantiation (IS-INSTANCE-OF)** | The link from a project instance to its class(es) in the ontology. One instance may belong to multiple classes simultaneously. |
+| Type                               | Description                                                                                                                                                                                                                                                                           |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Taxonomy (IS-A)**                | Class specialisation hierarchy; multiple inheritance supported. "Golden Retriever IS-A Dog IS-A Mammal."                                                                                                                                                                              |
+| **Composition (PART-OF)**          | Instance containment tree; explicit and queryable. "Nucleus PART-OF Cell PART-OF Tissue."                                                                                                                                                                                             |
+| **Connection (ASSOCIATE)**         | Lateral arcs between instances — reciprocal (both directions named independently), **template-scoped** (template context permanently recorded as part of the connection's identity, preventing semantic conflation), and metadata-capable (per-arc provenance, confidence, validity). |
+| **Instantiation (IS-INSTANCE-OF)** | The link from a project instance to its class(es) in the ontology. One instance may belong to multiple classes simultaneously.                                                                                                                                                        |
 
 IS-A and PART-OF are **perpendicular** — they intersect only at the point where
 an instance declares its class membership.
@@ -188,25 +188,25 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 
 ### graphdb Workers
 
-| Module             | Role                                                                             |
-|--------------------|----------------------------------------------------------------------------------|
+| Module             | Role                                                                                                 |
+| ------------------ | ---------------------------------------------------------------------------------------------------- |
 | `graphdb_attr`     | Attribute library — name attributes, literal attributes, relationship attributes, relationship types |
-| `graphdb_class`    | Taxonomic hierarchy — class nodes, qualifying characteristics, class inheritance |
-| `graphdb_instance` | Instance nodes — creation, retrieval, compositional hierarchy                    |
-| `graphdb_rules`    | Graph rules — pattern recognition and relationship constraints (deferred to Enhancements) |
-| `graphdb_language` | Query language — parsing and executing graph queries                             |
-| `graphdb_mgr`      | Primary coordinator — routes operations across the other five workers            |
+| `graphdb_class`    | Taxonomic hierarchy — class nodes, qualifying characteristics, class inheritance                     |
+| `graphdb_instance` | Instance nodes — creation, retrieval, compositional hierarchy                                        |
+| `graphdb_rules`    | Graph rules — pattern recognition and relationship constraints (deferred to Enhancements)            |
+| `graphdb_language` | Query language — parsing and executing graph queries                                                 |
+| `graphdb_mgr`      | Primary coordinator — routes operations across the other five workers                                |
 
 ---
 
 ## Storage
 
-| Technology   | Used by                         | Purpose                                                           |
-|--------------|---------------------------------|-------------------------------------------------------------------|
+| Technology   | Used by                         | Purpose                                                                                 |
+| ------------ | ------------------------------- | --------------------------------------------------------------------------------------- |
 | Mnesia       | `graphdb_*` workers             | Graph node and relationship storage; `disc_copies` for RAM-speed reads with persistence |
-| DETS         | `nref_allocator`, `nref_server` | Persistent disk-based term storage                                |
-| ETS          | `dictionary_imp`                | In-memory term storage                                            |
-| ETS tab2file | `dictionary_imp`                | Persistent serialization of ETS tables                            |
+| DETS         | `nref_allocator`, `nref_server` | Persistent disk-based term storage                                                      |
+| ETS          | `dictionary_imp`                | In-memory term storage                                                                  |
+| ETS tab2file | `dictionary_imp`                | Persistent serialization of ETS tables                                                  |
 
 ---
 
@@ -227,18 +227,18 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 ./rebar3 eunit --app=graphdb && ./rebar3 ct
 ```
 
-| Suite | Type | Tests | Coverage |
-|---|---|---|---|
-| `graphdb_bootstrap_tests` | EUnit | 35 | Term parsing, validation, record conversion |
-| `graphdb_mgr_tests` | EUnit | 9 | Direction validation, client-side arg checks |
-| `graphdb_attr_tests` | EUnit | 11 | Attribute type seeding, pure function checks |
-| `graphdb_class_tests` | EUnit | 11 | `is_valid_parent_kind/1`, `collect_qc_nrefs/2` |
-| `graphdb_instance_tests` | EUnit | 7 | `find_avp_value/2` |
-| `graphdb_bootstrap_SUITE` | CT | 16 | Full bootstrap load, Mnesia tables, idempotency, error handling |
-| `graphdb_mgr_SUITE` | CT | 19 | Bootstrap init, read ops, category guard, write stubs |
-| `graphdb_attr_SUITE` | CT | 22 | Attribute create/lookup, seeding, relationship types |
-| `graphdb_class_SUITE` | CT | 22 | Class create, QC, lookups, hierarchy, inheritance |
-| `graphdb_instance_SUITE` | CT | 23 | Instance create, relationships, lookups, hierarchy, four-level inheritance |
+| Suite                     | Type  | Tests | Coverage                                                                   |
+| ------------------------- | ----- | ----- | -------------------------------------------------------------------------- |
+| `graphdb_bootstrap_tests` | EUnit | 35    | Term parsing, validation, record conversion                                |
+| `graphdb_mgr_tests`       | EUnit | 9     | Direction validation, client-side arg checks                               |
+| `graphdb_attr_tests`      | EUnit | 11    | Attribute type seeding, pure function checks                               |
+| `graphdb_class_tests`     | EUnit | 11    | `is_valid_parent_kind/1`, `collect_qc_nrefs/2`                             |
+| `graphdb_instance_tests`  | EUnit | 7     | `find_avp_value/2`                                                         |
+| `graphdb_bootstrap_SUITE` | CT    | 16    | Full bootstrap load, Mnesia tables, idempotency, error handling            |
+| `graphdb_mgr_SUITE`       | CT    | 19    | Bootstrap init, read ops, category guard, write stubs                      |
+| `graphdb_attr_SUITE`      | CT    | 22    | Attribute create/lookup, seeding, relationship types                       |
+| `graphdb_class_SUITE`     | CT    | 22    | Class create, QC, lookups, hierarchy, inheritance                          |
+| `graphdb_instance_SUITE`  | CT    | 23    | Instance create, relationships, lookups, hierarchy, four-level inheritance |
 
 Each CT test case runs in an isolated Mnesia database with a fresh nref
 allocator in a private temp directory.

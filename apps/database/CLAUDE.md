@@ -6,9 +6,9 @@
 
 ## Files
 
-| File | Description |
-|---|---|
-| `database.erl` | OTP `application` behaviour callback module |
+| File               | Description                                                     |
+| ------------------ | --------------------------------------------------------------- |
+| `database.erl`     | OTP `application` behaviour callback module                     |
 | `database_sup.erl` | OTP `supervisor` — supervises graphdb and dictionary subsystems |
 
 ## Application Lifecycle

@@ -5,16 +5,16 @@
 
 ## Terminology
 
-| Term | Meaning |
-|---|---|
-| **Knowledge model** | The architecture described in this document |
-| **Ontology** | The definitional half of the knowledge model: classes, attributes, templates, rules, and languages. Shared across projects. |
-| **Project** | A domain instantiation of some subset of the ontology. Also called the *instance space* — the collection of all concept instances that exist within a specific deployment. |
-| **Template** | A named semantic context defined on a class. Determines which attributes are relevant, how they are expressed, and what connections made through it mean. Not a static blank — an active node in the ontology. |
-| **Ingestion map** | A visual, codeless configuration for migrating records from an external source into the knowledge graph. |
-| **Concept node** | The universal unit of identity. Every class, attribute, rule, template, instance, and vocabulary entry is a concept node. |
-| **Literal attribute** | An attribute whose value is raw data — a number, string, measurement, or URL — stored directly on a node. Literal values do not participate in graph traversal. |
-| **Relationship attribute** | An attribute that characterizes a connection between two nodes. Both directions of a connection carry their own characterization. |
+| Term                       | Meaning                                                                                                                                                                                                        |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Knowledge model**        | The architecture described in this document                                                                                                                                                                    |
+| **Ontology**               | The definitional half of the knowledge model: classes, attributes, templates, rules, and languages. Shared across projects.                                                                                    |
+| **Project**                | A domain instantiation of some subset of the ontology. Also called the *instance space* — the collection of all concept instances that exist within a specific deployment.                                     |
+| **Template**               | A named semantic context defined on a class. Determines which attributes are relevant, how they are expressed, and what connections made through it mean. Not a static blank — an active node in the ontology. |
+| **Ingestion map**          | A visual, codeless configuration for migrating records from an external source into the knowledge graph.                                                                                                       |
+| **Concept node**           | The universal unit of identity. Every class, attribute, rule, template, instance, and vocabulary entry is a concept node.                                                                                      |
+| **Literal attribute**      | An attribute whose value is raw data — a number, string, measurement, or URL — stored directly on a node. Literal values do not participate in graph traversal.                                                |
+| **Relationship attribute** | An attribute that characterizes a connection between two nodes. Both directions of a connection carry their own characterization.                                                                              |
 
 ---
 
@@ -66,11 +66,11 @@ Not all concept nodes serve the same role. Three kinds are distinguished:
 
 **Attribute nodes** — defined in the ontology. Three types:
 
-| Type | Role |
-|---|---|
-| **Name attribute** | Provides the human-readable label for a class or instance |
-| **Relationship attribute** | Characterizes a connection between nodes; grouped into relationship types |
-| **Literal attribute** | Carries raw data directly — measurements, numbers, strings, URLs — without participating in graph topology |
+| Type                       | Role                                                                                                       |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Name attribute**         | Provides the human-readable label for a class or instance                                                  |
+| **Relationship attribute** | Characterizes a connection between nodes; grouped into relationship types                                  |
+| **Literal attribute**      | Carries raw data directly — measurements, numbers, strings, URLs — without participating in graph topology |
 
 The distinction between relationship attributes and literal attributes is architecturally significant. A relationship attribute connects this node to another node, enabling traversal. A literal attribute stores a value that is data about the node, not a path to another concept. Temperature readings, mass measurements, and file paths are literals. "orbits," "is a parent of," and "catalyzes" are relationship attributes.
 
@@ -247,19 +247,19 @@ Concepts are stored language-neutrally in the ontology. Labels, prompts, and voc
 
 ## 16. Architectural Differentiators
 
-| Concept | Assessment |
-|---|---|
-| Template-scoped connections | **Architecturally novel** — prevents semantic conflation by design; not a standard graph model feature |
-| Reciprocal connection characterization | **Consistent and principled** — both directions of every connection are named and queryable |
-| Per-arc relationship metadata | **Extends expressiveness** — provenance, confidence, and time validity live on the arc, not on a separate node |
-| Reactive learning from observed use | **Novel** — the ontology accumulates rules from practice |
-| Ingestion maps | **Practical and novel** — visual, codeless migration from any external source |
-| Document derivation from knowledge | **The organizing principle** — knowledge is the source; documents are derived |
-| Language-neutral concept storage | **Novel** — one knowledge store, any output language |
-| Ontology / project separation | Sound engineering; consistent with modern ontology practice |
-| Multiple inheritance | Conventional in knowledge representation; unusual in databases |
-| Set-operation queries over concept identity | Conventional inverted index applied to a knowledge graph |
-| Rules as stored data | Rule engines are conventional; tight integration with a live ontology is the novel part |
+| Concept                                     | Assessment                                                                                                     |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Template-scoped connections                 | **Architecturally novel** — prevents semantic conflation by design; not a standard graph model feature         |
+| Reciprocal connection characterization      | **Consistent and principled** — both directions of every connection are named and queryable                    |
+| Per-arc relationship metadata               | **Extends expressiveness** — provenance, confidence, and time validity live on the arc, not on a separate node |
+| Reactive learning from observed use         | **Novel** — the ontology accumulates rules from practice                                                       |
+| Ingestion maps                              | **Practical and novel** — visual, codeless migration from any external source                                  |
+| Document derivation from knowledge          | **The organizing principle** — knowledge is the source; documents are derived                                  |
+| Language-neutral concept storage            | **Novel** — one knowledge store, any output language                                                           |
+| Ontology / project separation               | Sound engineering; consistent with modern ontology practice                                                    |
+| Multiple inheritance                        | Conventional in knowledge representation; unusual in databases                                                 |
+| Set-operation queries over concept identity | Conventional inverted index applied to a knowledge graph                                                       |
+| Rules as stored data                        | Rule engines are conventional; tight integration with a live ontology is the novel part                        |
 
 ---
 

@@ -10,19 +10,19 @@
 
 ## 1. Status
 
-| Component | State |
-|---|---|
-| Build | Compiles clean — zero warnings (OTP 27 / rebar3 3.24) |
-| `nref` subsystem | Fully implemented; DETS-backed; `set_floor/1` API |
-| `dictionary_imp` | Implemented; not yet wired to `dictionary_server` / `term_server` |
-| `graphdb_bootstrap` | Implemented — Mnesia schema, table creation, scaffold loader |
-| `graphdb_mgr` | Implemented — bootstrap startup, read API, category guard. Write-side delegation pending. |
-| `graphdb_attr` | Implemented — attribute library (name, literal, relationship attributes) |
-| `graphdb_class` | Implemented — taxonomic hierarchy (single inheritance only — see §10) |
-| `graphdb_instance` | Implemented — compositional hierarchy + four-level inheritance (single class membership only — see §10) |
-| `graphdb_rules` | Stub |
-| `graphdb_language` | Stub |
-| Tests | 156 passing (94 Common Test + 62 EUnit) |
+| Component           | State                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------- |
+| Build               | Compiles clean — zero warnings (OTP 27 / rebar3 3.24)                                                   |
+| `nref` subsystem    | Fully implemented; DETS-backed; `set_floor/1` API                                                       |
+| `dictionary_imp`    | Implemented; not yet wired to `dictionary_server` / `term_server`                                       |
+| `graphdb_bootstrap` | Implemented — Mnesia schema, table creation, scaffold loader                                            |
+| `graphdb_mgr`       | Implemented — bootstrap startup, read API, category guard. Write-side delegation pending.               |
+| `graphdb_attr`      | Implemented — attribute library (name, literal, relationship attributes)                                |
+| `graphdb_class`     | Implemented — taxonomic hierarchy (single inheritance only — see §10)                                   |
+| `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance (single class membership only — see §10) |
+| `graphdb_rules`     | Stub                                                                                                    |
+| `graphdb_language`  | Stub                                                                                                    |
+| Tests               | 156 passing (94 Common Test + 62 EUnit)                                                                 |
 
 The kernel is functional under single-class-membership / single-inheritance
 semantics. Multi-inheritance, template-scoped connections, and
@@ -32,11 +32,11 @@ multilingual support are open architectural questions — see §10.
 
 ## 2. Storage
 
-| Subsystem | Storage | Why |
-|---|---|---|
+| Subsystem                          | Storage                    | Why                                                       |
+| ---------------------------------- | -------------------------- | --------------------------------------------------------- |
 | `graphdb_*` (nodes, relationships) | **Mnesia** (`disc_copies`) | ACID across tables, secondary indexes, distribution-ready |
-| `nref_allocator` / `nref_server` | DETS | Simple persistent counter; no relational query needs |
-| `dictionary_imp` | ETS + `tab2file` | In-memory cache, persistent serialisation |
+| `nref_allocator` / `nref_server`   | DETS                       | Simple persistent counter; no relational query needs      |
+| `dictionary_imp`                   | ETS + `tab2file`           | In-memory cache, persistent serialisation                 |
 
 ### Mnesia tables
 
@@ -72,12 +72,12 @@ prevents transactional updates spanning both endpoints.
 
 ### Node kinds
 
-| Kind | Purpose | Creatable at runtime? |
-|---|---|---|
-| `category` | Top-level organisational scaffold; bootstrap skeleton | **No** — bootstrap-only |
-| `attribute` | Named concept used as an arc label, name attribute, or literal attribute descriptor | Yes |
-| `class` | Type/schema; manages the taxonomic ("is a") hierarchy | Yes |
-| `instance` | Concrete entity in a project; managed by the compositional ("part of") hierarchy | Yes |
+| Kind        | Purpose                                                                             | Creatable at runtime?   |
+| ----------- | ----------------------------------------------------------------------------------- | ----------------------- |
+| `category`  | Top-level organisational scaffold; bootstrap skeleton                               | **No** — bootstrap-only |
+| `attribute` | Named concept used as an arc label, name attribute, or literal attribute descriptor | Yes                     |
+| `class`     | Type/schema; manages the taxonomic ("is a") hierarchy                               | Yes                     |
+| `instance`  | Concrete entity in a project; managed by the compositional ("part of") hierarchy    | Yes                     |
 
 `category` immutability is enforced by `graphdb_mgr:check_category_guard/1`;
 no runtime API can create, modify, or delete a `category` node.
@@ -179,10 +179,10 @@ workers — read path implemented; write-side routing is pending
 
 The system separates definitional knowledge from instance data.
 
-| Body | Contents | Mutability |
-|---|---|---|
-| **Ontology** | Categories, attributes, classes, languages, templates, rules — the bootstrap scaffold and the live schema | Categories: immutable. All other nodes grow at runtime. |
-| **Project (instance space)** | Instance nodes and their relationships — one database per project | Fully mutable |
+| Body                         | Contents                                                                                                  | Mutability                                              |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| **Ontology**                 | Categories, attributes, classes, languages, templates, rules — the bootstrap scaffold and the live schema | Categories: immutable. All other nodes grow at runtime. |
+| **Project (instance space)** | Instance nodes and their relationships — one database per project                                         | Fully mutable                                           |
 
 The ontology is shared across all projects. The same ontology can serve
 unrelated domains. Project databases are independent — multiple may
@@ -190,26 +190,26 @@ exist on the same node, each with its own Mnesia schema.
 
 ### What lives where
 
-| Concept | Database |
-|---|---|
-| Category, attribute, class, language nodes | Ontology |
-| Bootstrap compositional arcs | Ontology |
+| Concept                                      | Database |
+| -------------------------------------------- | -------- |
+| Category, attribute, class, language nodes   | Ontology |
+| Bootstrap compositional arcs                 | Ontology |
 | Runtime attribute / class compositional arcs | Ontology |
-| Instance nodes | Project |
-| Instance compositional arcs | Project |
-| Instance → class membership arcs | Project |
-| Instance user-defined connections | Project |
+| Instance nodes                               | Project  |
+| Instance compositional arcs                  | Project  |
+| Instance → class membership arcs             | Project  |
+| Instance user-defined connections            | Project  |
 
 ### Cross-database nref resolution
 
 Nrefs are plain `integer()`s with no embedded database tag. Context
 determines routing:
 
-| Relationship field | Resolves to |
-|---|---|
-| `source_nref` | Same database as the relationship row |
-| `characterization`, `reciprocal` | Always the ontology |
-| `target_nref` | Routed by the arc label's `target_kind` AVP |
+| Relationship field               | Resolves to                                 |
+| -------------------------------- | ------------------------------------------- |
+| `source_nref`                    | Same database as the relationship row       |
+| `characterization`, `reciprocal` | Always the ontology                         |
+| `target_nref`                    | Routed by the arc label's `target_kind` AVP |
 
 `target_kind :: category | attribute | class | instance` is stored as a
 literal AVP on every arc-label attribute node. Built-in arc labels
@@ -322,10 +322,10 @@ detailed task in the severity-grouped task files.
 
 ### Pending schema additions
 
-| Field | Purpose | Spec reference |
-|---|---|---|
+| Field                        | Purpose                                                                  | Spec reference                  |
+| ---------------------------- | ------------------------------------------------------------------------ | ------------------------------- |
 | `relationship.template_nref` | Template context for ASSOCIATE connections — part of connection identity | §5, §7 — `TASKS-CRITICAL.md` C1 |
-| `relationship.kind` | Explicit type: `taxonomy \| composition \| connection \| instantiation` | §5 — `TASKS-CRITICAL.md` C2 |
+| `relationship.kind`          | Explicit type: `taxonomy \| composition \| connection \| instantiation`  | §5 — `TASKS-CRITICAL.md` C2     |
 
 Both must land before any database ships with live data — schema
 migration on populated Mnesia tables is otherwise required.
