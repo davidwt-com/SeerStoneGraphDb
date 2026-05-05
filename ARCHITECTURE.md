@@ -134,12 +134,13 @@ not participate in graph traversal by default.
 
 ### Pending schema additions
 
-Two fields are required by the spec but not yet on the record. See §10
-and `TASKS-CRITICAL.md`:
+One field and one AVP convention are required by the spec but not yet
+on the record. See §10 and `TASKS-CRITICAL.md`:
 
-- `template_nref` — template context for ASSOCIATE connections.
 - `kind` — explicit relationship type (`taxonomy | composition |
   connection | instantiation`).
+- `Template` AVP — required on `kind = connection` arcs, forbidden
+  elsewhere; the AVP attribute itself is bootstrap-seeded as nref 31.
 
 Both must land before the database holds live data.
 
@@ -308,10 +309,10 @@ order from [`the-knowledge-network.md`](the-knowledge-network.md) §6:
 Each level is consulted only if higher levels returned `not_found`.
 
 The current implementation has known correctness gaps documented in
-`TASKS-HIGH.md`: Priority 2 does not walk the class taxonomy (H4),
-Priority 4 does not exclude already-walked hierarchical arcs (H5), and
+`TASKS-HIGH.md`: Priority 2 does not walk the class taxonomy (H1),
+Priority 4 does not exclude already-walked hierarchical arcs (H2), and
 multi-class membership is silently disambiguated by Mnesia ordering
-(H3).
+(H5).
 
 ---
 
@@ -322,12 +323,13 @@ detailed task in the severity-grouped task files.
 
 ### Pending schema additions
 
-| Field                        | Purpose                                                                  | Spec reference                  |
-| ---------------------------- | ------------------------------------------------------------------------ | ------------------------------- |
-| `relationship.template_nref` | Template context for ASSOCIATE connections — part of connection identity | §5, §7 — `TASKS-CRITICAL.md` C1 |
-| `relationship.kind`          | Explicit type: `taxonomy \| composition \| connection \| instantiation`  | §5 — `TASKS-CRITICAL.md` C2     |
+| Schema element              | Purpose                                                                                                                                                    | Spec reference                  |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `relationship.kind`         | Explicit type: `taxonomy \| composition \| connection \| instantiation`                                                                                    | §5 — `TASKS-CRITICAL.md` C1     |
+| `node.kind` adds `template` | Fifth peer to category/attribute/class/instance; templates are nodes whose compositional parent is a class                                                 | §3, §7 — `TASKS-CRITICAL.md` C2 |
+| `Template` relationship AVP | Bootstrap-seeded attribute (nref 31); required on `kind = connection` arcs, forbidden elsewhere; per-class default template auto-created at class creation | §5, §7 — `TASKS-CRITICAL.md` C3 |
 
-Both must land before any database ships with live data — schema
+All three must land before any database ships with live data — schema
 migration on populated Mnesia tables is otherwise required.
 
 ### Multi-inheritance representation
@@ -337,7 +339,7 @@ class membership. The current representation puts the single primary
 parent in `node.parent`; additional parents must live in the
 relationships table only. The `graphdb_class` ancestor walk and
 `graphdb_instance.resolve_from_class` need to traverse via arcs rather
-than the single parent field. See `TASKS-HIGH.md` H1, H2, H3.
+than the single parent field. See `TASKS-HIGH.md` H3, H4, H5.
 
 ### Templates
 

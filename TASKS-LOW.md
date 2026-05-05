@@ -80,7 +80,7 @@ write-side callers must talk to workers directly.
 - `delete_node`, `update_node_avps` → keep category guard, then
   delegate to the kind-appropriate worker.
 
-**Dependencies:** the API shapes settle after C1, M5, H1, H2. Wire
+**Dependencies:** the API shapes settle after C3, M5, H3, H4. Wire
 once the signatures stop changing.
 
 ---

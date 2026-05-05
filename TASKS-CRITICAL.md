@@ -9,106 +9,16 @@ These items touch every module that defines `-record(relationship, ...)`
 or `-record(node, ...)`: `graphdb_bootstrap.erl`, `graphdb_attr.erl`,
 `graphdb_class.erl`, `graphdb_instance.erl`, `graphdb_mgr.erl`.
 
-**Recommended execution order: C2 → C3 → C1.** C2 establishes the
-relationship `kind` field (so Connection-vs-other arcs are
-distinguishable structurally). C3 adds the `template` node kind (so
-template nodes can exist). C1 then seeds the `Template` AVP attribute
-in bootstrap, wires auto-default-template creation in
-`graphdb_class:create_class`, and adds the template-AVP enforcement
-rule that depends on both C2 and C3.
+Tasks are listed in execution order. C1 establishes the relationship
+`kind` field (so Connection-vs-other arcs are distinguishable
+structurally). C2 adds the `template` node kind (so template nodes can
+exist). C3 then seeds the `Template` AVP attribute in bootstrap, wires
+auto-default-template creation in `graphdb_class:create_class`, and
+adds the template-AVP enforcement rule that depends on both C1 and C2.
 
 ---
 
-## C1. Establish template scoping (AVP + per-class default template)
-
-**Spec:** §7 Templates — *"a template is a named semantic context
-defined on a class in the ontology... an active node in the ontology
-that determines which attributes of the class are relevant in this
-context, how those attributes are expressed and constrained, what
-connections made through it mean."* §5 — *"every connection is scoped
-by the template context in which it was made. The template context is
-recorded as part of the connection's identity permanently."*
-
-**Decision:** Templates are nodes (kind `template`, added in C3) whose
-compositional parent is a class node. On a Connection (ASSOCIATE) arc,
-the template scope is recorded as an AVP whose attribute key is a
-bootstrap-seeded relationship-AVP attribute named `Template` and whose
-value is the nref of the chosen template node. No new field is added
-to the `relationship` record — AVPs are the right tool for sparse,
-identity-defining metadata that only applies to one of the four
-relationship kinds.
-
-Three subparts, all of which must land together:
-
-### C1a. Bootstrap-seed the `Template` AVP attribute
-
-Add one node to `apps/graphdb/priv/bootstrap.terms`:
-
-```erlang
-%% Level 4 -- relationship-AVP marker attributes
-{node, 31, attribute, 16, {18, "Template"}, []}.
-```
-
-`parent = 16` (Instance Relationships) because Connection arcs only
-exist between instances. The `relationship_avp => true` AVP is applied
-post-bootstrap by `graphdb_attr:init/1`, after the flag-attribute
-itself is seeded — bootstrap.terms cannot reference a runtime-seeded
-nref.
-
-Add the corresponding compositional arc:
-
-```erlang
-{relationship, 16, 24, [], 23, 31, []}.  %% Instance Relationships -> Template
-```
-
-The bootstrap nref count grows from 30 to 31. Update the BFS
-quick-reference in `CLAUDE.md`, `apps/graphdb/CLAUDE.md`, and
-`graphdb_bootstrap.erl` header comments.
-
-### C1b. Auto-attach a default template on class creation
-
-In `graphdb_class:create_class/2`, after the new class node is
-written, atomically write a child template node:
-
-```erlang
-%% kind = template, parent = ClassNref, name AVP "default"
-```
-
-The default-template's nref is allocated by `nref_server:get_nref/0`.
-Compositional arcs use the class-child arc labels (26/25). Expose
-`graphdb_class:add_template/2` for class authors to add further
-named templates as compositional children of the same class.
-
-Class authors who want to *force* explicit disambiguation for a class
-can delete the default template; subsequent Connection arcs involving
-instances of that class then must specify a non-default template.
-
-### C1c. Enforce template-AVP presence-by-kind on relationship writes
-
-In every relationship-write path
-(`graphdb_instance:do_add_relationship`, plus any analogous path in
-`graphdb_attr` or `graphdb_class`):
-
-- If the relationship `kind` is `connection`: require an AVP
-  `#{attribute => 31, value => TemplateNref}` and verify that
-  `TemplateNref` resolves to a node whose `kind = template` and whose
-  `parent` is a class in the taxonomic ancestry of the source's or
-  target's class.
-- If the relationship `kind` is anything else: forbid the `Template`
-  AVP.
-
-**Touches:** `bootstrap.terms`; `graphdb_attr:init/1` (post-bootstrap
-seed of the `relationship_avp` flag on nref 31); `graphdb_class`
-(auto-default-template, `add_template/2`); `graphdb_instance`
-(template-AVP validation in `do_add_relationship`); BFS
-quick-reference comments throughout.
-
-**Dependencies:** C2 (need relationship `kind` to enforce by); C3
-(need `kind = template` for the template nodes).
-
----
-
-## C2. Add `kind` field to the `relationship` record
+## C1. Add `kind` field to the `relationship` record
 
 **Spec:** §5 — *"Relationships between concept nodes are strictly
 typed. Four types exist: Taxonomy (IS-A), Composition (PART-OF),
@@ -146,16 +56,16 @@ Bootstrap loader assigns `kind` based on the characterization nref
 - §7 templates can constrain which connection types are valid in a
   context.
 - §11 connection-pattern learning groups observations by type.
-- C1c (enforce template AVP only for `kind = connection`) becomes a
+- C3c (enforce template AVP only for `kind = connection`) becomes a
   one-line guard.
-- H5 (filter Priority 4 inheritance to lateral connections) becomes a
+- H2 (filter Priority 4 inheritance to lateral connections) becomes a
   one-line guard.
 
-**Dependencies:** none. Should be done first.
+**Dependencies:** none. Done first.
 
 ---
 
-## C3. Add `template` to the node kind atom set
+## C2. Add `template` to the node kind atom set
 
 **Spec:** §3 — *"every class, attribute, **rule**, **template**,
 instance, and vocabulary entry is a concept node."* §7 — *"a template
@@ -190,8 +100,97 @@ only makes the kind exist.
 
 - `graphdb_bootstrap.erl`: node record kind comment; kind validation in expand functions.
 - `graphdb_mgr.erl`: any `category_guard`-style kind check; ensure templates are immutable-via-class, not directly editable.
-- `graphdb_class.erl`: primary writer of `kind = template` nodes (see C1b); template lookup helpers.
+- `graphdb_class.erl`: primary writer of `kind = template` nodes (see C3b); template lookup helpers.
 - `graphdb_attr.erl`: must accept `kind = template` when looking up nodes, but reject template nrefs from attribute lookups (templates are not attributes).
 - `graphdb_instance.erl`: validation that an instance's class arc target has `kind = class`, not `kind = template`.
 
-**Dependencies:** none. Should be done before C1.
+**Dependencies:** none. Done before C3.
+
+---
+
+## C3. Establish template scoping (AVP + per-class default template)
+
+**Spec:** §7 Templates — *"a template is a named semantic context
+defined on a class in the ontology... an active node in the ontology
+that determines which attributes of the class are relevant in this
+context, how those attributes are expressed and constrained, what
+connections made through it mean."* §5 — *"every connection is scoped
+by the template context in which it was made. The template context is
+recorded as part of the connection's identity permanently."*
+
+**Decision:** Templates are nodes (kind `template`, added in C2) whose
+compositional parent is a class node. On a Connection (ASSOCIATE) arc,
+the template scope is recorded as an AVP whose attribute key is a
+bootstrap-seeded relationship-AVP attribute named `Template` and whose
+value is the nref of the chosen template node. No new field is added
+to the `relationship` record — AVPs are the right tool for sparse,
+identity-defining metadata that only applies to one of the four
+relationship kinds.
+
+Three subparts, all of which must land together:
+
+### C3a. Bootstrap-seed the `Template` AVP attribute
+
+Add one node to `apps/graphdb/priv/bootstrap.terms`:
+
+```erlang
+%% Level 4 -- relationship-AVP marker attributes
+{node, 31, attribute, 16, {18, "Template"}, []}.
+```
+
+`parent = 16` (Instance Relationships) because Connection arcs only
+exist between instances. The `relationship_avp => true` AVP is applied
+post-bootstrap by `graphdb_attr:init/1`, after the flag-attribute
+itself is seeded — bootstrap.terms cannot reference a runtime-seeded
+nref.
+
+Add the corresponding compositional arc:
+
+```erlang
+{relationship, 16, 24, [], 23, 31, []}.  %% Instance Relationships -> Template
+```
+
+The bootstrap nref count grows from 30 to 31. Update the BFS
+quick-reference in `CLAUDE.md`, `apps/graphdb/CLAUDE.md`, and
+`graphdb_bootstrap.erl` header comments.
+
+### C3b. Auto-attach a default template on class creation
+
+In `graphdb_class:create_class/2`, after the new class node is
+written, atomically write a child template node:
+
+```erlang
+%% kind = template, parent = ClassNref, name AVP "default"
+```
+
+The default-template's nref is allocated by `nref_server:get_nref/0`.
+Compositional arcs use the class-child arc labels (26/25). Expose
+`graphdb_class:add_template/2` for class authors to add further
+named templates as compositional children of the same class.
+
+Class authors who want to *force* explicit disambiguation for a class
+can delete the default template; subsequent Connection arcs involving
+instances of that class then must specify a non-default template.
+
+### C3c. Enforce template-AVP presence-by-kind on relationship writes
+
+In every relationship-write path
+(`graphdb_instance:do_add_relationship`, plus any analogous path in
+`graphdb_attr` or `graphdb_class`):
+
+- If the relationship `kind` is `connection`: require an AVP
+  `#{attribute => 31, value => TemplateNref}` and verify that
+  `TemplateNref` resolves to a node whose `kind = template` and whose
+  `parent` is a class in the taxonomic ancestry of the source's or
+  target's class.
+- If the relationship `kind` is anything else: forbid the `Template`
+  AVP.
+
+**Touches:** `bootstrap.terms`; `graphdb_attr:init/1` (post-bootstrap
+seed of the `relationship_avp` flag on nref 31); `graphdb_class`
+(auto-default-template, `add_template/2`); `graphdb_instance`
+(template-AVP validation in `do_add_relationship`); BFS
+quick-reference comments throughout.
+
+**Dependencies:** C1 (need relationship `kind` to enforce by); C2
+(need `kind = template` for the template nodes).

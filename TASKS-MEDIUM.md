@@ -56,9 +56,9 @@ on both directions. No `/5` variant accepting AVPs.
 {FwdAVPs, RevAVPs})`. Per-direction AVPs because §5 says metadata is
 asymmetric. `/4` becomes a thin wrapper passing `{[],[]}`.
 
-**Dependencies:** prefer to land alongside C1 so the `/5` signature
-includes `template_nref` from the start: `add_relationship/6` or
-named-argument map.
+**Dependencies:** prefer to land alongside C3 so the `/5` signature
+already accommodates the `Template` AVP for connection arcs without a
+later signature change.
 
 ---
 
@@ -69,11 +69,11 @@ named-argument map.
 `graphdb_class:get_class/1`. Worker boundaries blur — `graphdb_instance`
 hardcodes `?CLASS_MEMBERSHIP_ARC` and the class node layout.
 
-**Fix:** subsumed by H4. Once `resolve_from_class` walks the taxonomy,
+**Fix:** subsumed by H1. Once `resolve_from_class` walks the taxonomy,
 it should ask `graphdb_class` for the chain rather than re-implementing
 Mnesia reads.
 
-**Dependencies:** H4.
+**Dependencies:** H1.
 
 ---
 
@@ -126,7 +126,7 @@ returning `?UEM` on every call.
 - Multi-criteria queries spanning class membership, attribute values,
   and connections in one query.
 - Unit-tracked quantity expressions.
-- Template-filtered traversal — depends on C1.
+- Template-filtered traversal — depends on C3.
 - Language-tagged label resolution at render time — depends on M6.
 - Conversational/natural-language entry point (§13).
 
@@ -137,8 +137,8 @@ returning `?UEM` on every call.
 - Path queries: `find_path/3`.
 - Render-time label lookup honoring a per-call `Language :: atom()`.
 
-**Dependencies:** value from this work multiplies after C2 (relationship
-kind) and H1–H4 (correct inheritance). Recommend not starting until
+**Dependencies:** value from this work multiplies after C1 (relationship
+kind) and H1, H3–H5 (correct inheritance). Recommend not starting until
 those land.
 
 ---
@@ -186,7 +186,7 @@ load-bearing per §16.
 
 **Evidence:** No template node kind, no `Templates` subtree in the
 bootstrap, no `graphdb_template` worker, no template field on
-relationships (covered separately by C1).
+relationships (covered separately by C3).
 
 **Sub-tasks:**
 - Decide template representation: 5th node `kind = template`, or
@@ -197,13 +197,13 @@ relationships (covered separately by C1).
   worker on first start.
 - API: `create_template/2 (Name, ClassNref)`, `attach_template/2`,
   `templates_for_class/1`.
-- Template-scoped `add_relationship` — caller specifies `template_nref`,
-  which is recorded in the relationship row (C1).
+- Template-scoped `add_relationship` — caller specifies the template
+  nref, which is recorded as the `Template` AVP on the connection (C3).
 - Template-scoped queries — find connections through a specific
-  template only (depends on C2 + Task 6).
+  template only (depends on C1 + Task 6).
 
-**Dependencies:** C1 (template_nref field). Best landed after the kernel
-is correct under the existing model.
+**Dependencies:** C3 (Template AVP and per-class default template).
+Best landed after the kernel is correct under the existing model.
 
 ---
 
@@ -237,7 +237,7 @@ is correct under the existing model.
   `is_rule = true` AVP, or a new `kind = rule` — same decision as
   templates).
 
-**Dependencies:** value depends on C2 (kind), H1–H4 (correct
-inheritance), C1+M7 (templates for connection-pattern learning). This
+**Dependencies:** value depends on C1 (kind), H1 and H3–H5 (correct
+inheritance), C3+M7 (templates for connection-pattern learning). This
 is genuinely a future-feature track — but called out in the spec as
 core, not incidental.
