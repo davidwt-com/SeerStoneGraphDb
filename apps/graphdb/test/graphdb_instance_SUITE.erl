@@ -93,7 +93,10 @@
 	resolve_value_not_found/1,
 	resolve_value_priority_local_over_class/1,
 	resolve_value_priority_class_over_ancestor/1,
-	resolve_value_priority_ancestor_over_connected/1
+	resolve_value_priority_ancestor_over_connected/1,
+	resolve_value_walks_class_taxonomy/1,
+	resolve_value_local_class_overrides_taxonomy_ancestor/1,
+	resolve_value_p4_ignores_compositional_arc/1
 ]).
 
 
@@ -147,7 +150,10 @@ groups() ->
 			resolve_value_not_found,
 			resolve_value_priority_local_over_class,
 			resolve_value_priority_class_over_ancestor,
-			resolve_value_priority_ancestor_over_connected
+			resolve_value_priority_ancestor_over_connected,
+			resolve_value_walks_class_taxonomy,
+			resolve_value_local_class_overrides_taxonomy_ancestor,
+			resolve_value_p4_ignores_compositional_arc
 		]}
 	].
 
@@ -652,6 +658,53 @@ resolve_value_priority_ancestor_over_connected(_Config) ->
 	%% Ancestor Parent (priority 3) should win over connected Peer (priority 4)
 	?assertEqual({ok, "ancestor_region"},
 		graphdb_instance:resolve_value(Child, TestAttr)).
+
+%%-----------------------------------------------------------------------------
+%% H1: resolve_from_class must walk the class taxonomy.  Animal IS-A
+%% Mammal IS-A Dog: an attribute bound on Animal must be visible to a
+%% Dog instance even when neither Mammal nor Dog defines it.
+%%-----------------------------------------------------------------------------
+resolve_value_walks_class_taxonomy(_Config) ->
+	{ok, AnimalNref} = graphdb_class:create_class("Animal", 3),
+	{ok, MammalNref} = graphdb_class:create_class("Mammal", AnimalNref),
+	{ok, DogNref}    = graphdb_class:create_class("Dog", MammalNref),
+	{ok, TestAttr}   = graphdb_attr:create_literal_attribute("kingdom", string),
+	%% Bind kingdom only on the topmost class
+	set_avp(AnimalNref, TestAttr, "Animalia"),
+	{ok, Rex} = graphdb_instance:create_instance("Rex", DogNref, 5),
+	?assertEqual({ok, "Animalia"},
+		graphdb_instance:resolve_value(Rex, TestAttr)).
+
+%%-----------------------------------------------------------------------------
+%% H1: when both the local class and a taxonomy ancestor bind the same
+%% attribute, the nearest class wins (taxonomy walk is nearest-first).
+%%-----------------------------------------------------------------------------
+resolve_value_local_class_overrides_taxonomy_ancestor(_Config) ->
+	{ok, AnimalNref} = graphdb_class:create_class("Animal", 3),
+	{ok, DogNref}    = graphdb_class:create_class("Dog", AnimalNref),
+	{ok, TestAttr}   = graphdb_attr:create_literal_attribute("class_color", string),
+	set_avp(AnimalNref, TestAttr, "from_animal"),
+	set_avp(DogNref,    TestAttr, "from_dog"),
+	{ok, Rex} = graphdb_instance:create_instance("Rex", DogNref, 5),
+	?assertEqual({ok, "from_dog"},
+		graphdb_instance:resolve_value(Rex, TestAttr)).
+
+%%-----------------------------------------------------------------------------
+%% H2: Priority 4 ("directly connected nodes") must consider only
+%% connection-kind arcs.  A value bound on the compositional parent's
+%% category (reached only via the parent_arc) must not surface via P4.
+%%-----------------------------------------------------------------------------
+resolve_value_p4_ignores_compositional_arc(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Widget", 3),
+	{ok, TestAttr}  = graphdb_attr:create_literal_attribute("color", string),
+	%% Bind color directly on the Projects category (nref 5)
+	set_avp(5, TestAttr, "category_color"),
+	{ok, InstNref} = graphdb_instance:create_instance("W1", ClassNref, 5),
+	%% Local: no.  Class: no.  Ancestors: P3 stops at category 5
+	%% (non-instance).  P4 must not pick up category 5's AVP via the
+	%% parent_arc — only true connection arcs count.
+	?assertEqual(not_found,
+		graphdb_instance:resolve_value(InstNref, TestAttr)).
 
 
 %%=============================================================================

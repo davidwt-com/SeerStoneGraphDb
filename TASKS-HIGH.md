@@ -4,61 +4,34 @@ Single-statement bugs against spec semantics. Each one means the engine
 silently produces a wrong answer for a case the spec calls out
 explicitly.
 
-Tasks are listed in execution order. H1 and H2 are isolated bugs in
-`graphdb_instance` and can be fixed before the multi-inheritance work
-(H3–H5). H3–H5 require API/schema-shape changes for multi-parent /
-multi-class semantics and should land together.
+Tasks are listed in execution order. H1 and H2 were isolated bugs in
+`graphdb_instance` and have landed (see RESOLVED markers below); they
+also closed M2. H3–H5 require API/schema-shape changes for
+multi-parent / multi-class semantics and should land together.
 
 ---
 
-## H1. `resolve_from_class` does not walk the class taxonomy
+## H1. `resolve_from_class` does not walk the class taxonomy — RESOLVED
 
-**Spec:** §5 Taxonomy — *"Golden Retriever IS-A Dog IS-A Mammal IS-A
-Animal. Golden Retriever inherits every attribute defined at every level
-above it."* §6 Priority 2 — class-bound values must include all
-ancestors of the class.
-
-**Evidence:** `graphdb_instance.erl:564-587`. After locating the
-membership arc, the code reads exactly one class node's AVPs:
-
-```erlang
-{atomic, [#node{attribute_value_pairs = AVPs}]} ->
-    find_avp_value(AVPs, AttrNref);
-```
-
-Values bound on the superclass are invisible. `graphdb_class:do_ancestors/1`
-already produces the chain — `graphdb_instance` should ask for it.
-
-**Fix:** in `resolve_from_class`, after finding the class, call
-`graphdb_class:get_class/1` then `graphdb_class:ancestors/1` and walk
-the resulting list, returning the first AVP match. Subsumes M2.
-
-**Dependencies:** none. Most consequential single line of incorrect
-code in the codebase.
+**Status:** Fixed. `resolve_from_class` now reuses `do_class_of/1` to
+locate the membership arc, then asks `graphdb_class:get_class/1` and
+`graphdb_class:ancestors/1` for the nearest-first chain and returns
+the first AVP match. Two CT cases cover the new behaviour
+(`resolve_value_walks_class_taxonomy`,
+`resolve_value_local_class_overrides_taxonomy_ancestor`). Subsumes
+M2.
 
 ---
 
-## H2. Priority 4 ("directly connected nodes") double-walks Priorities 2 and 3
+## H2. Priority 4 ("directly connected nodes") double-walks Priorities 2 and 3 — RESOLVED
 
-**Spec:** §6 Priority 4 — *"Directly connected nodes (one level deep
-only; lowest priority)."* The intent is non-hierarchical lateral
-connections.
-
-**Evidence:** `graphdb_instance.erl:623-635`. `resolve_from_connected`
-reads every outgoing relationship via `mnesia:index_read/3`. The result
-includes the instance→class membership arc (29) and the
-instance→compositional-parent arc (27) — both already searched at higher
-priority. A value present on the class or compositional parent can come
-back via Priority 4 instead of returning `not_found`.
-
-**Fix (after C1):** filter `Rels` to `R#relationship.kind =:= connection`
-before pulling target nrefs.
-
-**Fix (before C1, interim):** filter out characterizations equal to
-`?CLASS_MEMBERSHIP_ARC`, `?INST_PARENT_ARC`, `?INST_CHILD_ARC`. Ugly but
-correct.
-
-**Dependencies:** clean fix depends on C1.
+**Status:** Fixed. `resolve_from_connected` now filters the outgoing
+relationships to `R#relationship.kind =:= connection` before pulling
+target nrefs, so instantiation (membership) and composition
+(parent/child) arcs no longer feed Priority 4.  CT case
+`resolve_value_p4_ignores_compositional_arc` reproduces the previous
+leak (a value bound on the compositional parent's category surfacing
+via the parent_arc) and now returns `not_found` as the spec requires.
 
 ---
 

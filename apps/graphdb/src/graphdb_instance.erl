@@ -714,32 +714,46 @@ do_resolve_value(InstNref, AttrNref) ->
 %% resolve_from_class(InstNref, AttrNref) ->
 %%     {ok, Value} | not_found
 %%
-%% Finds the instance's class via the membership arc (char=29) and
-%% checks the class node's AVPs.
+%% Finds the instance's class via the membership arc (char=29), then
+%% searches the class node and every taxonomy ancestor (nearest-first)
+%% for an AVP matching AttrNref.  Returns the first match.
 %%-----------------------------------------------------------------------------
 resolve_from_class(InstNref, AttrNref) ->
-	F = fun() ->
-		Rels = mnesia:index_read(relationships, InstNref,
-			#relationship.source_nref),
-		lists:search(
-			fun(R) ->
-				R#relationship.characterization =:= ?CLASS_MEMBERSHIP_ARC
-			end, Rels)
-	end,
-	case mnesia:transaction(F) of
-		{atomic, {value, #relationship{target_nref = ClassNref}}} ->
-			case mnesia:transaction(
-				fun() -> mnesia:read(nodes, ClassNref) end)
-			of
-				{atomic, [#node{attribute_value_pairs = AVPs}]} ->
-					find_avp_value(AVPs, AttrNref);
-				_ ->
-					not_found
-			end;
-		{atomic, false} ->
-			not_found;
-		{aborted, _} ->
+	case do_class_of(InstNref) of
+		{ok, ClassNref} ->
+			search_class_chain(ClassNref, AttrNref);
+		_ ->
 			not_found
+	end.
+
+search_class_chain(ClassNref, AttrNref) ->
+	case graphdb_class:get_class(ClassNref) of
+		{ok, ClassNode} ->
+			case find_avp_value(ClassNode#node.attribute_value_pairs,
+					AttrNref) of
+				{ok, _} = Found ->
+					Found;
+				not_found ->
+					search_taxonomy_ancestors(ClassNref, AttrNref)
+			end;
+		_ ->
+			not_found
+	end.
+
+search_taxonomy_ancestors(ClassNref, AttrNref) ->
+	case graphdb_class:ancestors(ClassNref) of
+		{ok, Ancestors} ->
+			search_avp_chain(Ancestors, AttrNref);
+		_ ->
+			not_found
+	end.
+
+search_avp_chain([], _AttrNref) ->
+	not_found;
+search_avp_chain([#node{attribute_value_pairs = AVPs} | Rest], AttrNref) ->
+	case find_avp_value(AVPs, AttrNref) of
+		{ok, _} = Found -> Found;
+		not_found       -> search_avp_chain(Rest, AttrNref)
 	end.
 
 
@@ -773,8 +787,10 @@ resolve_from_ancestors(ParentNref, AttrNref) ->
 %% resolve_from_connected(InstNref, AttrNref) ->
 %%     {ok, Value} | not_found
 %%
-%% Checks all directly connected nodes (one level deep).  Reads all
-%% outgoing relationships, then checks each target node's AVPs.
+%% Checks all directly connected nodes (one level deep).  Only
+%% kind=connection arcs are considered; instantiation (membership) and
+%% composition (parent/child) arcs are excluded — those targets are
+%% already covered by Priorities 2 and 3.
 %%-----------------------------------------------------------------------------
 resolve_from_connected(InstNref, AttrNref) ->
 	F = fun() ->
@@ -784,7 +800,8 @@ resolve_from_connected(InstNref, AttrNref) ->
 	case mnesia:transaction(F) of
 		{atomic, Rels} ->
 			TargetNrefs = lists:usort(
-				[R#relationship.target_nref || R <- Rels]),
+				[R#relationship.target_nref
+					|| R <- Rels, R#relationship.kind =:= connection]),
 			search_targets(TargetNrefs, AttrNref);
 		{aborted, _} ->
 			not_found

@@ -62,18 +62,13 @@ later signature change.
 
 ---
 
-## M2. `resolve_from_class` should consult `graphdb_class`, not Mnesia directly
+## M2. `resolve_from_class` should consult `graphdb_class`, not Mnesia directly — RESOLVED
 
-**Evidence:** `graphdb_instance.erl:564-587` reads class data via
-`mnesia:read(nodes, ClassNref)` rather than calling
-`graphdb_class:get_class/1`. Worker boundaries blur — `graphdb_instance`
-hardcodes `?CLASS_MEMBERSHIP_ARC` and the class node layout.
-
-**Fix:** subsumed by H1. Once `resolve_from_class` walks the taxonomy,
-it should ask `graphdb_class` for the chain rather than re-implementing
-Mnesia reads.
-
-**Dependencies:** H1.
+**Status:** Closed by H1. `resolve_from_class` now drives the class
+walk through `graphdb_class:get_class/1` and
+`graphdb_class:ancestors/1` instead of reading the `nodes` table
+directly; the membership arc lookup reuses `do_class_of/1` so
+`?CLASS_MEMBERSHIP_ARC` is no longer hard-coded inside the resolver.
 
 ---
 
