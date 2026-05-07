@@ -65,6 +65,7 @@
 	load_writes_all_relationships/1,
 	load_root_node_correct/1,
 	load_attribute_node_correct/1,
+	load_template_avp_node_correct/1,
 	load_category_children/1,
 	load_relationship_structure/1,
 	load_relationship_ids_above_floor/1,
@@ -97,6 +98,7 @@ groups() ->
 			load_writes_all_relationships,
 			load_root_node_correct,
 			load_attribute_node_correct,
+			load_template_avp_node_correct,
 			load_category_children,
 			load_relationship_structure,
 			load_relationship_ids_above_floor,
@@ -210,18 +212,18 @@ load_creates_tables(_Config) ->
 	?assert(lists:member(relationships, mnesia:system_info(tables))).
 
 %%-----------------------------------------------------------------------------
-%% Verify exactly 30 nodes are loaded.
+%% Verify exactly 31 nodes are loaded (1-30 plus the Template AVP at 31).
 %%-----------------------------------------------------------------------------
 load_writes_all_nodes(_Config) ->
 	ok = graphdb_bootstrap:load(),
-	?assertEqual(30, mnesia:table_info(nodes, size)).
+	?assertEqual(31, mnesia:table_info(nodes, size)).
 
 %%-----------------------------------------------------------------------------
-%% Verify exactly 58 relationship rows (29 pairs x 2 directions).
+%% Verify exactly 60 relationship rows (30 pairs x 2 directions).
 %%-----------------------------------------------------------------------------
 load_writes_all_relationships(_Config) ->
 	ok = graphdb_bootstrap:load(),
-	?assertEqual(58, mnesia:table_info(relationships, size)).
+	?assertEqual(60, mnesia:table_info(relationships, size)).
 
 %%-----------------------------------------------------------------------------
 %% Verify the root node (nref 1) has correct structure.
@@ -249,6 +251,22 @@ load_attribute_node_correct(_Config) ->
 	?assertEqual(attribute, Node#node.kind),
 	?assertEqual(10, Node#node.parent),    %% parent: Attribute Name Attributes
 	?assertEqual([#{attribute => 18, value => "Name"}],
+		Node#node.attribute_value_pairs).
+
+%%-----------------------------------------------------------------------------
+%% Verify the Template AVP marker node (nref 31) — added in C3a as the
+%% Connection-arc scope marker.  Pre-graphdb_attr-init it has just the
+%% name AVP; the relationship_avp marker is stamped by graphdb_attr.
+%%-----------------------------------------------------------------------------
+load_template_avp_node_correct(_Config) ->
+	ok = graphdb_bootstrap:load(),
+	{atomic, [Node]} = mnesia:transaction(fun() ->
+		mnesia:read(nodes, 31)
+	end),
+	?assertEqual(31, Node#node.nref),
+	?assertEqual(attribute, Node#node.kind),
+	?assertEqual(16, Node#node.parent),    %% Instance Relationships subtree
+	?assertEqual([#{attribute => 18, value => "Template"}],
 		Node#node.attribute_value_pairs).
 
 %%-----------------------------------------------------------------------------
@@ -290,7 +308,7 @@ load_relationship_ids_above_floor(_Config) ->
 	{atomic, AllRels} = mnesia:transaction(fun() ->
 		mnesia:foldl(fun(Rec, Acc) -> [Rec | Acc] end, [], relationships)
 	end),
-	?assertEqual(58, length(AllRels)),
+	?assertEqual(60, length(AllRels)),
 	BelowFloor = [R || R <- AllRels, R#relationship.id < 10000],
 	?assertEqual([], BelowFloor).
 
@@ -321,10 +339,10 @@ load_relationship_reciprocal_pairs(_Config) ->
 %%-----------------------------------------------------------------------------
 load_nref_floor_set(_Config) ->
 	ok = graphdb_bootstrap:load(),
-	%% 29 relationship pairs = 58 IDs consumed, starting at 10000
-	%% Next nref should be >= 10058
+	%% 30 relationship pairs = 60 IDs consumed, starting at 10000
+	%% Next nref should be >= 10060
 	NextNref = nref_server:get_nref(),
-	?assert(NextNref >= 10058).
+	?assert(NextNref >= 10060).
 
 %%-----------------------------------------------------------------------------
 %% Verify load/0 is idempotent: calling it again does not duplicate data.

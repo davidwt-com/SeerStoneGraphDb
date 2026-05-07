@@ -16,7 +16,7 @@ underway:
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `nref` subsystem       | Fully implemented (DETS-backed ID allocator with `set_floor/1`)                                                                                    |
 | `dictionary` subsystem | `dictionary_imp` implemented; server stubs not yet wired (Task 7)                                                                                  |
-| `graphdb_bootstrap`    | Fully implemented — Mnesia schema/table creation, bootstrap scaffold loader (30 nodes, 29 relationship pairs)                                      |
+| `graphdb_bootstrap`    | Fully implemented — Mnesia schema/table creation, bootstrap scaffold loader (31 nodes, 30 relationship pairs)                                      |
 | `graphdb_mgr`          | Implemented — bootstrap init, public read API (`get_node`, `get_relationships`), category immutability guard; write operations delegate to workers |
 | `graphdb_attr`         | Fully implemented — attribute library (name, literal, relationship attributes, relationship types)                                                 |
 | `graphdb_class`        | Fully implemented — taxonomic hierarchy, qualifying characteristics, class-level inheritance                                                       |

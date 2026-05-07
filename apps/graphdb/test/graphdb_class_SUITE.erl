@@ -70,6 +70,19 @@
 	create_class_rejects_bad_parent_kind/1,
 	create_class_rejects_missing_parent/1,
 	create_class_writes_compositional_arcs/1,
+	create_class_auto_creates_default_template/1,
+	%% Templates
+	add_template_basic/1,
+	add_template_rejects_duplicate_name/1,
+	add_template_rejects_non_class/1,
+	get_template_returns_node/1,
+	get_template_rejects_non_template/1,
+	templates_for_class_lists_all/1,
+	default_template_returns_default/1,
+	default_template_not_found_after_delete/1,
+	class_in_ancestry_self/1,
+	class_in_ancestry_ancestor/1,
+	class_in_ancestry_unrelated/1,
 	%% Qualifying characteristics
 	add_qc_basic/1,
 	add_qc_idempotent/1,
@@ -99,8 +112,9 @@ suite() ->
 	[{timetrap, {seconds, 30}}].
 
 all() ->
-	[{group, seeding}, {group, creation}, {group, qualifying},
-	 {group, lookups}, {group, hierarchy}, {group, inheritance}].
+	[{group, seeding}, {group, creation}, {group, templates},
+	 {group, qualifying}, {group, lookups}, {group, hierarchy},
+	 {group, inheritance}].
 
 groups() ->
 	[
@@ -114,7 +128,21 @@ groups() ->
 			create_class_subclass,
 			create_class_rejects_bad_parent_kind,
 			create_class_rejects_missing_parent,
-			create_class_writes_compositional_arcs
+			create_class_writes_compositional_arcs,
+			create_class_auto_creates_default_template
+		]},
+		{templates, [], [
+			add_template_basic,
+			add_template_rejects_duplicate_name,
+			add_template_rejects_non_class,
+			get_template_returns_node,
+			get_template_rejects_non_template,
+			templates_for_class_lists_all,
+			default_template_returns_default,
+			default_template_not_found_after_delete,
+			class_in_ancestry_self,
+			class_in_ancestry_ancestor,
+			class_in_ancestry_unrelated
 		]},
 		{qualifying, [], [
 			add_qc_basic,
@@ -294,14 +322,17 @@ create_class_rejects_missing_parent(_Config) ->
 		graphdb_class:create_class("Bad", 99999)).
 
 %%-----------------------------------------------------------------------------
-%% Creating a class must write the compositional parent/child arc pair.
+%% Creating a class must write the taxonomic parent/child arc pair plus
+%% the default template node and its compositional class -> template arc
+%% pair (+2 nodes total: class + default template; +4 arcs total: 2
+%% taxonomy + 2 composition).
 %%-----------------------------------------------------------------------------
 create_class_writes_compositional_arcs(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	RelsBefore = mnesia:table_info(relationships, size),
 	{ok, Nref} = graphdb_class:create_class("Vehicle", 3),
 	RelsAfter = mnesia:table_info(relationships, size),
-	?assertEqual(RelsBefore + 2, RelsAfter),
+	?assertEqual(RelsBefore + 4, RelsAfter),
 
 	%% Parent (3) -> Child (Nref) with char=26 should exist
 	{atomic, ParentOut} = mnesia:transaction(fun() ->
@@ -322,6 +353,145 @@ create_class_writes_compositional_arcs(_Config) ->
 		R#relationship.characterization =:= 25 andalso
 		R#relationship.reciprocal =:= 26
 	end, ChildOut)).
+
+
+%%-----------------------------------------------------------------------------
+%% Creating a class must auto-create a "default" template as a
+%% compositional child (kind=template, parent=ClassNref).
+%%-----------------------------------------------------------------------------
+create_class_auto_creates_default_template(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, TemplateNref} = graphdb_class:default_template(ClassNref),
+	{ok, TemplateNode} = graphdb_class:get_template(TemplateNref),
+	?assertEqual(template, TemplateNode#node.kind),
+	?assertEqual(ClassNref, TemplateNode#node.parent),
+	?assert(lists:member(#{attribute => 19, value => "default"},
+		TemplateNode#node.attribute_value_pairs)).
+
+
+%%=============================================================================
+%% Template Tests
+%%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% add_template/2 attaches a named template as a compositional child.
+%%-----------------------------------------------------------------------------
+add_template_basic(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, TmplNref} = graphdb_class:add_template(ClassNref, "biological"),
+	{ok, Node} = graphdb_class:get_template(TmplNref),
+	?assertEqual(template, Node#node.kind),
+	?assertEqual(ClassNref, Node#node.parent),
+	?assert(lists:member(#{attribute => 19, value => "biological"},
+		Node#node.attribute_value_pairs)).
+
+%%-----------------------------------------------------------------------------
+%% add_template/2 rejects a name already taken by an existing template
+%% (including the auto-created "default").
+%%-----------------------------------------------------------------------------
+add_template_rejects_duplicate_name(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	?assertMatch({error, {template_already_exists, "default"}},
+		graphdb_class:add_template(ClassNref, "default")).
+
+%%-----------------------------------------------------------------------------
+%% add_template/2 rejects a non-class parent.
+%%-----------------------------------------------------------------------------
+add_template_rejects_non_class(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	%% nref 6 is an attribute (Names subtree), not a class
+	?assertMatch({error, _},
+		graphdb_class:add_template(6, "x")).
+
+%%-----------------------------------------------------------------------------
+%% get_template returns the template node.
+%%-----------------------------------------------------------------------------
+get_template_returns_node(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, TmplNref} = graphdb_class:default_template(ClassNref),
+	{ok, Node} = graphdb_class:get_template(TmplNref),
+	?assertEqual(TmplNref, Node#node.nref),
+	?assertEqual(template, Node#node.kind).
+
+%%-----------------------------------------------------------------------------
+%% get_template rejects a class nref (kind mismatch).
+%%-----------------------------------------------------------------------------
+get_template_rejects_non_template(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	?assertEqual({error, not_a_template},
+		graphdb_class:get_template(ClassNref)).
+
+%%-----------------------------------------------------------------------------
+%% templates_for_class returns all templates (default plus any added).
+%%-----------------------------------------------------------------------------
+templates_for_class_lists_all(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, _} = graphdb_class:add_template(ClassNref, "biological"),
+	{ok, _} = graphdb_class:add_template(ClassNref, "social"),
+	{ok, Templates} = graphdb_class:templates_for_class(ClassNref),
+	Names = [V || #node{attribute_value_pairs = AVPs} <- Templates,
+		#{attribute := 19, value := V} <- AVPs],
+	?assertEqual(lists:sort(["default", "biological", "social"]),
+		lists:sort(Names)).
+
+%%-----------------------------------------------------------------------------
+%% default_template returns the auto-created default template's nref.
+%%-----------------------------------------------------------------------------
+default_template_returns_default(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, TmplNref} = graphdb_class:default_template(ClassNref),
+	{ok, Node} = graphdb_class:get_template(TmplNref),
+	?assert(lists:member(#{attribute => 19, value => "default"},
+		Node#node.attribute_value_pairs)).
+
+%%-----------------------------------------------------------------------------
+%% Deleting the default template node makes default_template return
+%% not_found — the class then forces explicit Template specification on
+%% any subsequent Connection arc.
+%%-----------------------------------------------------------------------------
+default_template_not_found_after_delete(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, TmplNref} = graphdb_class:default_template(ClassNref),
+	{atomic, ok} = mnesia:transaction(fun() ->
+		mnesia:delete({nodes, TmplNref})
+	end),
+	?assertEqual(not_found, graphdb_class:default_template(ClassNref)).
+
+%%-----------------------------------------------------------------------------
+%% class_in_ancestry returns true when the candidate equals the class.
+%%-----------------------------------------------------------------------------
+class_in_ancestry_self(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	?assert(graphdb_class:class_in_ancestry(ClassNref, ClassNref)).
+
+%%-----------------------------------------------------------------------------
+%% class_in_ancestry returns true when the candidate is an ancestor.
+%%-----------------------------------------------------------------------------
+class_in_ancestry_ancestor(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, AnimalNref} = graphdb_class:create_class("Animal", 3),
+	{ok, MammalNref} = graphdb_class:create_class("Mammal", AnimalNref),
+	{ok, WhaleNref}  = graphdb_class:create_class("Whale", MammalNref),
+	?assert(graphdb_class:class_in_ancestry(AnimalNref, WhaleNref)),
+	?assert(graphdb_class:class_in_ancestry(MammalNref, WhaleNref)).
+
+%%-----------------------------------------------------------------------------
+%% class_in_ancestry returns false for unrelated classes.
+%%-----------------------------------------------------------------------------
+class_in_ancestry_unrelated(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, AnimalNref}  = graphdb_class:create_class("Animal", 3),
+	{ok, VehicleNref} = graphdb_class:create_class("Vehicle", 3),
+	?assertNot(graphdb_class:class_in_ancestry(VehicleNref, AnimalNref)).
 
 
 %%=============================================================================

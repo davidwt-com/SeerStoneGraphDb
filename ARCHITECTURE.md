@@ -97,7 +97,7 @@ Five top-level categories are pre-assigned at bootstrap:
 5  └── Projects    (organisational anchor for project databases — see §6)
 ```
 
-The full 30-node BFS scaffold (nrefs 1–30) is documented in
+The full 31-node BFS scaffold (nrefs 1–31) is documented in
 `apps/graphdb/priv/bootstrap.terms`. Code that needs specific nrefs uses
 the constants defined as macros in the worker that owns them
 (`graphdb_attr`, `graphdb_class`, `graphdb_instance`).
@@ -109,6 +109,7 @@ the constants defined as macros in the worker that owns them
 ```erlang
 -record(relationship, {
   id,               %% integer() — primary key
+  kind,             %% taxonomy | composition | connection | instantiation
   source_nref,      %% integer() — arc origin
   characterization, %% integer() — arc label (an attribute nref)
   target_nref,      %% integer() — arc target
@@ -132,17 +133,13 @@ provenance, confidence, weights, validity time frames, flags. Per
 is part of the connection's identity for ASSOCIATE-type arcs, but does
 not participate in graph traversal by default.
 
-### Pending schema additions
+### Connection arcs and the `Template` AVP
 
-One field and one AVP convention are required by the spec but not yet
-on the record. See §10 and `TASKS-CRITICAL.md`:
-
-- `kind` — explicit relationship type (`taxonomy | composition |
-  connection | instantiation`).
-- `Template` AVP — required on `kind = connection` arcs, forbidden
-  elsewhere; the AVP attribute itself is bootstrap-seeded as nref 31.
-
-Both must land before the database holds live data.
+Every `kind = connection` arc carries a `Template` AVP — `#{attribute
+=> 31, value => TemplateNref}` — that scopes the connection's
+semantic context. The AVP attribute is bootstrap-seeded at nref 31;
+it is forbidden on relationships of any other kind. See §7 and
+`graphdb_instance:add_relationship/4,5`.
 
 ---
 
@@ -318,19 +315,8 @@ multi-class membership is silently disambiguated by Mnesia ordering
 
 ## 10. Open Architectural Questions
 
-Pending architectural decisions and required additions. Each item has a
-detailed task in the severity-grouped task files.
-
-### Pending schema additions
-
-| Schema element              | Purpose                                                                                                                                                    | Spec reference                  |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| `relationship.kind`         | Explicit type: `taxonomy \| composition \| connection \| instantiation`                                                                                    | §5 — `TASKS-CRITICAL.md` C1     |
-| `node.kind` adds `template` | Fifth peer to category/attribute/class/instance; templates are nodes whose compositional parent is a class                                                 | §3, §7 — `TASKS-CRITICAL.md` C2 |
-| `Template` relationship AVP | Bootstrap-seeded attribute (nref 31); required on `kind = connection` arcs, forbidden elsewhere; per-class default template auto-created at class creation | §5, §7 — `TASKS-CRITICAL.md` C3 |
-
-All three must land before any database ships with live data — schema
-migration on populated Mnesia tables is otherwise required.
+Pending architectural decisions. Each item has a detailed task in the
+severity-grouped task files.
 
 ### Multi-inheritance representation
 
@@ -340,14 +326,6 @@ parent in `node.parent`; additional parents must live in the
 relationships table only. The `graphdb_class` ancestor walk and
 `graphdb_instance.resolve_from_class` need to traverse via arcs rather
 than the single parent field. See `TASKS-HIGH.md` H3, H4, H5.
-
-### Templates
-
-Templates (spec §7) are active concept nodes that scope connections.
-Representation choice is open — 5th node `kind = template`, or
-`kind = class` with `is_template = true` AVP. Required for §13 query
-filtering and §11 connection-pattern learning. See `TASKS-MEDIUM.md`
-M7.
 
 ### Multilingual storage
 

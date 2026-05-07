@@ -6,7 +6,7 @@
 %% nodes table is empty.  After a successful load, nref_server:set_floor/1 is
 %% called and the file is never consulted again.
 %%
-%% Pre-assigned nrefs: 1-30 (nodes).
+%% Pre-assigned nrefs: 1-31 (nodes).
 %% Relationship record IDs are allocated by nref_server:get_nref/0, which
 %% starts at nref_start (10000) because {nref_start,...} is processed first.
 %%
@@ -93,6 +93,11 @@
 {node, 29, attribute, 16, {18, "Class"},    []}.  %% instance -> class membership arc label
 {node, 30, attribute, 16, {18, "Instance"}, []}.  %% class -> instances membership arc label
 
+%% Level 4 -- relationship-AVP marker attribute (graphdb_attr stamps the
+%% `relationship_avp => true` AVP on this node post-bootstrap, after the
+%% `relationship_avp` flag-attribute itself is seeded).
+{node, 31, attribute, 16, {18, "Template"}, []}.  %% Connection-scope AVP marker
+
 %% =========================================================================
 %% Compositional arcs
 %%
@@ -139,3 +144,4 @@
 {relationship, 16, 24, [], 23, 28, [], composition}.  %% Instance Relationships  -> Child
 {relationship, 16, 24, [], 23, 29, [], composition}.  %% Instance Relationships  -> Class
 {relationship, 16, 24, [], 23, 30, [], composition}.  %% Instance Relationships  -> Instance
+{relationship, 16, 24, [], 23, 31, [], composition}.  %% Instance Relationships  -> Template

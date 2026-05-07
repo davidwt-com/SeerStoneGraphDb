@@ -64,6 +64,8 @@
 	seeds_created_on_first_start/1,
 	seeds_idempotent_on_restart/1,
 	seeded_nrefs_are_above_floor/1,
+	template_avp_marker_stamped/1,
+	template_avp_marker_idempotent/1,
 	%% Creators
 	create_name_attribute_basic/1,
 	create_literal_attribute_stores_type/1,
@@ -95,7 +97,9 @@ groups() ->
 		{seeding, [], [
 			seeds_created_on_first_start,
 			seeds_idempotent_on_restart,
-			seeded_nrefs_are_above_floor
+			seeded_nrefs_are_above_floor,
+			template_avp_marker_stamped,
+			template_avp_marker_idempotent
 		]},
 		{creators, [], [
 			create_name_attribute_basic,
@@ -232,6 +236,37 @@ seeded_nrefs_are_above_floor(_Config) ->
 	?assert(Lt >= 10000),
 	?assert(Tk >= 10000),
 	?assert(Ra >= 10000).
+
+%%-----------------------------------------------------------------------------
+%% After init, the bootstrap-seeded Template AVP node (nref 31) carries
+%% the relationship_avp marker AVP whose value is `true`.  The marker
+%% attribute itself is the runtime-seeded `relationship_avp` literal.
+%%-----------------------------------------------------------------------------
+template_avp_marker_stamped(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{relationship_avp := RaNref}} = graphdb_attr:seeded_nrefs(),
+	{atomic, [Node]} = mnesia:transaction(fun() ->
+		mnesia:read(nodes, 31)
+	end),
+	AVPs = Node#node.attribute_value_pairs,
+	?assert(lists:member(#{attribute => RaNref, value => true}, AVPs)).
+
+%%-----------------------------------------------------------------------------
+%% Restarting graphdb_attr does not duplicate the marker AVP — the
+%% post-bootstrap stamp is idempotent.
+%%-----------------------------------------------------------------------------
+template_avp_marker_idempotent(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{atomic, [Before]} = mnesia:transaction(fun() ->
+		mnesia:read(nodes, 31)
+	end),
+	BeforeAVPs = Before#node.attribute_value_pairs,
+	ok = gen_server:stop(graphdb_attr),
+	{ok, _} = graphdb_attr:start_link(),
+	{atomic, [After]} = mnesia:transaction(fun() ->
+		mnesia:read(nodes, 31)
+	end),
+	?assertEqual(BeforeAVPs, After#node.attribute_value_pairs).
 
 
 %%=============================================================================
@@ -373,14 +408,14 @@ get_attribute_rejects_non_attribute(_Config) ->
 
 %%-----------------------------------------------------------------------------
 %% list_attributes returns every attribute-kind node including
-%% bootstrap (25 of them: nrefs 6-30) plus the three seeds plus any
-%% runtime creates in this test.
+%% bootstrap (26 of them: nrefs 6-30 and 31) plus the three seeds plus
+%% any runtime creates in this test.
 %%-----------------------------------------------------------------------------
 list_attributes_includes_bootstrap_and_runtime(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, Before} = graphdb_attr:list_attributes(),
-	%% Bootstrap has 25 attribute nodes (nrefs 6-30); seeding adds 3
-	?assertEqual(25 + 3, length(Before)),
+	%% Bootstrap has 26 attribute nodes (nrefs 6-31); seeding adds 3
+	?assertEqual(26 + 3, length(Before)),
 
 	{ok, _} = graphdb_attr:create_name_attribute("One"),
 	{ok, _} = graphdb_attr:create_name_attribute("Two"),

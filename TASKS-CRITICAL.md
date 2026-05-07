@@ -1,5 +1,17 @@
 # SeerStoneGraphDb — Critical Tasks
 
+**Status: complete.** All three critical tasks have landed on `develop`.
+The next series of work opens with a commit that removes this file and
+cleans up the doc references that pointed at it.
+
+| Task | Status | Landing commit                         |
+| ---- | ------ | -------------------------------------- |
+| C1   | Done   | `6c16e2b` — relationship `kind` field  |
+| C2   | Done   | `9a43187` — node kind atom `template`  |
+| C3   | Done   | (this PR) — Template scoping (a/b/c)   |
+
+---
+
 Schema-level departures from `the-knowledge-network.md`. These change
 the shape of the `relationship` record, the `node` kind atom set, or
 the bootstrap scaffold. Land them before the database has live data —
@@ -18,7 +30,7 @@ adds the template-AVP enforcement rule that depends on both C1 and C2.
 
 ---
 
-## C1. Add `kind` field to the `relationship` record
+## C1. Add `kind` field to the `relationship` record — **DONE** (`6c16e2b`)
 
 **Spec:** §5 — *"Relationships between concept nodes are strictly
 typed. Four types exist: Taxonomy (IS-A), Composition (PART-OF),
@@ -65,7 +77,7 @@ Bootstrap loader assigns `kind` based on the characterization nref
 
 ---
 
-## C2. Add `template` to the node kind atom set
+## C2. Add `template` to the node kind atom set — **DONE** (`9a43187`)
 
 **Spec:** §3 — *"every class, attribute, **rule**, **template**,
 instance, and vocabulary entry is a concept node."* §7 — *"a template
@@ -108,7 +120,7 @@ only makes the kind exist.
 
 ---
 
-## C3. Establish template scoping (AVP + per-class default template)
+## C3. Establish template scoping (AVP + per-class default template) — **DONE** (this PR)
 
 **Spec:** §7 Templates — *"a template is a named semantic context
 defined on a class in the ontology... an active node in the ontology

@@ -88,6 +88,12 @@
 -define(ATTR_CHILD_ARC,  24).  %% Child/AttrRel  -- parent -> child
 -define(ATTR_PARENT_ARC, 23).  %% Parent/AttrRel -- child  -> parent
 
+%% Bootstrap-seeded `Template` relationship-AVP marker attribute.  The
+%% `relationship_avp => true` flag is stamped on this node by init/1
+%% post-bootstrap (the flag-attribute is seeded first, then this node
+%% is updated -- bootstrap.terms cannot reference a runtime-seeded nref).
+-define(TEMPLATE_AVP_NREF, 31).
+
 
 %%---------------------------------------------------------------------
 %% Record Definitions
@@ -286,6 +292,7 @@ init([]) ->
 			target_kind_nref      = ensure_seed("target_kind"),
 			relationship_avp_nref = ensure_seed("relationship_avp")
 		},
+		ok = ensure_template_avp_marker(State#state.relationship_avp_nref),
 		logger:info("graphdb_attr: started (literal_type=~p, target_kind=~p, "
 			"relationship_avp=~p)",
 			[State#state.literal_type_nref, State#state.target_kind_nref,
@@ -518,4 +525,42 @@ do_list_children(ParentNref) ->
 	case mnesia:transaction(F) of
 		{atomic, Nodes}   -> {ok, Nodes};
 		{aborted, Reason} -> {error, Reason}
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% ensure_template_avp_marker(RelAvpAttrNref) -> ok
+%%
+%% Idempotently stamps `#{attribute => RelAvpAttrNref, value => true}` on
+%% the bootstrap-seeded `Template` attribute node (nref 31).  This marks
+%% the Template AVP as a relationship-AVP, distinguishing it from
+%% literal/name attributes.  bootstrap.terms cannot include this AVP
+%% because the flag-attribute itself (`relationship_avp`) is seeded at
+%% runtime, so the nref is unknown until init/1.
+%%-----------------------------------------------------------------------------
+ensure_template_avp_marker(RelAvpAttrNref) ->
+	Txn = fun() ->
+		case mnesia:read(nodes, ?TEMPLATE_AVP_NREF) of
+			[#node{attribute_value_pairs = AVPs} = Node] ->
+				Already = lists:any(fun
+					(#{attribute := A, value := true}) -> A =:= RelAvpAttrNref;
+					(_) -> false
+				end, AVPs),
+				case Already of
+					true ->
+						ok;
+					false ->
+						NewAVP = #{attribute => RelAvpAttrNref, value => true},
+						Updated = Node#node{
+							attribute_value_pairs = AVPs ++ [NewAVP]
+						},
+						ok = mnesia:write(nodes, Updated, write)
+				end;
+			[] ->
+				throw({error, {template_avp_node_missing, ?TEMPLATE_AVP_NREF}})
+		end
+	end,
+	case mnesia:transaction(Txn) of
+		{atomic, ok}      -> ok;
+		{aborted, Reason} -> throw({error, Reason})
 	end.

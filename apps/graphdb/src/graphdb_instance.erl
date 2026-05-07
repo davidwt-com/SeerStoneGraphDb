@@ -89,6 +89,11 @@
 -define(CLASS_MEMBERSHIP_ARC,    29).  %% instance -> class
 -define(INSTANCE_MEMBERSHIP_ARC, 30).  %% class -> instance
 
+%% Bootstrap-seeded `Template` relationship-AVP marker attribute (nref 31).
+%% Required on every Connection arc; its value is the nref of the template
+%% node defining the semantic context for the connection.
+-define(TEMPLATE_AVP_NREF, 31).
+
 
 %%---------------------------------------------------------------------
 %% Record Definitions
@@ -122,10 +127,12 @@
 		%% Creators
 		create_instance/3,
 		add_relationship/4,
+		add_relationship/5,
 		%% Lookups
 		get_instance/1,
 		children/1,
 		compositional_ancestors/1,
+		class_of/1,
 		%% Inheritance
 		resolve_value/2
 		]).
@@ -177,12 +184,39 @@ create_instance(Name, ClassNref, ParentNref) ->
 %% add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref) ->
 %%     ok | {error, term()}
 %%
-%% Writes two directed relationship rows atomically (one per direction).
-%% Initial avps = [].
+%% Convenience form: looks up the source instance's class default
+%% template and uses it as the Connection arc's template scope.
+%% Equivalent to:
+%%
+%%   add_relationship(S, C, T, R, default_template_of_source_class)
+%%
+%% Returns {error, no_default_template} if the source's class has had
+%% its default template removed; the caller must then use /5 to provide
+%% an explicit template.
 %%-----------------------------------------------------------------------------
 add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref) ->
 	gen_server:call(?MODULE,
-		{add_relationship, SourceNref, CharNref, TargetNref, ReciprocalNref}).
+		{add_relationship, SourceNref, CharNref, TargetNref,
+			ReciprocalNref, default}).
+
+
+%%-----------------------------------------------------------------------------
+%% add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+%%                  TemplateNref) -> ok | {error, term()}
+%%
+%% Writes two directed relationship rows atomically (one per direction)
+%% with kind=connection.  The Template AVP (#{attribute => 31, value =>
+%% TemplateNref}) is stamped on both rows.
+%%
+%% Validates that TemplateNref resolves to a node with kind=template
+%% whose parent class is in the taxonomic ancestry of the source's
+%% class or the target's class.
+%%-----------------------------------------------------------------------------
+add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+		TemplateNref) when is_integer(TemplateNref) ->
+	gen_server:call(?MODULE,
+		{add_relationship, SourceNref, CharNref, TargetNref,
+			ReciprocalNref, TemplateNref}).
 
 
 %%-----------------------------------------------------------------------------
@@ -214,6 +248,18 @@ compositional_ancestors(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
+%% class_of(InstanceNref) ->
+%%     {ok, ClassNref} | not_found | {error, term()}
+%%
+%% Resolves the class membership of an instance via the membership arc
+%% (characterization=29).  Returns the class nref, or `not_found` if
+%% the instance has no class membership arc.
+%%-----------------------------------------------------------------------------
+class_of(InstanceNref) ->
+	gen_server:call(?MODULE, {class_of, InstanceNref}).
+
+
+%%-----------------------------------------------------------------------------
 %% resolve_value(InstanceNref, AttrNref) ->
 %%     {ok, Value} | not_found | {error, term()}
 %%
@@ -242,8 +288,8 @@ init([]) ->
 handle_call({create_instance, Name, ClassNref, ParentNref}, _From, State) ->
 	{reply, do_create_instance(Name, ClassNref, ParentNref), State};
 
-handle_call({add_relationship, S, C, T, R}, _From, State) ->
-	{reply, do_add_relationship(S, C, T, R), State};
+handle_call({add_relationship, S, C, T, R, TemplateSpec}, _From, State) ->
+	{reply, do_add_relationship(S, C, T, R, TemplateSpec), State};
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Lookups
@@ -256,6 +302,9 @@ handle_call({children, Nref}, _From, State) ->
 
 handle_call({compositional_ancestors, Nref}, _From, State) ->
 	{reply, do_compositional_ancestors(Nref), State};
+
+handle_call({class_of, Nref}, _From, State) ->
+	{reply, do_class_of(Nref), State};
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Inheritance
@@ -417,31 +466,110 @@ do_validate_parent(ParentNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+%% do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+%%                     TemplateSpec) -> ok | {error, term()}
+%%
+%% TemplateSpec is either the atom `default` (look up source's class
+%% default template) or an integer template nref.  Validates the
+%% template's class is in the source's or target's class taxonomic
+%% ancestry, then atomically writes the two directed connection rows
+%% with the Template AVP stamped on each.
+%%-----------------------------------------------------------------------------
+do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+		TemplateSpec) ->
+	case resolve_arc_classes(SourceNref, TargetNref) of
+		{ok, SourceClass, TargetClass} ->
+			case resolve_template(TemplateSpec, SourceClass) of
+				{ok, TemplateNref} ->
+					case validate_template_scope(TemplateNref,
+							SourceClass, TargetClass) of
+						ok ->
+							write_connection_arcs(SourceNref, CharNref,
+								TargetNref, ReciprocalNref, TemplateNref);
+						{error, _} = Err -> Err
+					end;
+				{error, _} = Err -> Err
+			end;
+		{error, _} = Err -> Err
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% resolve_arc_classes(SourceNref, TargetNref) ->
+%%     {ok, SourceClass, TargetClass} | {error, term()}
+%%-----------------------------------------------------------------------------
+resolve_arc_classes(SourceNref, TargetNref) ->
+	case do_class_of(SourceNref) of
+		{ok, SourceClass} ->
+			case do_class_of(TargetNref) of
+				{ok, TargetClass}  -> {ok, SourceClass, TargetClass};
+				not_found          -> {error, {target_has_no_class, TargetNref}};
+				{error, _} = Err   -> Err
+			end;
+		not_found            -> {error, {source_has_no_class, SourceNref}};
+		{error, _} = Err     -> Err
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% resolve_template(TemplateSpec, SourceClass) ->
+%%     {ok, TemplateNref} | {error, term()}
+%%-----------------------------------------------------------------------------
+resolve_template(default, SourceClass) ->
+	case graphdb_class:default_template(SourceClass) of
+		{ok, Nref}        -> {ok, Nref};
+		not_found         -> {error, no_default_template};
+		{error, _} = Err  -> Err
+	end;
+resolve_template(TemplateNref, _SourceClass) when is_integer(TemplateNref) ->
+	{ok, TemplateNref}.
+
+
+%%-----------------------------------------------------------------------------
+%% validate_template_scope(TemplateNref, SourceClass, TargetClass) ->
 %%     ok | {error, term()}
 %%
-%% Writes two directed relationship rows atomically.
+%% Confirms TemplateNref resolves to a kind=template node whose parent
+%% class is in SourceClass's or TargetClass's taxonomic ancestry.
 %%-----------------------------------------------------------------------------
-do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+validate_template_scope(TemplateNref, SourceClass, TargetClass) ->
+	case graphdb_class:get_template(TemplateNref) of
+		{ok, #node{parent = TmplClass}} ->
+			InSource = graphdb_class:class_in_ancestry(TmplClass, SourceClass),
+			InTarget = graphdb_class:class_in_ancestry(TmplClass, TargetClass),
+			case InSource orelse InTarget of
+				true  -> ok;
+				false -> {error, {template_class_not_in_ancestry,
+					TemplateNref, TmplClass, SourceClass, TargetClass}}
+			end;
+		{error, Reason} ->
+			{error, {invalid_template, TemplateNref, Reason}}
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% write_connection_arcs(S, C, T, R, TemplateNref) -> ok | {error, term()}
+%%-----------------------------------------------------------------------------
+write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
+		TemplateNref) ->
 	Id1 = nref_server:get_nref(),
 	Id2 = nref_server:get_nref(),
+	TemplateAVP = #{attribute => ?TEMPLATE_AVP_NREF, value => TemplateNref},
 	Fwd = #relationship{
-		id = Id1,
-		kind = connection,
+		id = Id1, kind = connection,
 		source_nref = SourceNref,
 		characterization = CharNref,
 		target_nref = TargetNref,
 		reciprocal = ReciprocalNref,
-		avps = []
+		avps = [TemplateAVP]
 	},
 	Rev = #relationship{
-		id = Id2,
-		kind = connection,
+		id = Id2, kind = connection,
 		source_nref = TargetNref,
 		characterization = ReciprocalNref,
 		target_nref = SourceNref,
 		reciprocal = CharNref,
-		avps = []
+		avps = [TemplateAVP]
 	},
 	Txn = fun() ->
 		ok = mnesia:write(relationships, Fwd, write),
@@ -449,6 +577,27 @@ do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref) ->
 	end,
 	case mnesia:transaction(Txn) of
 		{atomic, ok}      -> ok;
+		{aborted, Reason} -> {error, Reason}
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% do_class_of(InstanceNref) ->
+%%     {ok, ClassNref} | not_found | {error, term()}
+%%-----------------------------------------------------------------------------
+do_class_of(InstanceNref) ->
+	F = fun() ->
+		Rels = mnesia:index_read(relationships, InstanceNref,
+			#relationship.source_nref),
+		lists:search(
+			fun(R) ->
+				R#relationship.characterization =:= ?CLASS_MEMBERSHIP_ARC
+			end, Rels)
+	end,
+	case mnesia:transaction(F) of
+		{atomic, {value, #relationship{target_nref = ClassNref}}} ->
+			{ok, ClassNref};
+		{atomic, false}   -> not_found;
 		{aborted, Reason} -> {error, Reason}
 	end.
 

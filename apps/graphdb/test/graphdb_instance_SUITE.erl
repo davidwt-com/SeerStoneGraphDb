@@ -70,6 +70,12 @@
 	%% Relationships
 	add_relationship_basic/1,
 	add_relationship_both_directions/1,
+	add_relationship_stamps_template_avp/1,
+	add_relationship_explicit_template/1,
+	add_relationship_rejects_non_template_nref/1,
+	add_relationship_rejects_template_out_of_ancestry/1,
+	add_relationship_no_default_after_delete/1,
+	class_of_returns_class/1,
 	%% Lookups
 	get_instance_returns_node/1,
 	get_instance_not_found/1,
@@ -114,7 +120,13 @@ groups() ->
 		]},
 		{relationships, [], [
 			add_relationship_basic,
-			add_relationship_both_directions
+			add_relationship_both_directions,
+			add_relationship_stamps_template_avp,
+			add_relationship_explicit_template,
+			add_relationship_rejects_non_template_nref,
+			add_relationship_rejects_template_out_of_ancestry,
+			add_relationship_no_default_after_delete,
+			class_of_returns_class
 		]},
 		{lookups, [], [
 			get_instance_returns_node,
@@ -355,6 +367,103 @@ add_relationship_both_directions(_Config) ->
 		R#relationship.characterization =:= MadeByNref andalso
 		R#relationship.reciprocal =:= MakesNref
 	end, TaurusOut)).
+
+%%-----------------------------------------------------------------------------
+%% add_relationship/4 stamps the Template AVP (nref 31) on both rows,
+%% pointing at the source class's default template.
+%%-----------------------------------------------------------------------------
+add_relationship_stamps_template_avp(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Org", 3),
+	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
+	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+
+	{atomic, ARels} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, A, #relationship.source_nref)
+	end),
+	[Fwd] = [R || R <- ARels,
+		R#relationship.characterization =:= Char,
+		R#relationship.target_nref =:= B],
+	?assertEqual(connection, Fwd#relationship.kind),
+	?assert(lists:member(#{attribute => 31, value => DefaultTmpl},
+		Fwd#relationship.avps)).
+
+%%-----------------------------------------------------------------------------
+%% add_relationship/5 accepts an explicit template nref.
+%%-----------------------------------------------------------------------------
+add_relationship_explicit_template(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Person", 3),
+	{ok, AltTmpl} = graphdb_class:add_template(ClassNref, "social"),
+	{ok, A} = graphdb_instance:create_instance("Alice", ClassNref, 5),
+	{ok, B} = graphdb_instance:create_instance("Bob", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip, AltTmpl),
+
+	{atomic, ARels} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, A, #relationship.source_nref)
+	end),
+	[Fwd] = [R || R <- ARels,
+		R#relationship.characterization =:= Char,
+		R#relationship.target_nref =:= B],
+	?assert(lists:member(#{attribute => 31, value => AltTmpl},
+		Fwd#relationship.avps)).
+
+%%-----------------------------------------------------------------------------
+%% add_relationship/5 rejects an nref that is not a template node.
+%%-----------------------------------------------------------------------------
+add_relationship_rejects_non_template_nref(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+	%% ClassNref is a class, not a template
+	?assertMatch({error, {invalid_template, _, not_a_template}},
+		graphdb_instance:add_relationship(A, Char, B, Recip, ClassNref)).
+
+%%-----------------------------------------------------------------------------
+%% add_relationship/5 rejects a template whose parent class is unrelated
+%% to both source and target classes.
+%%-----------------------------------------------------------------------------
+add_relationship_rejects_template_out_of_ancestry(_Config) ->
+	{ok, AnimalCls}  = graphdb_class:create_class("Animal", 3),
+	{ok, VehicleCls} = graphdb_class:create_class("Vehicle", 3),
+	{ok, VehTmpl}    = graphdb_class:default_template(VehicleCls),
+	{ok, A} = graphdb_instance:create_instance("Cat", AnimalCls, 5),
+	{ok, B} = graphdb_instance:create_instance("Dog", AnimalCls, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+	?assertMatch({error, {template_class_not_in_ancestry, _, _, _, _}},
+		graphdb_instance:add_relationship(A, Char, B, Recip, VehTmpl)).
+
+%%-----------------------------------------------------------------------------
+%% After deleting the default template, /4 returns no_default_template;
+%% callers must use /5 with an explicit template.
+%%-----------------------------------------------------------------------------
+add_relationship_no_default_after_delete(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
+	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+	{atomic, ok} = mnesia:transaction(fun() ->
+		mnesia:delete({nodes, DefaultTmpl})
+	end),
+	?assertEqual({error, no_default_template},
+		graphdb_instance:add_relationship(A, Char, B, Recip)).
+
+%%-----------------------------------------------------------------------------
+%% class_of returns the membership class via the instance->class arc.
+%%-----------------------------------------------------------------------------
+class_of_returns_class(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Color", 3),
+	{ok, InstNref} = graphdb_instance:create_instance("Red", ClassNref, 5),
+	?assertEqual({ok, ClassNref}, graphdb_instance:class_of(InstNref)).
 
 
 %%=============================================================================

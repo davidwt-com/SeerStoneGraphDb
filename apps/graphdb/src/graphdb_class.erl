@@ -95,6 +95,11 @@
 -define(ATTR_CHILD_ARC,  24).
 -define(ATTR_PARENT_ARC, 23).
 
+%% Default template name auto-attached to every newly created class.
+%% Class authors may delete the default template to force explicit
+%% disambiguation on subsequent Connection arcs.
+-define(DEFAULT_TEMPLATE_NAME, "default").
+
 
 %%---------------------------------------------------------------------
 %% Record Definitions
@@ -132,10 +137,17 @@
 		%% Creators
 		create_class/2,
 		add_qualifying_characteristic/2,
+		add_template/2,
 		%% Lookups
 		get_class/1,
 		subclasses/1,
 		ancestors/1,
+		get_template/1,
+		templates_for_class/1,
+		default_template/1,
+		%% Class-of resolution helper (used by graphdb_instance to validate
+		%% Template AVP class scope on Connection arcs)
+		class_in_ancestry/2,
 		%% Inheritance
 		inherited_attributes/1,
 		%% Seeded nref accessor
@@ -178,11 +190,30 @@ start_link() ->
 %%
 %% Creates a new class node in the ontology.  ParentClassNref
 %% is either the Classes category (nref 3) for top-level classes or
-%% another class node's nref for subclasses.  Writes the node record and
-%% a compositional parent/child arc pair atomically.
+%% another class node's nref for subclasses.  Atomically writes the
+%% class node, the taxonomic parent/child arc pair, the default
+%% template node (kind=template, parent=ClassNref, name "default"),
+%% and the compositional class -> template arc pair.
+%%
+%% Class authors may later delete the default template to force
+%% explicit Template specification on subsequent Connection arcs
+%% involving instances of this class, or call add_template/2 to
+%% attach additional named templates as compositional children.
 %%-----------------------------------------------------------------------------
 create_class(Name, ParentClassNref) ->
 	gen_server:call(?MODULE, {create_class, Name, ParentClassNref}).
+
+
+%%-----------------------------------------------------------------------------
+%% add_template(ClassNref, Name) -> {ok, TemplateNref} | {error, term()}
+%%
+%% Adds a new named template as a compositional child of ClassNref.
+%% Validates that ClassNref is a class node and that no template with
+%% the same name already exists under it.  Compositional arcs use the
+%% class-child arc labels (26/25), kind = composition.
+%%-----------------------------------------------------------------------------
+add_template(ClassNref, Name) ->
+	gen_server:call(?MODULE, {add_template, ClassNref, Name}).
 
 
 %%-----------------------------------------------------------------------------
@@ -225,6 +256,45 @@ subclasses(ClassNref) ->
 %%-----------------------------------------------------------------------------
 ancestors(ClassNref) ->
 	gen_server:call(?MODULE, {ancestors, ClassNref}).
+
+
+%%-----------------------------------------------------------------------------
+%% get_template(Nref) ->
+%%     {ok, #node{}} | {error, not_found | not_a_template | term()}
+%%-----------------------------------------------------------------------------
+get_template(Nref) ->
+	gen_server:call(?MODULE, {get_template, Nref}).
+
+
+%%-----------------------------------------------------------------------------
+%% templates_for_class(ClassNref) -> {ok, [#node{}]} | {error, term()}
+%%
+%% Returns all template-kind compositional children of the class.
+%%-----------------------------------------------------------------------------
+templates_for_class(ClassNref) ->
+	gen_server:call(?MODULE, {templates_for_class, ClassNref}).
+
+
+%%-----------------------------------------------------------------------------
+%% default_template(ClassNref) ->
+%%     {ok, TemplateNref} | not_found | {error, term()}
+%%
+%% Returns the nref of the template named "default" attached to the
+%% class, or `not_found` if the class author has deleted the default.
+%%-----------------------------------------------------------------------------
+default_template(ClassNref) ->
+	gen_server:call(?MODULE, {default_template, ClassNref}).
+
+
+%%-----------------------------------------------------------------------------
+%% class_in_ancestry(CandidateClassNref, ClassNref) -> boolean()
+%%
+%% Returns true if CandidateClassNref equals ClassNref or is an ancestor
+%% of ClassNref in the taxonomic hierarchy.  Used by graphdb_instance to
+%% validate that a Template AVP's class is in scope for a Connection arc.
+%%-----------------------------------------------------------------------------
+class_in_ancestry(CandidateClassNref, ClassNref) ->
+	gen_server:call(?MODULE, {class_in_ancestry, CandidateClassNref, ClassNref}).
 
 
 %%-----------------------------------------------------------------------------
@@ -282,6 +352,9 @@ handle_call({add_qualifying_characteristic, ClassNref, AttrNref}, _From,
 		#state{qc_attr_nref = QcAttr} = State) ->
 	{reply, do_add_qc(ClassNref, AttrNref, QcAttr), State};
 
+handle_call({add_template, ClassNref, Name}, _From, State) ->
+	{reply, do_add_template(ClassNref, Name), State};
+
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Lookups
 %%-----------------------------------------------------------------------------
@@ -293,6 +366,18 @@ handle_call({subclasses, ClassNref}, _From, State) ->
 
 handle_call({ancestors, ClassNref}, _From, State) ->
 	{reply, do_ancestors(ClassNref), State};
+
+handle_call({get_template, Nref}, _From, State) ->
+	{reply, do_get_template(Nref), State};
+
+handle_call({templates_for_class, ClassNref}, _From, State) ->
+	{reply, do_templates_for_class(ClassNref), State};
+
+handle_call({default_template, ClassNref}, _From, State) ->
+	{reply, do_default_template(ClassNref), State};
+
+handle_call({class_in_ancestry, CandidateNref, ClassNref}, _From, State) ->
+	{reply, do_class_in_ancestry(CandidateNref, ClassNref), State};
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Inheritance
@@ -449,53 +534,224 @@ do_create_seed_attribute(Name) ->
 %% do_create_class(Name, ParentClassNref) ->
 %%     {ok, Nref} | {error, term()}
 %%
-%% Validates the parent, allocates an nref, builds the class node
-%% record with the name AVP, allocates two relationship ids for the
-%% taxonomic parent/child (class IS-A class) arc pair, and writes
-%% all three rows in a single Mnesia transaction.
+%% Validates the parent, allocates nrefs OUTSIDE the Mnesia transaction
+%% (to avoid side-effects on retry), then atomically writes:
+%%   - the class node (kind=class)
+%%   - taxonomic parent/child arc pair  (kind=taxonomy, char 26/25)
+%%   - the default template node (kind=template, parent=class)
+%%   - compositional class -> template arc pair (kind=composition, char 26/25)
 %%-----------------------------------------------------------------------------
 do_create_class(Name, ParentClassNref) ->
 	case do_validate_parent(ParentClassNref) of
 		ok ->
-			Nref = nref_server:get_nref(),
-			NameAVP = #{attribute => ?NAME_ATTR_FOR_CLASS, value => Name},
-			Node = #node{
-				nref = Nref,
+			ClassNref      = nref_server:get_nref(),
+			TaxId1         = nref_server:get_nref(),
+			TaxId2         = nref_server:get_nref(),
+			TemplateNref   = nref_server:get_nref(),
+			TmplCompId1    = nref_server:get_nref(),
+			TmplCompId2    = nref_server:get_nref(),
+			ClassNameAVP    = #{attribute => ?NAME_ATTR_FOR_CLASS, value => Name},
+			TemplateNameAVP = #{attribute => ?NAME_ATTR_FOR_CLASS,
+				value => ?DEFAULT_TEMPLATE_NAME},
+			ClassNode = #node{
+				nref = ClassNref,
 				kind = class,
 				parent = ParentClassNref,
-				attribute_value_pairs = [NameAVP]
+				attribute_value_pairs = [ClassNameAVP]
 			},
-			Id1 = nref_server:get_nref(),
-			Id2 = nref_server:get_nref(),
-			P2C = #relationship{
-				id = Id1,
-				kind = taxonomy,
+			TemplateNode = #node{
+				nref = TemplateNref,
+				kind = template,
+				parent = ClassNref,
+				attribute_value_pairs = [TemplateNameAVP]
+			},
+			TaxP2C = #relationship{
+				id = TaxId1, kind = taxonomy,
 				source_nref = ParentClassNref,
 				characterization = ?CLASS_CHILD_ARC,
-				target_nref = Nref,
+				target_nref = ClassNref,
 				reciprocal = ?CLASS_PARENT_ARC,
 				avps = []
 			},
-			C2P = #relationship{
-				id = Id2,
-				kind = taxonomy,
-				source_nref = Nref,
+			TaxC2P = #relationship{
+				id = TaxId2, kind = taxonomy,
+				source_nref = ClassNref,
 				characterization = ?CLASS_PARENT_ARC,
 				target_nref = ParentClassNref,
 				reciprocal = ?CLASS_CHILD_ARC,
 				avps = []
 			},
+			TmplP2C = #relationship{
+				id = TmplCompId1, kind = composition,
+				source_nref = ClassNref,
+				characterization = ?CLASS_CHILD_ARC,
+				target_nref = TemplateNref,
+				reciprocal = ?CLASS_PARENT_ARC,
+				avps = []
+			},
+			TmplC2P = #relationship{
+				id = TmplCompId2, kind = composition,
+				source_nref = TemplateNref,
+				characterization = ?CLASS_PARENT_ARC,
+				target_nref = ClassNref,
+				reciprocal = ?CLASS_CHILD_ARC,
+				avps = []
+			},
 			Txn = fun() ->
-				ok = mnesia:write(nodes, Node, write),
-				ok = mnesia:write(relationships, P2C, write),
-				ok = mnesia:write(relationships, C2P, write)
+				ok = mnesia:write(nodes, ClassNode, write),
+				ok = mnesia:write(nodes, TemplateNode, write),
+				ok = mnesia:write(relationships, TaxP2C, write),
+				ok = mnesia:write(relationships, TaxC2P, write),
+				ok = mnesia:write(relationships, TmplP2C, write),
+				ok = mnesia:write(relationships, TmplC2P, write)
 			end,
 			case mnesia:transaction(Txn) of
-				{atomic, ok}      -> {ok, Nref};
+				{atomic, ok}      -> {ok, ClassNref};
 				{aborted, Reason} -> {error, Reason}
 			end;
 		{error, _} = Err ->
 			Err
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% do_add_template(ClassNref, Name) -> {ok, TemplateNref} | {error, term()}
+%%
+%% Validates that ClassNref is a class and that no existing template
+%% under it has the same name, then atomically writes the new template
+%% node and its compositional arc pair (class-child arc labels 26/25).
+%%-----------------------------------------------------------------------------
+do_add_template(ClassNref, Name) ->
+	case do_get_class(ClassNref) of
+		{ok, _} ->
+			case do_find_template_by_name(ClassNref, Name) of
+				{ok, _Existing} ->
+					{error, {template_already_exists, Name}};
+				not_found ->
+					do_write_template(ClassNref, Name)
+			end;
+		{error, _} = Err ->
+			Err
+	end.
+
+do_write_template(ClassNref, Name) ->
+	TemplateNref = nref_server:get_nref(),
+	Id1 = nref_server:get_nref(),
+	Id2 = nref_server:get_nref(),
+	NameAVP = #{attribute => ?NAME_ATTR_FOR_CLASS, value => Name},
+	Node = #node{
+		nref = TemplateNref,
+		kind = template,
+		parent = ClassNref,
+		attribute_value_pairs = [NameAVP]
+	},
+	P2C = #relationship{
+		id = Id1, kind = composition,
+		source_nref = ClassNref,
+		characterization = ?CLASS_CHILD_ARC,
+		target_nref = TemplateNref,
+		reciprocal = ?CLASS_PARENT_ARC,
+		avps = []
+	},
+	C2P = #relationship{
+		id = Id2, kind = composition,
+		source_nref = TemplateNref,
+		characterization = ?CLASS_PARENT_ARC,
+		target_nref = ClassNref,
+		reciprocal = ?CLASS_CHILD_ARC,
+		avps = []
+	},
+	Txn = fun() ->
+		ok = mnesia:write(nodes, Node, write),
+		ok = mnesia:write(relationships, P2C, write),
+		ok = mnesia:write(relationships, C2P, write)
+	end,
+	case mnesia:transaction(Txn) of
+		{atomic, ok}      -> {ok, TemplateNref};
+		{aborted, Reason} -> {error, Reason}
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% do_find_template_by_name(ClassNref, Name) -> {ok, Nref} | not_found
+%%
+%% Looks up a template-kind child of ClassNref whose name AVP matches.
+%% Templates and classes share the class NameAttrNref (19); the kind
+%% filter ensures we only return templates.
+%%-----------------------------------------------------------------------------
+do_find_template_by_name(ClassNref, Name) ->
+	F = fun() ->
+		Children = mnesia:index_read(nodes, ClassNref, #node.parent),
+		lists:search(fun
+			(#node{kind = template} = N) -> template_has_name(N, Name);
+			(_)                           -> false
+		end, Children)
+	end,
+	case mnesia:transaction(F) of
+		{atomic, {value, #node{nref = Nref}}} -> {ok, Nref};
+		{atomic, false}                       -> not_found;
+		{aborted, _}                          -> not_found
+	end.
+
+template_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
+	lists:any(fun
+		(#{attribute := ?NAME_ATTR_FOR_CLASS, value := V}) -> V =:= Name;
+		(_) -> false
+	end, AVPs).
+
+
+%%-----------------------------------------------------------------------------
+%% do_get_template(Nref) ->
+%%     {ok, #node{}} | {error, not_found | not_a_template | term()}
+%%-----------------------------------------------------------------------------
+do_get_template(Nref) ->
+	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
+		{atomic, [#node{kind = template} = Node]} -> {ok, Node};
+		{atomic, [_Other]}                        -> {error, not_a_template};
+		{atomic, []}                              -> {error, not_found};
+		{aborted, Reason}                         -> {error, Reason}
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% do_templates_for_class(ClassNref) -> {ok, [#node{}]} | {error, term()}
+%%-----------------------------------------------------------------------------
+do_templates_for_class(ClassNref) ->
+	F = fun() ->
+		Children = mnesia:index_read(nodes, ClassNref, #node.parent),
+		[N || N <- Children, N#node.kind =:= template]
+	end,
+	case mnesia:transaction(F) of
+		{atomic, Nodes}   -> {ok, Nodes};
+		{aborted, Reason} -> {error, Reason}
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% do_default_template(ClassNref) ->
+%%     {ok, TemplateNref} | not_found | {error, term()}
+%%-----------------------------------------------------------------------------
+do_default_template(ClassNref) ->
+	case do_find_template_by_name(ClassNref, ?DEFAULT_TEMPLATE_NAME) of
+		{ok, Nref} -> {ok, Nref};
+		not_found  -> not_found
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% do_class_in_ancestry(CandidateNref, ClassNref) -> boolean()
+%%
+%% True when CandidateNref equals ClassNref or appears in ClassNref's
+%% taxonomic ancestor chain.  Returns false on any lookup error.
+%%-----------------------------------------------------------------------------
+do_class_in_ancestry(CandidateNref, CandidateNref) ->
+	true;
+do_class_in_ancestry(CandidateNref, ClassNref) ->
+	case do_ancestors(ClassNref) of
+		{ok, Ancestors} ->
+			lists:any(fun(#node{nref = N}) -> N =:= CandidateNref end, Ancestors);
+		_ ->
+			false
 	end.
 
 
