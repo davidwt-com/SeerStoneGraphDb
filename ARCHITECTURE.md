@@ -184,8 +184,9 @@ not participate in graph traversal by default.
 Every `kind = connection` arc carries a `Template` AVP — `#{attribute
 => 31, value => TemplateNref}` — that scopes the connection's
 semantic context. The AVP attribute is bootstrap-seeded at nref 31;
-it is forbidden on relationships of any other kind. See §7 and
-`graphdb_instance:add_relationship/4,5`.
+it is forbidden on relationships of any other kind. Template nodes
+are compositional children of class nodes (see §3 cache field
+sources). API: `graphdb_instance:add_relationship/4,5`.
 
 ---
 
