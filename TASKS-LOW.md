@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 David W. Thomas
+SPDX-License-Identifier: GPL-2.0-or-later
+-->
+
 # SeerStoneGraphDb — Low-Severity Tasks
 
 Correctness, contract, naming, and OTP-plumbing items. None of these

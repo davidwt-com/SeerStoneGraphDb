@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 David W. Thomas
+SPDX-License-Identifier: GPL-2.0-or-later
+-->
+
 # SeerStoneGraphDb — Architecture
 
 > High-level shape of the system. Updated as the code's architecture changes — not as

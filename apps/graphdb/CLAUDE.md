@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 David W. Thomas
+SPDX-License-Identifier: GPL-2.0-or-later
+-->
+
 # graphdb — Graph Database OTP Application
 
 ## Purpose

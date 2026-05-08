@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 David W. Thomas
+SPDX-License-Identifier: GPL-2.0-or-later
+-->
+
 # SeerStoneGraphDb — High-Severity Tasks
 
 Single-statement bugs against spec semantics. Each one means the engine
