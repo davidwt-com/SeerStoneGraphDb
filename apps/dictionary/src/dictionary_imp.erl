@@ -3,8 +3,6 @@
 %% Copyright (c) 2026 David W. Thomas
 %% SPDX-License-Identifier: GPL-2.0-or-later
 %%---------------------------------------------------------------------
-%% All page references are to Joe Armstrong's Programming Erlang.
-%%---------------------------------------------------------------------
 %% Author: Dallas Noyes
 %% Created: October 2, 2008
 %% Description: SeerStone Dictionary implementation using ETS.
