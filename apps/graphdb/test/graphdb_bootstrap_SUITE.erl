@@ -428,7 +428,7 @@ load_missing_nref_start(Config) ->
 	TmpDir = proplists:get_value(tmp_dir, Config),
 	BadFile = filename:join(TmpDir, "no_floor.terms"),
 	ok = file:write_file(BadFile,
-		"{node, 1, category, undefined, {17, \"Root\"}, []}.\n"),
+		"{node, 1, category, {17, \"Root\"}, []}.\n"),
 	application:set_env(seerstone_graph_db, bootstrap_file, BadFile),
 	Result = graphdb_bootstrap:load(),
 	?assertMatch({error, missing_nref_start}, Result).
@@ -441,7 +441,7 @@ load_nref_above_floor(Config) ->
 	BadFile = filename:join(TmpDir, "above_floor.terms"),
 	ok = file:write_file(BadFile,
 		"{nref_start, 10}.\n"
-		"{node, 10, category, undefined, {17, \"Root\"}, []}.\n"),
+		"{node, 10, category, {17, \"Root\"}, []}.\n"),
 	application:set_env(seerstone_graph_db, bootstrap_file, BadFile),
 	Result = graphdb_bootstrap:load(),
 	?assertMatch({error, {nref_not_below_floor, 10, 10}}, Result).
