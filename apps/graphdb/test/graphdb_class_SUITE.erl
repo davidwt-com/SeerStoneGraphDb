@@ -1,11 +1,6 @@
 %%---------------------------------------------------------------------
-%% Copyright SeerStone, Inc. 2008
-%%
-%% All rights reserved. No part of this computer programs(s) may be
-%% used, reproduced,stored in any retrieval system, or transmitted,
-%% in any form or by any means, electronic, mechanical, photocopying,
-%% recording, or otherwise without prior written permission of
-%% SeerStone, Inc.
+%% Copyright (c) 2026 David W. Thomas
+%% SPDX-License-Identifier: GPL-2.0-or-later
 %%---------------------------------------------------------------------
 %% Author: (completion of Dallas Noyes's design)
 %% Created: April 2026
@@ -98,6 +93,17 @@
 	subclasses_empty_for_leaf/1,
 	ancestors_returns_chain/1,
 	ancestors_empty_for_top_level/1,
+	%% Multi-inheritance (H3)
+	add_superclass_basic/1,
+	add_superclass_writes_taxonomy_arcs/1,
+	add_superclass_idempotent/1,
+	add_superclass_rejects_self_reference/1,
+	add_superclass_rejects_non_class_subject/1,
+	add_superclass_rejects_non_class_target/1,
+	ancestors_walks_multi_parent_dag/1,
+	ancestors_dedupes_diamond_inheritance/1,
+	inherited_attributes_multi_parent/1,
+	class_in_ancestry_via_added_parent/1,
 	%% Inheritance
 	inherited_attributes_local_only/1,
 	inherited_attributes_from_ancestors/1,
@@ -115,7 +121,7 @@ suite() ->
 all() ->
 	[{group, seeding}, {group, creation}, {group, templates},
 	 {group, qualifying}, {group, lookups}, {group, hierarchy},
-	 {group, inheritance}].
+	 {group, multi_inheritance}, {group, inheritance}].
 
 groups() ->
 	[
@@ -161,6 +167,18 @@ groups() ->
 			subclasses_empty_for_leaf,
 			ancestors_returns_chain,
 			ancestors_empty_for_top_level
+		]},
+		{multi_inheritance, [], [
+			add_superclass_basic,
+			add_superclass_writes_taxonomy_arcs,
+			add_superclass_idempotent,
+			add_superclass_rejects_self_reference,
+			add_superclass_rejects_non_class_subject,
+			add_superclass_rejects_non_class_target,
+			ancestors_walks_multi_parent_dag,
+			ancestors_dedupes_diamond_inheritance,
+			inherited_attributes_multi_parent,
+			class_in_ancestry_via_added_parent
 		]},
 		{inheritance, [], [
 			inherited_attributes_local_only,
@@ -638,6 +656,167 @@ ancestors_empty_for_top_level(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, TopLevel} = graphdb_class:create_class("TopLevel", 3),
 	?assertEqual({ok, []}, graphdb_class:ancestors(TopLevel)).
+
+
+%%=============================================================================
+%% Multi-Inheritance Tests (H3)
+%%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% add_superclass appends a second taxonomic parent and the parents
+%% cache reflects both, in insertion order (creation parent first).
+%%-----------------------------------------------------------------------------
+add_superclass_basic(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_class:create_class("A", 3),
+	{ok, B} = graphdb_class:create_class("B", 3),
+	{ok, Child} = graphdb_class:create_class("Child", A),
+	ok = graphdb_class:add_superclass(Child, B),
+	{ok, Node} = graphdb_class:get_class(Child),
+	?assertEqual([A, B], Node#node.parents).
+
+%%-----------------------------------------------------------------------------
+%% add_superclass writes a taxonomy arc pair (kind=taxonomy, char 25/26)
+%% between the child and the additional parent.
+%%-----------------------------------------------------------------------------
+add_superclass_writes_taxonomy_arcs(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_class:create_class("A", 3),
+	{ok, B} = graphdb_class:create_class("B", 3),
+	{ok, Child} = graphdb_class:create_class("Child", A),
+	RelsBefore = mnesia:table_info(relationships, size),
+	ok = graphdb_class:add_superclass(Child, B),
+	RelsAfter = mnesia:table_info(relationships, size),
+	?assertEqual(RelsBefore + 2, RelsAfter),
+
+	%% Child -> B with char=25 (parent arc), kind=taxonomy
+	{atomic, ChildOut} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, Child, #relationship.source_nref)
+	end),
+	?assert(lists:any(fun(R) ->
+		R#relationship.target_nref =:= B andalso
+		R#relationship.characterization =:= 25 andalso
+		R#relationship.reciprocal =:= 26 andalso
+		R#relationship.kind =:= taxonomy
+	end, ChildOut)),
+
+	%% B -> Child with char=26 (child arc), kind=taxonomy
+	{atomic, BOut} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, B, #relationship.source_nref)
+	end),
+	?assert(lists:any(fun(R) ->
+		R#relationship.target_nref =:= Child andalso
+		R#relationship.characterization =:= 26 andalso
+		R#relationship.reciprocal =:= 25 andalso
+		R#relationship.kind =:= taxonomy
+	end, BOut)).
+
+%%-----------------------------------------------------------------------------
+%% add_superclass with an already-present parent is a no-op (no new
+%% arcs, no duplicate parents entry).
+%%-----------------------------------------------------------------------------
+add_superclass_idempotent(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_class:create_class("A", 3),
+	{ok, B} = graphdb_class:create_class("B", 3),
+	{ok, Child} = graphdb_class:create_class("Child", A),
+	ok = graphdb_class:add_superclass(Child, B),
+	RelsBefore = mnesia:table_info(relationships, size),
+	ok = graphdb_class:add_superclass(Child, B),
+	RelsAfter = mnesia:table_info(relationships, size),
+	?assertEqual(RelsBefore, RelsAfter),
+	{ok, Node} = graphdb_class:get_class(Child),
+	?assertEqual([A, B], Node#node.parents).
+
+%%-----------------------------------------------------------------------------
+%% A class cannot be its own superclass.
+%%-----------------------------------------------------------------------------
+add_superclass_rejects_self_reference(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_class:create_class("A", 3),
+	?assertEqual({error, cyclic_self_reference},
+		graphdb_class:add_superclass(A, A)).
+
+%%-----------------------------------------------------------------------------
+%% add_superclass rejects a non-class subject (e.g., an attribute).
+%%-----------------------------------------------------------------------------
+add_superclass_rejects_non_class_subject(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_class:create_class("A", 3),
+	%% nref 6 (Names) is an attribute node, not a class
+	?assertMatch({error, _}, graphdb_class:add_superclass(6, A)).
+
+%%-----------------------------------------------------------------------------
+%% add_superclass rejects a non-class additional parent.
+%%-----------------------------------------------------------------------------
+add_superclass_rejects_non_class_target(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_class:create_class("A", 3),
+	%% nref 6 (Names) is an attribute node, not a class
+	?assertMatch({error, {invalid_parent_kind, attribute}},
+		graphdb_class:add_superclass(A, 6)).
+
+%%-----------------------------------------------------------------------------
+%% ancestors walks the full multi-parent DAG in BFS (nearest-first)
+%% order.  Class C has parents A and B (no shared ancestors); ancestors
+%% returns [A, B] -- both at depth 1.
+%%-----------------------------------------------------------------------------
+ancestors_walks_multi_parent_dag(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_class:create_class("A", 3),
+	{ok, B} = graphdb_class:create_class("B", 3),
+	{ok, C} = graphdb_class:create_class("C", A),
+	ok = graphdb_class:add_superclass(C, B),
+	{ok, Ancestors} = graphdb_class:ancestors(C),
+	AncNrefs = [N#node.nref || N <- Ancestors],
+	?assertEqual([A, B], AncNrefs).
+
+%%-----------------------------------------------------------------------------
+%% Diamond inheritance: D inherits from B and C, both of which inherit
+%% from A.  ancestors(D) returns each ancestor exactly once, BFS-ordered:
+%% [B, C, A].
+%%-----------------------------------------------------------------------------
+ancestors_dedupes_diamond_inheritance(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_class:create_class("A", 3),
+	{ok, B} = graphdb_class:create_class("B", A),
+	{ok, C} = graphdb_class:create_class("C", A),
+	{ok, D} = graphdb_class:create_class("D", B),
+	ok = graphdb_class:add_superclass(D, C),
+	{ok, Ancestors} = graphdb_class:ancestors(D),
+	AncNrefs = [N#node.nref || N <- Ancestors],
+	%% Depth 1: B then C; Depth 2: A (visited once even though both
+	%% B and C list it as a parent).
+	?assertEqual([B, C, A], AncNrefs).
+
+%%-----------------------------------------------------------------------------
+%% inherited_attributes gathers QCs from all multi-parent ancestors
+%% in BFS order.
+%%-----------------------------------------------------------------------------
+inherited_attributes_multi_parent(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_class:create_class("A", 3),
+	ok = graphdb_class:add_qualifying_characteristic(A, 17),
+	{ok, B} = graphdb_class:create_class("B", 3),
+	ok = graphdb_class:add_qualifying_characteristic(B, 18),
+	{ok, C} = graphdb_class:create_class("C", A),
+	ok = graphdb_class:add_superclass(C, B),
+	ok = graphdb_class:add_qualifying_characteristic(C, 19),
+	{ok, QcNrefs} = graphdb_class:inherited_attributes(C),
+	%% Local (19), then nearest parents A (17), B (18).
+	?assertEqual([19, 17, 18], QcNrefs).
+
+%%-----------------------------------------------------------------------------
+%% class_in_ancestry finds a parent added via add_superclass.
+%%-----------------------------------------------------------------------------
+class_in_ancestry_via_added_parent(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_class:create_class("A", 3),
+	{ok, B} = graphdb_class:create_class("B", 3),
+	{ok, C} = graphdb_class:create_class("C", A),
+	ok = graphdb_class:add_superclass(C, B),
+	?assert(graphdb_class:class_in_ancestry(B, C)),
+	?assert(graphdb_class:class_in_ancestry(A, C)).
 
 
 %%=============================================================================

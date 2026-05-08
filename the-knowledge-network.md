@@ -1,3 +1,9 @@
+<!--
+Copyright (c) 2008 SeerStone, Inc.
+Copyright (c) 2026 David W. Thomas
+SPDX-License-Identifier: GPL-2.0-or-later
+-->
+
 # The Knowledge Network
 *Architecture and Design Principles*
 

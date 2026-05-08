@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 David W. Thomas
+SPDX-License-Identifier: GPL-2.0-or-later
+-->
+
 # SeerStoneGraphDb — Architecture
 
 > High-level shape of the system. Updated as the code's architecture changes — not as
@@ -10,23 +15,23 @@
 
 ## 1. Status
 
-| Component           | State                                                                                                         |
-| ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Build               | Compiles clean — zero warnings (OTP 27 / rebar3 3.24)                                                         |
-| `nref` subsystem    | Fully implemented; DETS-backed; `set_floor/1` API                                                             |
-| `dictionary_imp`    | Implemented; not yet wired to `dictionary_server` / `term_server`                                             |
-| `graphdb_bootstrap` | Implemented — Mnesia schema, table creation, scaffold loader                                                  |
-| `graphdb_mgr`       | Implemented — bootstrap startup, read API, category guard, cache audit/repair. Write-side delegation pending. |
-| `graphdb_attr`      | Implemented — attribute library (name, literal, relationship attributes)                                      |
-| `graphdb_class`     | Implemented — taxonomic hierarchy (single inheritance only — see §10)                                         |
-| `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance (single class membership only — see §10)       |
-| `graphdb_rules`     | Stub                                                                                                          |
-| `graphdb_language`  | Stub                                                                                                          |
-| Tests               | 186 passing (122 Common Test + 64 EUnit)                                                                      |
+| Component           | State                                                                                                                                       |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Build               | Compiles clean — zero warnings (OTP 27 / rebar3 3.24)                                                                                       |
+| `nref` subsystem    | Fully implemented; DETS-backed; `set_floor/1` API                                                                                           |
+| `dictionary_imp`    | Implemented; not yet wired to `dictionary_server` / `term_server`                                                                           |
+| `graphdb_bootstrap` | Implemented — Mnesia schema, table creation, scaffold loader                                                                                |
+| `graphdb_mgr`       | Implemented — bootstrap startup, read API, category guard, cache audit/repair. Write-side delegation pending.                               |
+| `graphdb_attr`      | Implemented — attribute library (name, literal, relationship attributes)                                                                    |
+| `graphdb_class`     | Implemented — taxonomic hierarchy with multi-parent inheritance (BFS DAG walk, H3)                                                          |
+| `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance with multi-class membership (H4) and ambiguity-detecting class resolver (H5) |
+| `graphdb_rules`     | Stub                                                                                                                                        |
+| `graphdb_language`  | Stub                                                                                                                                        |
+| Tests               | 209 passing (145 Common Test + 64 EUnit)                                                                                                    |
 
-The kernel is functional under single-class-membership / single-inheritance
-semantics. Multi-inheritance, template-scoped connections, and
-multilingual support are open architectural questions — see §10.
+The kernel is functional under multi-inheritance and multi-class-
+membership semantics. Template features beyond the connection-arc
+scope AVP (M7) and multilingual support (M6) remain open; see §10.
 
 ---
 
@@ -356,19 +361,21 @@ create, modify, or delete a `category` node.
 order from [`the-knowledge-network.md`](the-knowledge-network.md) §6:
 
 1. **Local AVPs** on the instance — highest.
-2. **Class-bound values** — class itself plus its taxonomic ancestor
-   chain (nearest first).
+2. **Class-bound values** — every class membership in
+   `node.classes`; for each, walk the class itself plus its taxonomic
+   ancestor DAG (`graphdb_class:ancestors/1`, BFS over multi-parent
+   classes, nearest first; H3). Per-membership hits are gathered as
+   `[{ClassNref, Value}]` and reduced: a single distinct value wins
+   (`{ok, Value}`); two or more distinct values produce
+   `{error, {ambiguous_class_value, AttrNref, Hits}}`; zero hits fall
+   through (H4 + H5).
 3. **Compositional ancestors** — unbroken upward walk via the
-   `node.parents` cache (single-chain today; H3 will add multi-parent
-   DAG traversal).
+   `node.parents` cache. Composition is a tree (one whole has at most
+   one parent), so the walk is single-chain.
 4. **Directly connected nodes** — `kind = connection` arcs only, one
    level deep — lowest.
 
 Each level is consulted only if higher levels returned `not_found`.
-
-The current implementation supports single class membership; resolver
-gaps for multi-class disambiguation are tracked in `TASKS-HIGH.md` H5,
-which lands alongside the H4 multi-membership API.
 
 ---
 
@@ -376,17 +383,6 @@ which lands alongside the H4 multi-membership API.
 
 Pending architectural decisions. Each item has a detailed task in the
 severity-grouped task files.
-
-### Multi-inheritance representation
-
-The spec (§5) requires multiple class inheritance and multiple instance
-class membership. The schema infrastructure landed in H0:
-`node.parents` and `node.classes` are cache lists today, populated as
-length-1 lists for the single-parent / single-class cases.
-`graphdb_class:ancestors/1` and the `resolve_from_class` taxonomy walk
-already traverse via arcs; remaining work is the multi-parent /
-multi-class API surface and DAG semantics. See `TASKS-HIGH.md` H3, H4,
-H5.
 
 ### Multilingual storage
 

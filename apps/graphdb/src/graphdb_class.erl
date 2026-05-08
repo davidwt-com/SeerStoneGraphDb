@@ -1,11 +1,7 @@
 %%---------------------------------------------------------------------
-%% Copyright SeerStone, Inc. 2008
-%%
-%% All rights reserved. No part of this computer programs(s) may be
-%% used, reproduced,stored in any retrieval system, or transmitted,
-%% in any form or by any means, electronic, mechanical, photocopying,
-%% recording, or otherwise without prior written permission of
-%% SeerStone, Inc.
+%% Copyright (c) 2008 SeerStone, Inc.
+%% Copyright (c) 2026 David W. Thomas
+%% SPDX-License-Identifier: GPL-2.0-or-later
 %%---------------------------------------------------------------------
 %% Author: Dallas Noyes
 %% Created: *** 2008
@@ -137,6 +133,7 @@
 		start_link/0,
 		%% Creators
 		create_class/2,
+		add_superclass/2,
 		add_qualifying_characteristic/2,
 		add_template/2,
 		%% Lookups
@@ -203,6 +200,22 @@ start_link() ->
 %%-----------------------------------------------------------------------------
 create_class(Name, ParentClassNref) ->
 	gen_server:call(?MODULE, {create_class, Name, ParentClassNref}).
+
+
+%%-----------------------------------------------------------------------------
+%% add_superclass(ClassNref, AdditionalParentNref) -> ok | {error, term()}
+%%
+%% Adds an additional taxonomic parent to an existing class, supporting
+%% multiple inheritance (spec §5: "A concept may have any number of
+%% generalizations simultaneously").  Atomically writes a taxonomy arc
+%% pair (kind=taxonomy, char 25/26) and appends AdditionalParentNref to
+%% the class's parents cache.  Idempotent: adding the same parent twice
+%% is a no-op.  Rejects self-references; the caller is responsible for
+%% avoiding cycles introduced via longer paths.
+%%-----------------------------------------------------------------------------
+add_superclass(ClassNref, AdditionalParentNref) ->
+	gen_server:call(?MODULE,
+		{add_superclass, ClassNref, AdditionalParentNref}).
 
 
 %%-----------------------------------------------------------------------------
@@ -348,6 +361,9 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 handle_call({create_class, Name, ParentClassNref}, _From, State) ->
 	{reply, do_create_class(Name, ParentClassNref), State};
+
+handle_call({add_superclass, ClassNref, AdditionalParentNref}, _From, State) ->
+	{reply, do_add_superclass(ClassNref, AdditionalParentNref), State};
 
 handle_call({add_qualifying_characteristic, ClassNref, AttrNref}, _From,
 		#state{qc_attr_nref = QcAttr} = State) ->
@@ -617,6 +633,71 @@ do_create_class(Name, ParentClassNref) ->
 
 
 %%-----------------------------------------------------------------------------
+%% do_add_superclass(ClassNref, AdditionalParentNref) -> ok | {error, term()}
+%%
+%% Validates the subject (must be a class) and the additional parent
+%% (class or category 3), rejects self-references, then atomically
+%% writes the taxonomy arc pair AND appends AdditionalParentNref to the
+%% subject's parents cache.  Idempotent: if AdditionalParentNref is
+%% already in the parents list, returns ok without writing.
+%%-----------------------------------------------------------------------------
+do_add_superclass(ClassNref, ClassNref) ->
+	{error, cyclic_self_reference};
+do_add_superclass(ClassNref, AdditionalParentNref) ->
+	case do_get_class(ClassNref) of
+		{ok, _} ->
+			case do_validate_parent(AdditionalParentNref) of
+				ok               -> do_write_superclass(ClassNref,
+									AdditionalParentNref);
+				{error, _} = Err -> Err
+			end;
+		{error, _} = Err ->
+			Err
+	end.
+
+do_write_superclass(ClassNref, AdditionalParentNref) ->
+	Id1 = nref_server:get_nref(),
+	Id2 = nref_server:get_nref(),
+	Txn = fun() ->
+		[#node{kind = class, parents = Parents} = Node] =
+			mnesia:read(nodes, ClassNref),
+		case lists:member(AdditionalParentNref, Parents) of
+			true ->
+				already_exists;
+			false ->
+				C2P = #relationship{
+					id = Id1, kind = taxonomy,
+					source_nref = ClassNref,
+					characterization = ?CLASS_PARENT_ARC,
+					target_nref = AdditionalParentNref,
+					reciprocal = ?CLASS_CHILD_ARC,
+					avps = []
+				},
+				P2C = #relationship{
+					id = Id2, kind = taxonomy,
+					source_nref = AdditionalParentNref,
+					characterization = ?CLASS_CHILD_ARC,
+					target_nref = ClassNref,
+					reciprocal = ?CLASS_PARENT_ARC,
+					avps = []
+				},
+				Updated = Node#node{
+					parents = Parents ++ [AdditionalParentNref]
+				},
+				ok = mnesia:write(nodes, Updated, write),
+				ok = mnesia:write(relationships, C2P, write),
+				ok = mnesia:write(relationships, P2C, write),
+				ok
+		end
+	end,
+	case mnesia:transaction(Txn) of
+		{atomic, ok}             -> ok;
+		{atomic, already_exists} -> ok;
+		{aborted, Reason}        -> {error, Reason}
+	end.
+
+
+%%-----------------------------------------------------------------------------
 %% do_add_template(ClassNref, Name) -> {ok, TemplateNref} | {error, term()}
 %%
 %% Validates that ClassNref is a class and that no existing template
@@ -860,14 +941,19 @@ do_subclasses(ClassNref) ->
 %%-----------------------------------------------------------------------------
 %% do_ancestors(ClassNref) -> {ok, [#node{}]} | {error, term()}
 %%
-%% Walks the parent chain starting from ClassNref's parent.  Stops at
-%% the Classes category (nref 3) or at a non-class node.  Returns
-%% the list of ancestor class nodes in nearest-first order.
+%% Walks the multi-parent taxonomic DAG starting from ClassNref's
+%% parents.  Performs a breadth-first traversal: nearest parents first,
+%% then their parents, etc.  Each ancestor is visited at most once
+%% (diamond inheritance returns the shared ancestor exactly once).
+%% The Classes category (nref 3) is filtered out of the walk; non-class
+%% nodes are skipped silently.  Returns the visited class nodes in BFS
+%% (nearest-first) order.
 %%-----------------------------------------------------------------------------
 do_ancestors(ClassNref) ->
 	case mnesia:transaction(fun() -> mnesia:read(nodes, ClassNref) end) of
 		{atomic, [#node{kind = class, parents = Parents}]} ->
-			do_walk_ancestors(head_parent(Parents), []);
+			Initial = [P || P <- Parents, P =/= ?CLASSES_CATEGORY],
+			do_walk_ancestors(Initial, sets:from_list(Initial), []);
 		{atomic, [_]} ->
 			{error, not_a_class};
 		{atomic, []} ->
@@ -876,32 +962,23 @@ do_ancestors(ClassNref) ->
 			{error, Reason}
 	end.
 
-do_walk_ancestors(?CLASSES_CATEGORY, Acc) ->
+%% BFS over the parent DAG.  Queue is the FIFO of nrefs to visit;
+%% Visited is the set of all already-enqueued nrefs (so we never
+%% enqueue the same nref twice); Acc accumulates emitted nodes in
+%% reverse order.
+do_walk_ancestors([], _Visited, Acc) ->
 	{ok, lists:reverse(Acc)};
-do_walk_ancestors(undefined, Acc) ->
-	{ok, lists:reverse(Acc)};
-do_walk_ancestors(Nref, Acc) ->
+do_walk_ancestors([Nref | Rest], Visited, Acc) ->
 	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
 		{atomic, [#node{kind = class, parents = Parents} = Node]} ->
-			do_walk_ancestors(head_parent(Parents), [Node | Acc]);
-		{atomic, [_]} ->
-			{ok, lists:reverse(Acc)};
-		{atomic, []} ->
-			{ok, lists:reverse(Acc)};
-		{aborted, Reason} ->
-			{error, Reason}
+			New = [P || P <- Parents,
+				P =/= ?CLASSES_CATEGORY,
+				not sets:is_element(P, Visited)],
+			NewVisited = lists:foldl(fun sets:add_element/2, Visited, New),
+			do_walk_ancestors(Rest ++ New, NewVisited, [Node | Acc]);
+		_ ->
+			do_walk_ancestors(Rest, Visited, Acc)
 	end.
-
-
-%%-----------------------------------------------------------------------------
-%% head_parent(Parents) -> integer() | undefined
-%%
-%% Returns the first parent in the cache list, or `undefined` for root
-%% nodes (empty parents list).  Used by single-chain ancestor walks; H3
-%% will introduce multi-parent walks that traverse the full list.
-%%-----------------------------------------------------------------------------
-head_parent([])      -> undefined;
-head_parent([P | _]) -> P.
 
 
 %%-----------------------------------------------------------------------------

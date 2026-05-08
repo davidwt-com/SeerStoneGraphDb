@@ -1,14 +1,19 @@
+<!--
+Copyright (c) 2026 David W. Thomas
+SPDX-License-Identifier: GPL-2.0-or-later
+-->
+
 # SeerStoneGraphDb — High-Severity Tasks
 
 Single-statement bugs against spec semantics. Each one means the engine
 silently produces a wrong answer for a case the spec calls out
 explicitly.
 
-Tasks are listed in execution order. H0, H1, and H2 have all
-landed (see RESOLVED markers below). H0 closed M1; H1+H2 closed M2.
-H3–H5 require API-shape changes for multi-parent / multi-class
-semantics and should land together — the schema infrastructure is
-already in place from H0.
+Tasks are listed in execution order. **All H-tasks have landed**
+(see RESOLVED markers below). H0 closed M1; H1+H2 closed M2; H4+H5
+landed together as the multi-class instance-membership work (API
+surface and resolver disambiguation).  Outstanding work continues
+under `TASKS-MEDIUM.md` and `TASKS-LOW.md`.
 
 ---
 
@@ -60,71 +65,55 @@ via the parent_arc) and now returns `not_found` as the spec requires.
 
 ---
 
-## H3. Classes support only single inheritance
+## H3. Classes support only single inheritance — RESOLVED
 
-**Spec:** §5 Taxonomy — *"Multiple inheritance is supported natively. A
-concept may have any number of generalizations simultaneously."*
-
-**Evidence:**
-- `graphdb_class.erl:183` — `create_class(Name, ParentClassNref)` takes
-  a single parent.
-- `graphdb_class.erl:601-627` — `do_walk_ancestors/2` walks the single
-  `node.parent` field.
-- `graphdb_class.erl:638-651` — `do_inherited_attributes` builds on the
-  single-chain ancestor walk.
-
-The class taxonomy is also stored in 25/26 arcs; multi-parent inheritance
-can only live there. The current ancestor walk ignores arcs entirely.
-
-**Fix:**
-- New API: `add_superclass/2 :: (ClassNref, AdditionalParentNref) -> ok`.
-  Writes a 25/26 arc pair without touching `node.parent`.
-- Rewrite `do_walk_ancestors` to traverse via the relationships table —
-  read incoming arcs with `characterization =:= ?CLASS_PARENT_ARC` for
-  each class as it's visited. Returns a DAG (deduplicated) in BFS order.
-- `node.parent` retained as the *primary* (creation-time) parent;
-  additional parents live as arcs only.
-
-**Dependencies:** clean implementation benefits from C1 (filter arcs by
-kind=taxonomy).
+**Status:** Fixed. New API `graphdb_class:add_superclass/2` writes a
+25/26 taxonomy arc pair AND appends to the subject class's `parents`
+cache in one transaction (idempotent, rejects self-references).
+`do_walk_ancestors` rewritten as a BFS over the multi-parent DAG using
+the `node.parents` cache; each ancestor is visited at most once
+(diamond inheritance returns shared ancestors exactly once). 10 CT
+cases under the new `multi_inheritance` group cover basic add, arc
+shape, idempotency, validation, multi-parent BFS, diamond dedup,
+multi-parent QC inheritance, and `class_in_ancestry` over added
+parents. Composition remains a single-chain walk (compositional
+hierarchy is a tree, not a DAG).
 
 ---
 
-## H4. Instances support only single class membership
+## H4. Instances support only single class membership — RESOLVED
 
-**Spec:** §5 Instantiation — *"A single instance may belong to multiple
-classes simultaneously."*
+**Status:** Fixed. New API
+`graphdb_instance:add_class_membership/2 :: (InstanceNref, ClassNref)
+-> ok` writes a 29/30 instantiation arc pair AND appends to the
+instance's `classes` cache in one transaction (idempotent; rejects
+non-instance subjects, non-class targets, and missing nrefs). New
+`class_memberships/1 :: (InstanceNref) -> {ok, [ClassNref]}` reads the
+cache (kept consistent with the 29-characterized outgoing arcs by the
+H0c invariant). 8 CT cases under the new `multi_membership` group
+cover basic add, arc shape, idempotency, four reject paths, and
+initial single-membership readback.
 
-**Evidence:** `graphdb_instance.erl:171, 313-386`. `create_instance/3`
-takes one `ClassNref` and writes one 29/30 membership pair. No
-`add_class_membership/2` after creation.
-
-**Fix:**
-- New API: `add_class_membership/2 :: (InstanceNref, ClassNref) -> ok`.
-  Writes a second 29/30 arc pair.
-- New API: `class_memberships/1 :: (InstanceNref) -> {ok, [ClassNref]}`.
-  Reads all 29-characterized outgoing arcs.
-
-**Dependencies:** none structurally; the resolver work is H5.
+**Closes:** delivered together with H5 as the multi-class
+instance-membership work.
 
 ---
 
-## H5. `resolve_from_class` silently picks the first class membership
+## H5. `resolve_from_class` silently picks the first class membership — RESOLVED
 
-**Spec:** §6 — *"Two parent classes may define the same attribute with
-different bound values — resolution requires an explicit local value on
-the instance."*
+**Status:** Fixed. `resolve_from_class/2` now reads *all* class
+memberships via `do_class_memberships/1` and, for each membership,
+walks the class node plus its taxonomy ancestors (`graphdb_class:
+get_class/1` + `ancestors/1`) for an AVP match.  Hits are gathered as
+`[{ClassNref, Value}]` where `ClassNref` is the class that actually
+held the value (may be a taxonomy ancestor of a directly-bound
+membership). Three outcomes:
 
-**Evidence:** `graphdb_instance.erl:564-587`. `lists:search/2` returns
-the first match; whichever Mnesia hands back first wins. No ambiguity
-detection, no error, no signal that two classes might conflict.
+- 0 hits -> `not_found` (caller falls through to Priority 3).
+- All hits agree on a single distinct value -> `{ok, Value}`.
+- Two or more distinct values -> `{error, {ambiguous_class_value,
+  AttrNref, Hits}}`.
 
-**Fix:** read *all* membership arcs. For each class (and its taxonomy
-ancestors per H1), look up the AVP. If multiple distinct values are
-found, return `{error, {ambiguous_class_value, AttrNref, [{ClassNref,
-Value}]}}`. If exactly one value is found, return `{ok, Value}`. If
-none, fall through to Priority 3.
-
-**Dependencies:** H4 (so the multi-membership case is reachable), H1
-(so ancestors are checked). The fix is naturally part of the same
-rewrite.
+5 CT cases under `multi_membership` cover unique-across-two-classes,
+same-value-two-classes, ambiguous-two-classes, local-overrides-
+ambiguity, and ambiguity-via-taxonomy.
