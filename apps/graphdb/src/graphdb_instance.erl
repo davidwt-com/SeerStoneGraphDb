@@ -129,11 +129,13 @@
 		create_instance/3,
 		add_relationship/4,
 		add_relationship/5,
+		add_class_membership/2,
 		%% Lookups
 		get_instance/1,
 		children/1,
 		compositional_ancestors/1,
 		class_of/1,
+		class_memberships/1,
 		%% Inheritance
 		resolve_value/2
 		]).
@@ -254,10 +256,39 @@ compositional_ancestors(Nref) ->
 %%
 %% Resolves the class membership of an instance via the membership arc
 %% (characterization=29).  Returns the class nref, or `not_found` if
-%% the instance has no class membership arc.
+%% the instance has no class membership arc.  When an instance belongs
+%% to multiple classes (see `class_memberships/1`), returns whichever
+%% Mnesia surfaces first; callers needing the full set must use
+%% `class_memberships/1`.
 %%-----------------------------------------------------------------------------
 class_of(InstanceNref) ->
 	gen_server:call(?MODULE, {class_of, InstanceNref}).
+
+
+%%-----------------------------------------------------------------------------
+%% class_memberships(InstanceNref) ->
+%%     {ok, [ClassNref]} | {error, term()}
+%%
+%% Returns every class the instance belongs to.  Read from the
+%% `node.classes` cache (kept consistent with the 29-characterized
+%% outgoing arcs by the cache invariant — see `graphdb_mgr:verify_caches/0`).
+%%-----------------------------------------------------------------------------
+class_memberships(InstanceNref) ->
+	gen_server:call(?MODULE, {class_memberships, InstanceNref}).
+
+
+%%-----------------------------------------------------------------------------
+%% add_class_membership(InstanceNref, ClassNref) -> ok | {error, term()}
+%%
+%% Adds an additional class membership to an existing instance.
+%% Atomically writes a second 29/30 instantiation arc pair AND appends
+%% ClassNref to the instance's `classes` cache.  Idempotent: re-adding
+%% a class already present returns ok without writing.  Validates that
+%% the subject is an instance and the target is a class.
+%%-----------------------------------------------------------------------------
+add_class_membership(InstanceNref, ClassNref) ->
+	gen_server:call(?MODULE,
+		{add_class_membership, InstanceNref, ClassNref}).
 
 
 %%-----------------------------------------------------------------------------
@@ -292,6 +323,9 @@ handle_call({create_instance, Name, ClassNref, ParentNref}, _From, State) ->
 handle_call({add_relationship, S, C, T, R, TemplateSpec}, _From, State) ->
 	{reply, do_add_relationship(S, C, T, R, TemplateSpec), State};
 
+handle_call({add_class_membership, InstanceNref, ClassNref}, _From, State) ->
+	{reply, do_add_class_membership(InstanceNref, ClassNref), State};
+
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Lookups
 %%-----------------------------------------------------------------------------
@@ -306,6 +340,9 @@ handle_call({compositional_ancestors, Nref}, _From, State) ->
 
 handle_call({class_of, Nref}, _From, State) ->
 	{reply, do_class_of(Nref), State};
+
+handle_call({class_memberships, Nref}, _From, State) ->
+	{reply, do_class_memberships(Nref), State};
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Inheritance
@@ -585,6 +622,80 @@ write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
 
 
 %%-----------------------------------------------------------------------------
+%% do_add_class_membership(InstanceNref, ClassNref) ->
+%%     ok | {error, term()}
+%%
+%% Validates the subject (must be an instance) and the target (must be
+%% a class), then atomically writes the 29/30 arc pair and appends
+%% ClassNref to the instance's classes cache.  Idempotent.
+%%-----------------------------------------------------------------------------
+do_add_class_membership(InstanceNref, ClassNref) ->
+	case do_get_instance(InstanceNref) of
+		{ok, _} ->
+			case do_validate_class(ClassNref) of
+				ok               -> do_write_class_membership(InstanceNref,
+									ClassNref);
+				{error, _} = Err -> Err
+			end;
+		{error, _} = Err ->
+			Err
+	end.
+
+do_write_class_membership(InstanceNref, ClassNref) ->
+	Id1 = nref_server:get_nref(),
+	Id2 = nref_server:get_nref(),
+	Txn = fun() ->
+		[#node{kind = instance, classes = Classes} = Node] =
+			mnesia:read(nodes, InstanceNref),
+		case lists:member(ClassNref, Classes) of
+			true ->
+				already_exists;
+			false ->
+				I2C = #relationship{
+					id = Id1, kind = instantiation,
+					source_nref = InstanceNref,
+					characterization = ?CLASS_MEMBERSHIP_ARC,
+					target_nref = ClassNref,
+					reciprocal = ?INSTANCE_MEMBERSHIP_ARC,
+					avps = []
+				},
+				C2I = #relationship{
+					id = Id2, kind = instantiation,
+					source_nref = ClassNref,
+					characterization = ?INSTANCE_MEMBERSHIP_ARC,
+					target_nref = InstanceNref,
+					reciprocal = ?CLASS_MEMBERSHIP_ARC,
+					avps = []
+				},
+				Updated = Node#node{classes = Classes ++ [ClassNref]},
+				ok = mnesia:write(nodes, Updated, write),
+				ok = mnesia:write(relationships, I2C, write),
+				ok = mnesia:write(relationships, C2I, write),
+				ok
+		end
+	end,
+	case mnesia:transaction(Txn) of
+		{atomic, ok}             -> ok;
+		{atomic, already_exists} -> ok;
+		{aborted, Reason}        -> {error, Reason}
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% do_class_memberships(InstanceNref) ->
+%%     {ok, [ClassNref]} | {error, term()}
+%%
+%% Reads the instance's `classes` cache (authoritative-equivalent to the
+%% 29-characterized outgoing arcs by the cache invariant).
+%%-----------------------------------------------------------------------------
+do_class_memberships(InstanceNref) ->
+	case do_get_instance(InstanceNref) of
+		{ok, #node{classes = Classes}} -> {ok, Classes};
+		{error, _} = Err               -> Err
+	end.
+
+
+%%-----------------------------------------------------------------------------
 %% do_class_of(InstanceNref) ->
 %%     {ok, ClassNref} | not_found | {error, term()}
 %%-----------------------------------------------------------------------------
@@ -717,48 +828,77 @@ do_resolve_value(InstNref, AttrNref) ->
 
 %%-----------------------------------------------------------------------------
 %% resolve_from_class(InstNref, AttrNref) ->
-%%     {ok, Value} | not_found
+%%     {ok, Value} | not_found |
+%%     {error, {ambiguous_class_value, AttrNref, [{ClassNref, Value}]}}
 %%
-%% Finds the instance's class via the membership arc (char=29), then
-%% searches the class node and every taxonomy ancestor (nearest-first)
-%% for an AVP matching AttrNref.  Returns the first match.
+%% Reads every class membership and, for each one, walks the class node
+%% plus its taxonomy ancestors (nearest-first) for an AVP match.
+%%
+%% - 0 hits across all memberships -> not_found (caller falls through
+%%   to Priority 3).
+%% - All hits agree on a single distinct value -> {ok, Value}.
+%% - Two or more distinct values -> {error, {ambiguous_class_value,
+%%   AttrNref, [{ClassNref, Value}]}}, where ClassNref is the class
+%%   where the value was actually found (may be a taxonomy ancestor of
+%%   a directly-bound membership).
 %%-----------------------------------------------------------------------------
 resolve_from_class(InstNref, AttrNref) ->
-	case do_class_of(InstNref) of
-		{ok, ClassNref} ->
-			search_class_chain(ClassNref, AttrNref);
+	case do_class_memberships(InstNref) of
+		{ok, []} ->
+			not_found;
+		{ok, Classes} ->
+			Hits = collect_class_hits(Classes, AttrNref),
+			classify_class_hits(Hits, AttrNref);
 		_ ->
 			not_found
 	end.
 
-search_class_chain(ClassNref, AttrNref) ->
+collect_class_hits(Classes, AttrNref) ->
+	lists:foldr(
+		fun(ClassNref, Acc) ->
+			case search_class_taxonomy(ClassNref, AttrNref) of
+				{ok, FoundClass, Value} -> [{FoundClass, Value} | Acc];
+				not_found               -> Acc
+			end
+		end, [], Classes).
+
+classify_class_hits([], _AttrNref) ->
+	not_found;
+classify_class_hits([{_, Value}], _AttrNref) ->
+	{ok, Value};
+classify_class_hits(Hits, AttrNref) ->
+	case lists:usort([V || {_, V} <- Hits]) of
+		[Value] -> {ok, Value};
+		_       -> {error, {ambiguous_class_value, AttrNref, Hits}}
+	end.
+
+%% Walks ClassNref and its taxonomy ancestors (nearest-first), returning
+%% the first AVP match together with the class nref where it was found.
+search_class_taxonomy(ClassNref, AttrNref) ->
 	case graphdb_class:get_class(ClassNref) of
-		{ok, ClassNode} ->
-			case find_avp_value(ClassNode#node.attribute_value_pairs,
-					AttrNref) of
-				{ok, _} = Found ->
-					Found;
+		{ok, #node{attribute_value_pairs = AVPs}} ->
+			case find_avp_value(AVPs, AttrNref) of
+				{ok, V} ->
+					{ok, ClassNref, V};
 				not_found ->
-					search_taxonomy_ancestors(ClassNref, AttrNref)
+					case graphdb_class:ancestors(ClassNref) of
+						{ok, Ancestors} ->
+							search_first_in_ancestors(Ancestors, AttrNref);
+						_ ->
+							not_found
+					end
 			end;
 		_ ->
 			not_found
 	end.
 
-search_taxonomy_ancestors(ClassNref, AttrNref) ->
-	case graphdb_class:ancestors(ClassNref) of
-		{ok, Ancestors} ->
-			search_avp_chain(Ancestors, AttrNref);
-		_ ->
-			not_found
-	end.
-
-search_avp_chain([], _AttrNref) ->
+search_first_in_ancestors([], _AttrNref) ->
 	not_found;
-search_avp_chain([#node{attribute_value_pairs = AVPs} | Rest], AttrNref) ->
+search_first_in_ancestors(
+		[#node{nref = N, attribute_value_pairs = AVPs} | Rest], AttrNref) ->
 	case find_avp_value(AVPs, AttrNref) of
-		{ok, _} = Found -> Found;
-		not_found       -> search_avp_chain(Rest, AttrNref)
+		{ok, V}   -> {ok, N, V};
+		not_found -> search_first_in_ancestors(Rest, AttrNref)
 	end.
 
 

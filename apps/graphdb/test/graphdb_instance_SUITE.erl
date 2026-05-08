@@ -97,7 +97,22 @@
 	resolve_value_priority_ancestor_over_connected/1,
 	resolve_value_walks_class_taxonomy/1,
 	resolve_value_local_class_overrides_taxonomy_ancestor/1,
-	resolve_value_p4_ignores_compositional_arc/1
+	resolve_value_p4_ignores_compositional_arc/1,
+	%% Multi-membership (H4)
+	add_class_membership_basic/1,
+	add_class_membership_writes_arcs/1,
+	add_class_membership_idempotent/1,
+	add_class_membership_rejects_missing_instance/1,
+	add_class_membership_rejects_non_instance/1,
+	add_class_membership_rejects_missing_class/1,
+	add_class_membership_rejects_non_class_target/1,
+	class_memberships_initial/1,
+	%% Multi-membership resolver (H5)
+	resolve_value_unique_across_two_classes/1,
+	resolve_value_same_value_two_classes/1,
+	resolve_value_ambiguous_two_classes/1,
+	resolve_value_local_overrides_ambiguity/1,
+	resolve_value_ambiguity_via_taxonomy/1
 ]).
 
 
@@ -110,7 +125,7 @@ suite() ->
 
 all() ->
 	[{group, creation}, {group, relationships}, {group, lookups},
-	 {group, hierarchy}, {group, inheritance}].
+	 {group, hierarchy}, {group, inheritance}, {group, multi_membership}].
 
 groups() ->
 	[
@@ -155,6 +170,21 @@ groups() ->
 			resolve_value_walks_class_taxonomy,
 			resolve_value_local_class_overrides_taxonomy_ancestor,
 			resolve_value_p4_ignores_compositional_arc
+		]},
+		{multi_membership, [], [
+			add_class_membership_basic,
+			add_class_membership_writes_arcs,
+			add_class_membership_idempotent,
+			add_class_membership_rejects_missing_instance,
+			add_class_membership_rejects_non_instance,
+			add_class_membership_rejects_missing_class,
+			add_class_membership_rejects_non_class_target,
+			class_memberships_initial,
+			resolve_value_unique_across_two_classes,
+			resolve_value_same_value_two_classes,
+			resolve_value_ambiguous_two_classes,
+			resolve_value_local_overrides_ambiguity,
+			resolve_value_ambiguity_via_taxonomy
 		]}
 	].
 
@@ -723,6 +753,203 @@ resolve_value_p4_ignores_compositional_arc(_Config) ->
 	%% parent_arc — only true connection arcs count.
 	?assertEqual(not_found,
 		graphdb_instance:resolve_value(InstNref, TestAttr)).
+
+
+%%=============================================================================
+%% Multi-Membership Tests (H4)
+%%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% After add_class_membership/2, class_memberships/1 returns both classes
+%% in order added.
+%%-----------------------------------------------------------------------------
+add_class_membership_basic(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("Vehicle", 3),
+	{ok, ClassB} = graphdb_class:create_class("Toy", 3),
+	{ok, Inst}   = graphdb_instance:create_instance("ToyCar", ClassA, 5),
+	?assertEqual({ok, [ClassA]}, graphdb_instance:class_memberships(Inst)),
+	?assertEqual(ok, graphdb_instance:add_class_membership(Inst, ClassB)),
+	?assertEqual({ok, [ClassA, ClassB]},
+		graphdb_instance:class_memberships(Inst)).
+
+%%-----------------------------------------------------------------------------
+%% add_class_membership writes a 29/30 arc pair.
+%%-----------------------------------------------------------------------------
+add_class_membership_writes_arcs(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("A", 3),
+	{ok, ClassB} = graphdb_class:create_class("B", 3),
+	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+
+	%% Instance -> ClassB (char=29, reciprocal=30)
+	{atomic, InstOut} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, Inst, #relationship.source_nref)
+	end),
+	?assert(lists:any(fun(R) ->
+		R#relationship.target_nref =:= ClassB andalso
+		R#relationship.characterization =:= 29 andalso
+		R#relationship.reciprocal =:= 30
+	end, InstOut)),
+
+	%% ClassB -> Instance (char=30, reciprocal=29)
+	{atomic, ClassOut} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, ClassB, #relationship.source_nref)
+	end),
+	?assert(lists:any(fun(R) ->
+		R#relationship.target_nref =:= Inst andalso
+		R#relationship.characterization =:= 30 andalso
+		R#relationship.reciprocal =:= 29
+	end, ClassOut)).
+
+%%-----------------------------------------------------------------------------
+%% Re-adding the same class is a no-op.  Cache stays single-valued and
+%% no extra arcs are written.
+%%-----------------------------------------------------------------------------
+add_class_membership_idempotent(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("A", 3),
+	{ok, ClassB} = graphdb_class:create_class("B", 3),
+	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	RelsBefore = mnesia:table_info(relationships, size),
+	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	RelsAfter = mnesia:table_info(relationships, size),
+	?assertEqual(RelsBefore, RelsAfter),
+	?assertEqual({ok, [ClassA, ClassB]},
+		graphdb_instance:class_memberships(Inst)).
+
+%%-----------------------------------------------------------------------------
+%% Missing instance subject is rejected.
+%%-----------------------------------------------------------------------------
+add_class_membership_rejects_missing_instance(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("A", 3),
+	?assertEqual({error, not_found},
+		graphdb_instance:add_class_membership(99999, ClassA)).
+
+%%-----------------------------------------------------------------------------
+%% Non-instance subject (e.g., a class node) is rejected.
+%%-----------------------------------------------------------------------------
+add_class_membership_rejects_non_instance(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("A", 3),
+	?assertEqual({error, not_an_instance},
+		graphdb_instance:add_class_membership(ClassA, ClassA)).
+
+%%-----------------------------------------------------------------------------
+%% Missing class target is rejected.
+%%-----------------------------------------------------------------------------
+add_class_membership_rejects_missing_class(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("A", 3),
+	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	?assertEqual({error, class_not_found},
+		graphdb_instance:add_class_membership(Inst, 99999)).
+
+%%-----------------------------------------------------------------------------
+%% Non-class target (e.g., an attribute node) is rejected.
+%%-----------------------------------------------------------------------------
+add_class_membership_rejects_non_class_target(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("A", 3),
+	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	%% Nref 6 (Names) is an attribute node
+	?assertMatch({error, {not_a_class, attribute}},
+		graphdb_instance:add_class_membership(Inst, 6)).
+
+%%-----------------------------------------------------------------------------
+%% After create_instance/3, class_memberships/1 returns the single class.
+%%-----------------------------------------------------------------------------
+class_memberships_initial(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("A", 3),
+	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	?assertEqual({ok, [ClassA]}, graphdb_instance:class_memberships(Inst)).
+
+
+%%=============================================================================
+%% Multi-Membership Resolver Tests (H5)
+%%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% Two classes, only one binds the attribute.  resolve_value returns
+%% that unique value.
+%%-----------------------------------------------------------------------------
+resolve_value_unique_across_two_classes(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("Mode", 3),
+	{ok, ClassB} = graphdb_class:create_class("Tag", 3),
+	{ok, Attr}   = graphdb_attr:create_literal_attribute("badge", string),
+	set_avp(ClassA, Attr, "blue_badge"),
+	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	?assertEqual({ok, "blue_badge"},
+		graphdb_instance:resolve_value(Inst, Attr)).
+
+%%-----------------------------------------------------------------------------
+%% Two classes both bind the attribute to the SAME value.  Not
+%% ambiguous -- single distinct value wins.
+%%-----------------------------------------------------------------------------
+resolve_value_same_value_two_classes(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("A", 3),
+	{ok, ClassB} = graphdb_class:create_class("B", 3),
+	{ok, Attr}   = graphdb_attr:create_literal_attribute("colour", string),
+	set_avp(ClassA, Attr, "red"),
+	set_avp(ClassB, Attr, "red"),
+	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	?assertEqual({ok, "red"},
+		graphdb_instance:resolve_value(Inst, Attr)).
+
+%%-----------------------------------------------------------------------------
+%% Two classes bind the attribute to DIFFERENT values.  Resolver returns
+%% an ambiguous_class_value error listing both class:value pairs.
+%%-----------------------------------------------------------------------------
+resolve_value_ambiguous_two_classes(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("A", 3),
+	{ok, ClassB} = graphdb_class:create_class("B", 3),
+	{ok, Attr}   = graphdb_attr:create_literal_attribute("flavour", string),
+	set_avp(ClassA, Attr, "sweet"),
+	set_avp(ClassB, Attr, "salty"),
+	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	Result = graphdb_instance:resolve_value(Inst, Attr),
+	?assertMatch({error, {ambiguous_class_value, Attr, _}}, Result),
+	{error, {ambiguous_class_value, _, Hits}} = Result,
+	?assertEqual(lists:sort([{ClassA, "sweet"}, {ClassB, "salty"}]),
+		lists:sort(Hits)).
+
+%%-----------------------------------------------------------------------------
+%% A local instance value still wins over an otherwise ambiguous pair
+%% of class-level bindings (Priority 1 outranks Priority 2 -- ambiguity
+%% is only checked when no local value exists).
+%%-----------------------------------------------------------------------------
+resolve_value_local_overrides_ambiguity(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("A", 3),
+	{ok, ClassB} = graphdb_class:create_class("B", 3),
+	{ok, Attr}   = graphdb_attr:create_literal_attribute("flavour", string),
+	set_avp(ClassA, Attr, "sweet"),
+	set_avp(ClassB, Attr, "salty"),
+	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	set_avp(Inst, Attr, "umami"),
+	?assertEqual({ok, "umami"},
+		graphdb_instance:resolve_value(Inst, Attr)).
+
+%%-----------------------------------------------------------------------------
+%% Per-membership taxonomy walk: ClassA's ancestor binds X, ClassB binds
+%% Y locally.  Both branches contribute to ambiguity detection, and the
+%% reported ClassNref is whichever class actually held the value (the
+%% ancestor for ClassA's branch, ClassB itself for the other).
+%%-----------------------------------------------------------------------------
+resolve_value_ambiguity_via_taxonomy(_Config) ->
+	{ok, AnimalCls} = graphdb_class:create_class("Animal", 3),
+	{ok, MammalCls} = graphdb_class:create_class("Mammal", AnimalCls),
+	{ok, ToyCls}    = graphdb_class:create_class("Toy", 3),
+	{ok, Attr}      = graphdb_attr:create_literal_attribute("origin", string),
+	set_avp(AnimalCls, Attr, "biological"),
+	set_avp(ToyCls,    Attr, "manufactured"),
+	{ok, Inst} = graphdb_instance:create_instance("Plushie", MammalCls, 5),
+	ok = graphdb_instance:add_class_membership(Inst, ToyCls),
+	Result = graphdb_instance:resolve_value(Inst, Attr),
+	?assertMatch({error, {ambiguous_class_value, Attr, _}}, Result),
+	{error, {ambiguous_class_value, _, Hits}} = Result,
+	?assertEqual(
+		lists:sort([{AnimalCls, "biological"}, {ToyCls, "manufactured"}]),
+		lists:sort(Hits)).
 
 
 %%=============================================================================
