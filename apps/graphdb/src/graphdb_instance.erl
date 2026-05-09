@@ -132,6 +132,7 @@
 		create_instance/3,
 		add_relationship/4,
 		add_relationship/5,
+		add_relationship/6,
 		add_class_membership/2,
 		%% Lookups
 		get_instance/1,
@@ -203,7 +204,7 @@ create_instance(Name, ClassNref, ParentNref) ->
 add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref) ->
 	gen_server:call(?MODULE,
 		{add_relationship, SourceNref, CharNref, TargetNref,
-			ReciprocalNref, default}).
+			ReciprocalNref, default, {[], []}}).
 
 
 %%-----------------------------------------------------------------------------
@@ -222,7 +223,27 @@ add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref) when is_integer(TemplateNref) ->
 	gen_server:call(?MODULE,
 		{add_relationship, SourceNref, CharNref, TargetNref,
-			ReciprocalNref, TemplateNref}).
+			ReciprocalNref, TemplateNref, {[], []}}).
+
+
+%%-----------------------------------------------------------------------------
+%% add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+%%                  TemplateNref, {FwdAVPs, RevAVPs}) -> ok | {error, term()}
+%%
+%% Full form (M5): callers can stamp per-direction metadata AVPs on the
+%% two connection rows.  AVPs are asymmetric -- forward and reverse are
+%% specified independently, since §5 says metadata such as provenance,
+%% confidence, weights, and validity windows is per-direction.
+%%
+%% The Template AVP (#{attribute => 31, value => TemplateNref}) is
+%% prepended to each direction's user-supplied AVP list.
+%%-----------------------------------------------------------------------------
+add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+		TemplateNref, {FwdAVPs, RevAVPs} = AVPSpec)
+		when is_integer(TemplateNref), is_list(FwdAVPs), is_list(RevAVPs) ->
+	gen_server:call(?MODULE,
+		{add_relationship, SourceNref, CharNref, TargetNref,
+			ReciprocalNref, TemplateNref, AVPSpec}).
 
 
 %%-----------------------------------------------------------------------------
@@ -329,8 +350,11 @@ init([]) ->
 handle_call({create_instance, Name, ClassNref, ParentNref}, _From, State) ->
 	{reply, do_create_instance(Name, ClassNref, ParentNref), State};
 
-handle_call({add_relationship, S, C, T, R, TemplateSpec}, _From, State) ->
-	{reply, do_add_relationship(S, C, T, R, TemplateSpec, State), State};
+handle_call({add_relationship, S, C, T, R, TemplateSpec, AVPSpec},
+		_From, State) ->
+	{reply,
+		do_add_relationship(S, C, T, R, TemplateSpec, AVPSpec, State),
+		State};
 
 handle_call({add_class_membership, InstanceNref, ClassNref}, _From, State) ->
 	{reply, do_add_class_membership(InstanceNref, ClassNref), State};
@@ -525,7 +549,7 @@ do_validate_parent(ParentNref) ->
 %% on each.
 %%-----------------------------------------------------------------------------
 do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
-		TemplateSpec, State) ->
+		TemplateSpec, AVPSpec, State) ->
 	TkAttr = State#state.target_kind_avp_nref,
 	case validate_arc_endpoints(SourceNref, CharNref, TargetNref,
 			ReciprocalNref, TkAttr) of
@@ -539,7 +563,8 @@ do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 								ok ->
 									write_connection_arcs(SourceNref,
 										CharNref, TargetNref,
-										ReciprocalNref, TemplateNref);
+										ReciprocalNref, TemplateNref,
+										AVPSpec);
 								{error, _} = Err -> Err
 							end;
 						{error, _} = Err -> Err
@@ -664,10 +689,14 @@ validate_template_scope(TemplateNref, SourceClass, TargetClass) ->
 
 
 %%-----------------------------------------------------------------------------
-%% write_connection_arcs(S, C, T, R, TemplateNref) -> ok | {error, term()}
+%% write_connection_arcs(S, C, T, R, TemplateNref, {FwdAVPs, RevAVPs}) ->
+%%     ok | {error, term()}
+%%
+%% The Template AVP is prepended to each direction's user AVPs so the
+%% scope is always present at index 0; M5 user AVPs follow.
 %%-----------------------------------------------------------------------------
 write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
-		TemplateNref) ->
+		TemplateNref, {FwdAVPs, RevAVPs}) ->
 	Id1 = nref_server:get_nref(),
 	Id2 = nref_server:get_nref(),
 	TemplateAVP = #{attribute => ?TEMPLATE_AVP_NREF, value => TemplateNref},
@@ -677,7 +706,7 @@ write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
 		characterization = CharNref,
 		target_nref = TargetNref,
 		reciprocal = ReciprocalNref,
-		avps = [TemplateAVP]
+		avps = [TemplateAVP | FwdAVPs]
 	},
 	Rev = #relationship{
 		id = Id2, kind = connection,
@@ -685,7 +714,7 @@ write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
 		characterization = ReciprocalNref,
 		target_nref = SourceNref,
 		reciprocal = CharNref,
-		avps = [TemplateAVP]
+		avps = [TemplateAVP | RevAVPs]
 	},
 	Txn = fun() ->
 		ok = mnesia:write(relationships, Fwd, write),

@@ -76,6 +76,9 @@
 	add_relationship_rejects_non_attribute_char/1,
 	add_relationship_rejects_non_attribute_reciprocal/1,
 	add_relationship_rejects_target_kind_mismatch/1,
+	add_relationship_stamps_user_avps/1,
+	add_relationship_avps_are_per_direction/1,
+	add_relationship_default_avps_empty/1,
 	class_of_returns_class/1,
 	%% Lookups
 	get_instance_returns_node/1,
@@ -150,6 +153,9 @@ groups() ->
 			add_relationship_rejects_non_attribute_char,
 			add_relationship_rejects_non_attribute_reciprocal,
 			add_relationship_rejects_target_kind_mismatch,
+			add_relationship_stamps_user_avps,
+			add_relationship_avps_are_per_direction,
+			add_relationship_default_avps_empty,
 			class_of_returns_class
 		]},
 		{lookups, [], [
@@ -577,6 +583,93 @@ add_relationship_rejects_target_kind_mismatch(_Config) ->
 		graphdb_attr:create_relationship_attribute("Has", "HeldBy", class),
 	?assertEqual({error, {target_kind_mismatch, class, instance}},
 		graphdb_instance:add_relationship(A, Char, B, Recip)).
+
+
+%%-----------------------------------------------------------------------------
+%% M5: /6 stamps user AVPs on both connection rows alongside the
+%% Template AVP.  Same AVPs are seen in fwd and rev directions when
+%% they're identical lists.
+%%-----------------------------------------------------------------------------
+add_relationship_stamps_user_avps(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Org", 3),
+	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
+	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+	{ok, Confidence} = graphdb_attr:create_literal_attribute("confidence", float),
+	UserAVP = #{attribute => Confidence, value => 0.95},
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip, DefaultTmpl,
+		{[UserAVP], [UserAVP]}),
+
+	%% Both directions should carry Template AVP and the user AVP.
+	{atomic, ARels} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, A, #relationship.source_nref)
+	end),
+	[Fwd] = [R || R <- ARels,
+		R#relationship.characterization =:= Char,
+		R#relationship.target_nref =:= B],
+	?assert(lists:member(#{attribute => 31, value => DefaultTmpl},
+		Fwd#relationship.avps)),
+	?assert(lists:member(UserAVP, Fwd#relationship.avps)).
+
+%%-----------------------------------------------------------------------------
+%% M5: forward and reverse AVPs are per-direction independent.  An AVP
+%% supplied only on the forward side must not leak into the reverse arc.
+%%-----------------------------------------------------------------------------
+add_relationship_avps_are_per_direction(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Org", 3),
+	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
+	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+	{ok, Source}     = graphdb_attr:create_literal_attribute("source",  string),
+	{ok, Confidence} = graphdb_attr:create_literal_attribute("conf",    float),
+	FwdOnly = #{attribute => Source,     value => "research-paper"},
+	RevOnly = #{attribute => Confidence, value => 0.42},
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip, DefaultTmpl,
+		{[FwdOnly], [RevOnly]}),
+
+	{atomic, ARels} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, A, #relationship.source_nref)
+	end),
+	[Fwd] = [R || R <- ARels,
+		R#relationship.characterization =:= Char,
+		R#relationship.target_nref =:= B],
+	?assert(lists:member(FwdOnly,     Fwd#relationship.avps)),
+	?assertNot(lists:member(RevOnly,  Fwd#relationship.avps)),
+
+	{atomic, BRels} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, B, #relationship.source_nref)
+	end),
+	[Rev] = [R || R <- BRels,
+		R#relationship.characterization =:= Recip,
+		R#relationship.target_nref =:= A],
+	?assert(lists:member(RevOnly,     Rev#relationship.avps)),
+	?assertNot(lists:member(FwdOnly,  Rev#relationship.avps)).
+
+%%-----------------------------------------------------------------------------
+%% M5: /4 and /5 default to {[],[]}, so connection rows carry only the
+%% Template AVP.
+%%-----------------------------------------------------------------------------
+add_relationship_default_avps_empty(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Org", 3),
+	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
+	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+
+	{atomic, ARels} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, A, #relationship.source_nref)
+	end),
+	[Fwd] = [R || R <- ARels,
+		R#relationship.characterization =:= Char,
+		R#relationship.target_nref =:= B],
+	?assertEqual([#{attribute => 31, value => DefaultTmpl}],
+		Fwd#relationship.avps).
 
 
 %%-----------------------------------------------------------------------------
