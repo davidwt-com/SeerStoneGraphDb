@@ -29,10 +29,10 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_language`  | Stub                                                                                                                                        |
 | Tests               | 228 passing (164 Common Test + 64 EUnit)                                                                                                    |
 
-The kernel is functional under multi-inheritance and multi-class-
-membership semantics. Template features beyond the connection-arc
-scope AVP (an attribute-value pair stored on a node or relationship
-row; M7) and multilingual support (M6) remain open; see §10.
+The kernel is functional under multi-inheritance, multi-class-
+membership, and per-class template semantics.  Multilingual label
+storage (M6) is the only open kernel-level question (§10);
+template-scoped queries land with the query DSL (TASKS-MEDIUM Task 6).
 
 ---
 
