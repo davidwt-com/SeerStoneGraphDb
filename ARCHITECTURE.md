@@ -9,7 +9,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 > implementation progresses within an already-described component. The canonical
 > spec is [`the-knowledge-network.md`](the-knowledge-network.md); the kernel
 > implements that model. Outstanding work is grouped by severity in
-> `TASKS-HIGH.md`, `TASKS-MEDIUM.md`, and `TASKS-LOW.md`.
+> `TASKS-MEDIUM.md` and `TASKS-LOW.md`.
 
 ---
 
@@ -27,7 +27,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance with multi-class membership (H4) and ambiguity-detecting class resolver (H5) |
 | `graphdb_rules`     | Stub                                                                                                                                        |
 | `graphdb_language`  | Stub                                                                                                                                        |
-| Tests               | 209 passing (145 Common Test + 64 EUnit)                                                                                                    |
+| Tests               | 218 passing (154 Common Test + 64 EUnit)                                                                                                    |
 
 The kernel is functional under multi-inheritance and multi-class-
 membership semantics. Template features beyond the connection-arc

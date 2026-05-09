@@ -66,6 +66,7 @@
 	create_name_attribute_basic/1,
 	create_literal_attribute_stores_type/1,
 	create_relationship_attribute_pair/1,
+	create_relationship_attribute_pair_atomic/1,
 	create_relationship_attribute_rejects_bad_kind/1,
 	create_relationship_type_basic/1,
 	new_attribute_writes_compositional_arcs/1,
@@ -101,6 +102,7 @@ groups() ->
 			create_name_attribute_basic,
 			create_literal_attribute_stores_type,
 			create_relationship_attribute_pair,
+			create_relationship_attribute_pair_atomic,
 			create_relationship_attribute_rejects_bad_kind,
 			create_relationship_type_basic,
 			new_attribute_writes_compositional_arcs
@@ -336,6 +338,39 @@ create_relationship_attribute_pair(_Config) ->
 		Fwd#node.attribute_value_pairs)),
 	?assert(lists:member(#{attribute => Tk, value => class},
 		Rev#node.attribute_value_pairs)).
+
+%%-----------------------------------------------------------------------------
+%% M4: create_relationship_attribute commits both nodes plus all four
+%% compositional arc rows in a single transaction.  After a successful
+%% call the row deltas must be exactly +2 on `nodes` and +4 on
+%% `relationships` -- no orphan halves, no double-counted arcs.
+%%-----------------------------------------------------------------------------
+create_relationship_attribute_pair_atomic(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	NodesBefore = mnesia:table_info(nodes, size),
+	RelsBefore  = mnesia:table_info(relationships, size),
+	{ok, {FwdNref, RevNref}} =
+		graphdb_attr:create_relationship_attribute("Owns", "OwnedBy", instance),
+	?assertEqual(NodesBefore + 2, mnesia:table_info(nodes, size)),
+	?assertEqual(RelsBefore  + 4, mnesia:table_info(relationships, size)),
+
+	%% Each new node has exactly one parent->child arc into it and one
+	%% child->parent arc out of it (kind=composition, char=24/23 from
+	%% the Attribute Relationships subtree).
+	%% Bootstrap nref 8 is the `Relationships` subtree under which all
+	%% relationship-attribute arc labels are filed.
+	{atomic, Out} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, 8, #relationship.source_nref)
+	end),
+	FwdInbound = [R || R <- Out,
+		R#relationship.target_nref =:= FwdNref,
+		R#relationship.characterization =:= 24],
+	RevInbound = [R || R <- Out,
+		R#relationship.target_nref =:= RevNref,
+		R#relationship.characterization =:= 24],
+	?assertEqual(1, length(FwdInbound)),
+	?assertEqual(1, length(RevInbound)),
+	?assertEqual(composition, (hd(FwdInbound))#relationship.kind).
 
 %%-----------------------------------------------------------------------------
 %% create_relationship_attribute rejects invalid target_kind atoms

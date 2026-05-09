@@ -29,9 +29,9 @@ underway:
 | `graphdb_rules`        | Gen_server stub — deferred to Enhancements (pattern recognition, relationship constraints)                                                                                                                     |
 | `graphdb_language`     | Gen_server stub — next to implement (Task 6)                                                                                                                                                                   |
 
-**209 tests** (64 EUnit + 145 Common Test) — all passing. See
-`TASKS-HIGH.md`, `TASKS-MEDIUM.md`, and `TASKS-LOW.md` for the
-prioritised task list (organised by severity).
+**218 tests** (64 EUnit + 154 Common Test) — all passing. See
+`TASKS-MEDIUM.md` and `TASKS-LOW.md` for the prioritised task list
+(organised by severity).
 
 ---
 
@@ -84,7 +84,6 @@ SeerStoneGraphDb/
 │   └── nref/          # Globally unique node-reference ID allocator
 ├── rebar.config       # rebar3 umbrella build configuration
 ├── Makefile           # Convenience targets (compile, shell, release, clean)
-├── TASKS-HIGH.md      # Inheritance/membership correctness bugs
 ├── TASKS-MEDIUM.md    # Semantic departures + query language + rules engine
 ├── TASKS-LOW.md       # Polish, perf, OTP plumbing, dictionary wiring
 └── CLAUDE.md          # Project guide and coding conventions
@@ -231,17 +230,17 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 ./rebar3 eunit --app=graphdb && ./rebar3 ct
 ```
 
-| Suite                     | Type  | Tests | Coverage                                                                                                                  |
-| ------------------------- | ----- | ----- | ------------------------------------------------------------------------------------------------------------------------- |
-| `graphdb_bootstrap_tests` | EUnit | 37    | Term parsing, validation, record conversion                                                                               |
-| `graphdb_mgr_tests`       | EUnit | 9     | Direction validation, client-side arg checks                                                                              |
-| `graphdb_class_tests`     | EUnit | 11    | `is_valid_parent_kind/1`, `collect_qc_nrefs/2`                                                                            |
-| `graphdb_instance_tests`  | EUnit | 7     | `find_avp_value/2`                                                                                                        |
-| `graphdb_bootstrap_SUITE` | CT    | 17    | Full bootstrap load, Mnesia tables, idempotency, error handling                                                           |
-| `graphdb_mgr_SUITE`       | CT    | 23    | Bootstrap init, read ops, category guard, write stubs, cache audit/repair                                                 |
-| `graphdb_attr_SUITE`      | CT    | 16    | Attribute create/lookup, seeding, relationship types                                                                      |
-| `graphdb_class_SUITE`     | CT    | 44    | Class create, QC, lookups, hierarchy, multi-inheritance (H3), inheritance, templates                                      |
-| `graphdb_instance_SUITE`  | CT    | 45    | Instance create, relationships, lookups, hierarchy, four-level inheritance, connections, multi-class membership (H4 + H5) |
+| Suite                     | Type  | Tests | Coverage                                                                                                                                            |
+| ------------------------- | ----- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `graphdb_bootstrap_tests` | EUnit | 37    | Term parsing, validation, record conversion                                                                                                         |
+| `graphdb_mgr_tests`       | EUnit | 9     | Direction validation, client-side arg checks                                                                                                        |
+| `graphdb_class_tests`     | EUnit | 11    | `is_valid_parent_kind/1`, `collect_qc_nrefs/2`                                                                                                      |
+| `graphdb_instance_tests`  | EUnit | 7     | `find_avp_value/2`                                                                                                                                  |
+| `graphdb_bootstrap_SUITE` | CT    | 17    | Full bootstrap load, Mnesia tables, idempotency, error handling                                                                                     |
+| `graphdb_mgr_SUITE`       | CT    | 23    | Bootstrap init, read ops, category guard, write stubs, cache audit/repair                                                                           |
+| `graphdb_attr_SUITE`      | CT    | 17    | Attribute create/lookup, seeding, relationship types, atomic reciprocal pair (M4)                                                                   |
+| `graphdb_class_SUITE`     | CT    | 44    | Class create, QC, lookups, hierarchy, multi-inheritance (H3), inheritance, templates                                                                |
+| `graphdb_instance_SUITE`  | CT    | 53    | Instance create, relationships (incl. M3 validation, M5 per-arc AVPs), lookups, hierarchy, four-level inheritance, multi-class membership (H4 + H5) |
 
 Each CT test case runs in an isolated Mnesia database with a fresh nref
 allocator in a private temp directory.
@@ -315,8 +314,8 @@ controlled by `logger_level` in `config/sys.config`.
 
 See `CLAUDE.md` for detailed coding conventions, the NYI/UEM macro pattern,
 module header format, naming conventions, and the git workflow. See
-`TASKS-HIGH.md`, `TASKS-MEDIUM.md`, and `TASKS-LOW.md` for the prioritised
-list of remaining implementation work, organised by severity.
+`TASKS-MEDIUM.md` and `TASKS-LOW.md` for the prioritised list of remaining
+implementation work, organised by severity.
 
 Key conventions at a glance:
 

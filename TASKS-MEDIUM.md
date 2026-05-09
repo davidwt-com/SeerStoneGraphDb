@@ -16,54 +16,71 @@ under the existing model.
 
 ---
 
-## M4. Reciprocal attribute pair must be created in one transaction
+## M4. Reciprocal attribute pair must be created in one transaction — RESOLVED
 
-**Spec:** §5 — reciprocal characterization is part of every connection's
-identity.
-
-**Evidence:** `graphdb_attr.erl:313-324`. `create_relationship_attribute/3`
-creates the forward attribute node in one transaction, then the reciprocal
-in a separate transaction. If the second aborts, the database is left
-with a half-pair: the forward arc-label exists, with no usable
-reciprocal.
-
-**Fix:** allocate both nrefs and both relationship-id nrefs outside,
-then write both nodes and all four compositional arc rows inside a
-single `mnesia:transaction/1`.
+**Status:** Fixed. `graphdb_attr:create_relationship_attribute/3` now
+delegates to a private `do_create_relationship_attribute_pair/3` helper
+that allocates the 2 node nrefs and 4 compositional arc-id nrefs
+outside the transaction (avoiding side-effects on retry) and writes
+all 6 rows in a single `mnesia:transaction/1`.  Mid-pair aborts can no
+longer leave the database with an orphan half-pair.  CT case
+`create_relationship_attribute_pair_atomic` asserts the row deltas
+are exactly +2 nodes and +4 relationships after a successful call,
+and that both new nodes have exactly one parent->child arc into them
+under the Relationships subtree (nref 8).
 
 ---
 
-## M3. `add_relationship/4` validates nothing
+## M3. `add_relationship/4` validates nothing — RESOLVED
 
-**Spec:** §5 — relationships are *strictly typed*.
+**Status:** Fixed. `graphdb_instance:add_relationship` now runs an
+explicit `validate_arc_endpoints/5` pass before resolving classes,
+templates, and writing arcs.  All four endpoint reads happen in one
+`mnesia:transaction/1`.  Failure modes are returned as structured
+errors:
 
-**Evidence:** `graphdb_instance.erl:420-446`. No check that `SourceNref`
-or `TargetNref` exist; no check that `CharNref` and `ReciprocalNref`
-reference attribute nodes; no check that the characterization's
-`target_kind` AVP matches the actual target node's kind.
+  - `{error, {source_not_found, Nref}}`
+  - `{error, {target_not_found, Nref}}`
+  - `{error, {characterization_not_found, Nref}}`
+  - `{error, {reciprocal_not_found, Nref}}`
+  - `{error, {characterization_not_an_attribute, Nref, ActualKind}}`
+  - `{error, {reciprocal_not_an_attribute, Nref, ActualKind}}`
+  - `{error, {target_kind_mismatch, ExpectedKind, ActualKind}}`
 
-**Fix:** inside the transaction, read source/target/characterization/
-reciprocal. Reject if missing; reject if char/reciprocal aren't kind=
-attribute; reject if target's kind disagrees with the characterization's
-`target_kind` AVP.
+The seeded `target_kind` literal-attribute nref is fetched from
+`graphdb_attr:seeded_nrefs()` once at `graphdb_instance:init/1` and
+cached in a new gen_server state record.  Arc-label nodes that don't
+carry a `target_kind` AVP (relationship-type bucket nodes, legacy
+data) skip the kind check.
+
+Tests: 5 CT cases under the `relationships` group covering the new
+reject paths.
 
 ---
 
-## M5. `add_relationship` cannot accept per-arc AVPs at creation
+## M5. `add_relationship` cannot accept per-arc AVPs at creation — RESOLVED
 
-**Spec:** §5 Connection — per-arc metadata (provenance, confidence,
-weights, validity time frames) is part of the connection.
+**Status:** Fixed. New API
+`graphdb_instance:add_relationship/6 :: (Source, Char, Target, Reciprocal,
+TemplateNref, {FwdAVPs, RevAVPs}) -> ok | {error, _}` accepts
+per-direction user AVPs and stamps them on the two connection rows
+alongside the auto-applied Template AVP.  Per-direction is required
+by §5: connection metadata such as provenance, confidence, weights,
+and validity windows is direction-specific.
 
-**Evidence:** `graphdb_instance.erl:182, 420-446`. `avps = []` hardcoded
-on both directions. No `/5` variant accepting AVPs.
+The Template AVP stays at index 0 of each row's `avps` list; user
+AVPs follow.  `/4` and `/5` stay non-breaking and pass `{[], []}` to
+`/6` internally.  `write_connection_arcs` was updated to thread the
+AVP spec through; the gen_server message form gained an `AVPSpec`
+element.
 
-**Fix:** add `add_relationship/5 :: (Source, Char, Target, Reciprocal,
-{FwdAVPs, RevAVPs})`. Per-direction AVPs because §5 says metadata is
-asymmetric. `/4` becomes a thin wrapper passing `{[],[]}`.
-
-**Dependencies:** prefer to land alongside C3 so the `/5` signature
-already accommodates the `Template` AVP for connection arcs without a
-later signature change.
+Tests: 3 CT cases under the `relationships` group:
+- `add_relationship_stamps_user_avps` — user AVP appears alongside
+  Template AVP on the forward row
+- `add_relationship_avps_are_per_direction` — fwd-only AVP doesn't
+  leak into the reverse row, and vice versa
+- `add_relationship_default_avps_empty` — `/4` still produces a row
+  carrying exactly the Template AVP
 
 ---
 
@@ -79,12 +96,12 @@ directly; the membership arc lookup reuses `do_class_of/1` so
 
 ## M1. PART-OF stored in two places with no consistency invariant — RESOLVED
 
-**Status:** Closed by H0 (`TASKS-HIGH.md`). The decision: arcs are
-authoritative, `node.parents`/`node.classes` are caches with a hard
-invariant enforced by `graphdb_mgr:verify_caches/0` (run in every CT
-`end_per_testcase` and at bootstrap load completion). Single-writer
-ownership rule documented in `arcs-authoritative.md` and
-`ARCHITECTURE.md` §3.
+**Status:** Closed by H0 (PR #10, commit `4e56761`). The decision:
+arcs are authoritative, `node.parents`/`node.classes` are caches with
+a hard invariant enforced by `graphdb_mgr:verify_caches/0` (run in
+every CT `end_per_testcase` and at bootstrap load completion).
+Single-writer ownership rule documented in `arcs-authoritative.md`
+and `ARCHITECTURE.md` §3.
 
 ---
 

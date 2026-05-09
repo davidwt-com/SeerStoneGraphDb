@@ -40,7 +40,6 @@ SeerStoneGraphDb/
 ├── rebar.lock         # Locked dependency versions
 ├── Makefile           # Convenience targets (compile, shell, release, clean, rebar3)
 ├── ARCHITECTURE.md    # High-level architecture; kept current with the code
-├── TASKS-HIGH.md      # Inheritance/membership correctness bugs
 ├── TASKS-MEDIUM.md    # Semantic departures + query language + rules engine
 ├── TASKS-LOW.md       # Polish, perf, OTP plumbing, dictionary wiring
 └── CLAUDE.md          # This file
@@ -264,12 +263,13 @@ These are outstanding items — all previously known bugs have been fixed.
 
 ## Remaining Work
 
-Remaining tasks are organised by severity in three files: `TASKS-HIGH.md`,
-`TASKS-MEDIUM.md`, `TASKS-LOW.md`. High items are correctness bugs in
-inheritance and class membership. Medium covers semantic gaps plus the
-query language (Task 6) and rules engine (E1). Low covers polish,
+Remaining tasks are organised by severity in two files:
+`TASKS-MEDIUM.md` and `TASKS-LOW.md`. Medium covers semantic gaps plus
+the query language (Task 6) and rules engine (E1). Low covers polish,
 performance, OTP plumbing, and dictionary wiring (Task 7). Critical
-schema-level work is complete (PR #9, commit `ce2e281`).
+schema-level work is complete (PR #9, commit `ce2e281`); the
+high-severity inheritance/membership correctness work landed in PR
+#12 (commit `61c5488`).
 
 ## Configuration
 
@@ -324,8 +324,8 @@ detail.
 - Implementation progress within an already-described component.
 
 The canonical spec is `the-knowledge-network.md` — it does **not** track
-the code. Outstanding work lives in `TASKS-HIGH.md`, `TASKS-MEDIUM.md`,
-and `TASKS-LOW.md`.
+the code. Outstanding work lives in `TASKS-MEDIUM.md` and
+`TASKS-LOW.md`.
 
 ## Storage Technologies Used
 

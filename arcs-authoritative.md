@@ -120,7 +120,9 @@ between the rebuilt caches and the arcs is a fatal startup error.
 
 ## Migration / H0 scope
 
-See `TASKS-HIGH.md` H0 for the substep checklist.
+H0 landed across substeps H0a–H0e in PR #10 (commit `4e56761`); the
+final fold + RESOLVED markers shipped in commit `f2fead8`. See git
+history for the substep commits.
 
 ## Consequences
 

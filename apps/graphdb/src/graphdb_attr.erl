@@ -318,15 +318,9 @@ handle_call({create_literal_attribute, Name, Type}, _From,
 handle_call({create_relationship_attribute, Name, ReciprocalName, TargetKind},
 		_From, #state{target_kind_nref = TkAttr} = State) ->
 	Extra = [#{attribute => TkAttr, value => TargetKind}],
-	case do_create_attribute(Name, ?PARENT_RELATIONSHIPS, Extra) of
-		{ok, FwdNref} ->
-			case do_create_attribute(ReciprocalName, ?PARENT_RELATIONSHIPS, Extra) of
-				{ok, RevNref} -> {reply, {ok, {FwdNref, RevNref}}, State};
-				{error, _} = Err -> {reply, Err, State}
-			end;
-		{error, _} = Err ->
-			{reply, Err, State}
-	end;
+	{reply,
+		do_create_relationship_attribute_pair(Name, ReciprocalName, Extra),
+		State};
 
 handle_call({create_relationship_type, Name}, _From, State) ->
 	Reply = do_create_attribute(Name, ?PARENT_RELATIONSHIPS, []),
@@ -483,6 +477,91 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 	end,
 	case mnesia:transaction(Txn) of
 		{atomic, ok}      -> {ok, Nref};
+		{aborted, Reason} -> {error, Reason}
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
+%%     {ok, {FwdNref, RevNref}} | {error, term()}
+%%
+%% Atomically creates a reciprocal pair of arc-label attribute nodes
+%% under the `Relationships` subtree (nref 8).  Both nodes plus all
+%% four compositional arc rows (parent->child + child->parent for each
+%% direction) are written inside a single Mnesia transaction so a
+%% mid-pair abort cannot leave the database with an orphan half-pair.
+%%-----------------------------------------------------------------------------
+do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
+	FwdNref = nref_server:get_nref(),
+	RevNref = nref_server:get_nref(),
+	Id1 = nref_server:get_nref(),
+	Id2 = nref_server:get_nref(),
+	Id3 = nref_server:get_nref(),
+	Id4 = nref_server:get_nref(),
+	FwdAVPs = [#{attribute => ?NAME_ATTR_FOR_ATTRIBUTE, value => FwdName}
+		| ExtraAVPs],
+	RevAVPs = [#{attribute => ?NAME_ATTR_FOR_ATTRIBUTE, value => RevName}
+		| ExtraAVPs],
+	FwdNode = #node{
+		nref = FwdNref,
+		kind = attribute,
+		parents = [?PARENT_RELATIONSHIPS],
+		attribute_value_pairs = FwdAVPs
+	},
+	RevNode = #node{
+		nref = RevNref,
+		kind = attribute,
+		parents = [?PARENT_RELATIONSHIPS],
+		attribute_value_pairs = RevAVPs
+	},
+	%% Forward node compositional arcs.
+	FwdP2C = #relationship{
+		id = Id1,
+		kind = composition,
+		source_nref = ?PARENT_RELATIONSHIPS,
+		characterization = ?ATTR_CHILD_ARC,
+		target_nref = FwdNref,
+		reciprocal = ?ATTR_PARENT_ARC,
+		avps = []
+	},
+	FwdC2P = #relationship{
+		id = Id2,
+		kind = composition,
+		source_nref = FwdNref,
+		characterization = ?ATTR_PARENT_ARC,
+		target_nref = ?PARENT_RELATIONSHIPS,
+		reciprocal = ?ATTR_CHILD_ARC,
+		avps = []
+	},
+	%% Reciprocal node compositional arcs.
+	RevP2C = #relationship{
+		id = Id3,
+		kind = composition,
+		source_nref = ?PARENT_RELATIONSHIPS,
+		characterization = ?ATTR_CHILD_ARC,
+		target_nref = RevNref,
+		reciprocal = ?ATTR_PARENT_ARC,
+		avps = []
+	},
+	RevC2P = #relationship{
+		id = Id4,
+		kind = composition,
+		source_nref = RevNref,
+		characterization = ?ATTR_PARENT_ARC,
+		target_nref = ?PARENT_RELATIONSHIPS,
+		reciprocal = ?ATTR_CHILD_ARC,
+		avps = []
+	},
+	Txn = fun() ->
+		ok = mnesia:write(nodes, FwdNode, write),
+		ok = mnesia:write(nodes, RevNode, write),
+		ok = mnesia:write(relationships, FwdP2C, write),
+		ok = mnesia:write(relationships, FwdC2P, write),
+		ok = mnesia:write(relationships, RevP2C, write),
+		ok = mnesia:write(relationships, RevC2P, write)
+	end,
+	case mnesia:transaction(Txn) of
+		{atomic, ok}      -> {ok, {FwdNref, RevNref}};
 		{aborted, Reason} -> {error, Reason}
 	end.
 
