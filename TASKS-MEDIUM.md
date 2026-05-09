@@ -96,12 +96,12 @@ directly; the membership arc lookup reuses `do_class_of/1` so
 
 ## M1. PART-OF stored in two places with no consistency invariant — RESOLVED
 
-**Status:** Closed by H0 (`TASKS-HIGH.md`). The decision: arcs are
-authoritative, `node.parents`/`node.classes` are caches with a hard
-invariant enforced by `graphdb_mgr:verify_caches/0` (run in every CT
-`end_per_testcase` and at bootstrap load completion). Single-writer
-ownership rule documented in `arcs-authoritative.md` and
-`ARCHITECTURE.md` §3.
+**Status:** Closed by H0 (PR #10, commit `4e56761`). The decision:
+arcs are authoritative, `node.parents`/`node.classes` are caches with
+a hard invariant enforced by `graphdb_mgr:verify_caches/0` (run in
+every CT `end_per_testcase` and at bootstrap load completion).
+Single-writer ownership rule documented in `arcs-authoritative.md`
+and `ARCHITECTURE.md` §3.
 
 ---
 

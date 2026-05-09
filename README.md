@@ -30,8 +30,8 @@ underway:
 | `graphdb_language`     | Gen_server stub — next to implement (Task 6)                                                                                                                                                                   |
 
 **218 tests** (64 EUnit + 154 Common Test) — all passing. See
-`TASKS-HIGH.md`, `TASKS-MEDIUM.md`, and `TASKS-LOW.md` for the
-prioritised task list (organised by severity).
+`TASKS-MEDIUM.md` and `TASKS-LOW.md` for the prioritised task list
+(organised by severity).
 
 ---
 
@@ -84,7 +84,6 @@ SeerStoneGraphDb/
 │   └── nref/          # Globally unique node-reference ID allocator
 ├── rebar.config       # rebar3 umbrella build configuration
 ├── Makefile           # Convenience targets (compile, shell, release, clean)
-├── TASKS-HIGH.md      # Inheritance/membership correctness bugs
 ├── TASKS-MEDIUM.md    # Semantic departures + query language + rules engine
 ├── TASKS-LOW.md       # Polish, perf, OTP plumbing, dictionary wiring
 └── CLAUDE.md          # Project guide and coding conventions
@@ -315,8 +314,8 @@ controlled by `logger_level` in `config/sys.config`.
 
 See `CLAUDE.md` for detailed coding conventions, the NYI/UEM macro pattern,
 module header format, naming conventions, and the git workflow. See
-`TASKS-HIGH.md`, `TASKS-MEDIUM.md`, and `TASKS-LOW.md` for the prioritised
-list of remaining implementation work, organised by severity.
+`TASKS-MEDIUM.md` and `TASKS-LOW.md` for the prioritised list of remaining
+implementation work, organised by severity.
 
 Key conventions at a glance:
 
