@@ -12,12 +12,20 @@
 %%				the Mnesia `nodes` table with kind=attribute and a
 %%				compositional parent in the attribute library tree.
 %%
-%%				On first startup, graphdb_attr seeds three runtime
+%%				On first startup, graphdb_attr seeds four runtime
 %%				literal attributes under the `Literals` subtree (nref
-%%				7): `literal_type`, `target_kind`, and
-%%				`relationship_avp`.  Subsequent startups detect the
+%%				7): `literal_type`, `target_kind`, `relationship_avp`,
+%%				and `attribute_type`.  Subsequent startups detect the
 %%				existing seeds by name and cache their nrefs in the
 %%				gen_server state.
+%%
+%%				`attribute_type` is stamped as an AVP on every
+%%				attribute node (value :: name | literal | relationship)
+%%				so the type is read directly from the node rather than
+%%				inferred by walking the parent chain.  Bootstrap
+%%				attribute nodes are retro-stamped at init/1 time
+%%				based on their position under the Names (6) / Literals
+%%				(7) / Relationships (8) subtree.
 %%---------------------------------------------------------------------
 %% Revision History
 %%---------------------------------------------------------------------
@@ -115,7 +123,8 @@
 -record(state, {
 	literal_type_nref,		%% integer() -- seeded literal attribute
 	target_kind_nref,		%% integer() -- seeded literal attribute
-	relationship_avp_nref	%% integer() -- seeded literal attribute
+	relationship_avp_nref,	%% integer() -- seeded literal attribute
+	attribute_type_nref		%% integer() -- seeded literal attribute (M8)
 }).
 
 
@@ -136,6 +145,7 @@
 		get_attribute/1,
 		list_attributes/0,
 		list_relationship_types/0,
+		attribute_type_of/1,
 		%% Seeded nref accessors
 		seeded_nrefs/0
 		]).
@@ -259,11 +269,26 @@ list_relationship_types() ->
 
 
 %%-----------------------------------------------------------------------------
-%% seeded_nrefs() -> {ok, #{literal_type => integer(),
-%%                          target_kind => integer(),
-%%                          relationship_avp => integer()}}
+%% attribute_type_of(Nref) ->
+%%     {ok, name | literal | relationship}
+%%   | {error, not_found | not_an_attribute | no_attribute_type | term()}
 %%
-%% Returns the nrefs of the three seeded runtime literal attributes.
+%% Reads the `attribute_type` AVP from an attribute node and returns
+%% the kind directly -- no parent-chain walk.  Stamped on every
+%% attribute by graphdb_attr at creation; bootstrap attribute nodes
+%% are retro-stamped at init/1.
+%%-----------------------------------------------------------------------------
+attribute_type_of(Nref) ->
+	gen_server:call(?MODULE, {attribute_type_of, Nref}).
+
+
+%%-----------------------------------------------------------------------------
+%% seeded_nrefs() -> {ok, #{literal_type      => integer(),
+%%                          target_kind       => integer(),
+%%                          relationship_avp  => integer(),
+%%                          attribute_type    => integer()}}
+%%
+%% Returns the nrefs of the four seeded runtime literal attributes.
 %% Primarily intended for other graphdb workers and integration tests.
 %%-----------------------------------------------------------------------------
 seeded_nrefs() ->
@@ -287,13 +312,17 @@ init([]) ->
 		State = #state{
 			literal_type_nref     = ensure_seed("literal_type"),
 			target_kind_nref      = ensure_seed("target_kind"),
-			relationship_avp_nref = ensure_seed("relationship_avp")
+			relationship_avp_nref = ensure_seed("relationship_avp"),
+			attribute_type_nref   = ensure_seed("attribute_type")
 		},
 		ok = ensure_template_avp_marker(State#state.relationship_avp_nref),
+		ok = retro_stamp_bootstrap_attribute_types(
+			State#state.attribute_type_nref),
 		logger:info("graphdb_attr: started (literal_type=~p, target_kind=~p, "
-			"relationship_avp=~p)",
+			"relationship_avp=~p, attribute_type=~p)",
 			[State#state.literal_type_nref, State#state.target_kind_nref,
-			 State#state.relationship_avp_nref]),
+			 State#state.relationship_avp_nref,
+			 State#state.attribute_type_nref]),
 		{ok, State}
 	catch
 		throw:{error, Reason} ->
@@ -306,24 +335,28 @@ init([]) ->
 %% handle_call/3 -- Creators
 %%-----------------------------------------------------------------------------
 handle_call({create_name_attribute, Name}, _From, State) ->
-	Reply = do_create_attribute(Name, ?PARENT_NAMES, []),
+	Extra = [attr_type_avp(name, State)],
+	Reply = do_create_attribute(Name, ?PARENT_NAMES, Extra),
 	{reply, Reply, State};
 
 handle_call({create_literal_attribute, Name, Type}, _From,
 		#state{literal_type_nref = TypeAttr} = State) ->
-	Extra = [#{attribute => TypeAttr, value => Type}],
+	Extra = [#{attribute => TypeAttr, value => Type},
+			 attr_type_avp(literal, State)],
 	Reply = do_create_attribute(Name, ?PARENT_LITERALS, Extra),
 	{reply, Reply, State};
 
 handle_call({create_relationship_attribute, Name, ReciprocalName, TargetKind},
 		_From, #state{target_kind_nref = TkAttr} = State) ->
-	Extra = [#{attribute => TkAttr, value => TargetKind}],
+	Extra = [#{attribute => TkAttr, value => TargetKind},
+			 attr_type_avp(relationship, State)],
 	{reply,
 		do_create_relationship_attribute_pair(Name, ReciprocalName, Extra),
 		State};
 
 handle_call({create_relationship_type, Name}, _From, State) ->
-	Reply = do_create_attribute(Name, ?PARENT_RELATIONSHIPS, []),
+	Extra = [attr_type_avp(relationship, State)],
+	Reply = do_create_attribute(Name, ?PARENT_RELATIONSHIPS, Extra),
 	{reply, Reply, State};
 
 %%-----------------------------------------------------------------------------
@@ -338,11 +371,16 @@ handle_call(list_attributes, _From, State) ->
 handle_call(list_relationship_types, _From, State) ->
 	{reply, do_list_children(?PARENT_RELATIONSHIPS), State};
 
+handle_call({attribute_type_of, Nref}, _From,
+		#state{attribute_type_nref = AtAttr} = State) ->
+	{reply, do_attribute_type_of(Nref, AtAttr), State};
+
 handle_call(seeded_nrefs, _From, State) ->
 	Reply = {ok, #{
 		literal_type     => State#state.literal_type_nref,
 		target_kind      => State#state.target_kind_nref,
-		relationship_avp => State#state.relationship_avp_nref
+		relationship_avp => State#state.relationship_avp_nref,
+		attribute_type   => State#state.attribute_type_nref
 	}},
 	{reply, Reply, State};
 
@@ -620,6 +658,121 @@ downward_children_by_arc(ParentNref, ChildArc, RelKind) ->
 		A#relationship.kind =:= RelKind,
 		A#relationship.characterization =:= ChildArc],
 	lists:flatmap(fun(N) -> mnesia:read(nodes, N) end, Nrefs).
+
+
+%%-----------------------------------------------------------------------------
+%% attr_type_avp(Kind, State) -> #{attribute := integer(), value := atom()}
+%%
+%% Builds the `attribute_type` AVP map keyed by the seeded
+%% attribute_type literal-attribute nref carried in gen_server state.
+%% Kind is one of: name | literal | relationship.
+%%-----------------------------------------------------------------------------
+attr_type_avp(Kind, #state{attribute_type_nref = AtAttr})
+		when Kind =:= name; Kind =:= literal; Kind =:= relationship ->
+	#{attribute => AtAttr, value => Kind}.
+
+
+%%-----------------------------------------------------------------------------
+%% do_attribute_type_of(Nref, AtAttrNref) ->
+%%     {ok, name | literal | relationship}
+%%   | {error, not_found | not_an_attribute | no_attribute_type | term()}
+%%-----------------------------------------------------------------------------
+do_attribute_type_of(Nref, AtAttrNref) ->
+	F = fun() -> mnesia:read(nodes, Nref) end,
+	case mnesia:transaction(F) of
+		{atomic, [#node{kind = attribute, attribute_value_pairs = AVPs}]} ->
+			case find_attribute_type_value(AtAttrNref, AVPs) of
+				{ok, Kind}  -> {ok, Kind};
+				not_found   -> {error, no_attribute_type}
+			end;
+		{atomic, [_Other]} -> {error, not_an_attribute};
+		{atomic, []}       -> {error, not_found};
+		{aborted, Reason}  -> {error, Reason}
+	end.
+
+find_attribute_type_value(_AtAttrNref, []) ->
+	not_found;
+find_attribute_type_value(AtAttrNref,
+		[#{attribute := AtAttrNref, value := V} | _]) ->
+	{ok, V};
+find_attribute_type_value(AtAttrNref, [_ | Rest]) ->
+	find_attribute_type_value(AtAttrNref, Rest).
+
+
+%%-----------------------------------------------------------------------------
+%% retro_stamp_bootstrap_attribute_types(AtAttrNref) -> ok
+%%
+%% Idempotently stamps `#{attribute => AtAttrNref, value => Kind}` on
+%% every attribute-kind node missing this AVP.  Kind is determined by
+%% walking the parents cache up to one of the three top-level subtrees:
+%%   nref  6  Names         -> name
+%%   nref  7  Literals      -> literal
+%%   nref  8  Relationships -> relationship
+%% Nodes 6, 7, 8 themselves are special-cased to their own kind.  Nodes
+%% that cannot be classified (no path to 6/7/8) are skipped silently.
+%%
+%% Mirrors `ensure_template_avp_marker/1`: bootstrap.terms cannot include
+%% the AVP because the keying attribute itself is seeded at runtime, so
+%% the stamp must be applied post-seed.
+%%-----------------------------------------------------------------------------
+retro_stamp_bootstrap_attribute_types(AtAttrNref) ->
+	Txn = fun() ->
+		Attrs = mnesia:match_object(nodes,
+			#node{_ = '_', kind = attribute}, read),
+		lists:foreach(
+			fun(N) -> stamp_attribute_type_if_missing(N, AtAttrNref) end,
+			Attrs)
+	end,
+	case mnesia:transaction(Txn) of
+		{atomic, ok}      -> ok;
+		{atomic, _Other}  -> ok;
+		{aborted, Reason} -> throw({error, Reason})
+	end.
+
+stamp_attribute_type_if_missing(#node{nref = Nref,
+		attribute_value_pairs = AVPs} = Node, AtAttrNref) ->
+	case has_attribute_type_avp(AVPs, AtAttrNref) of
+		true ->
+			ok;
+		false ->
+			case classify_attribute_node(Nref, []) of
+				undefined ->
+					ok;
+				Kind ->
+					NewAVP = #{attribute => AtAttrNref, value => Kind},
+					Updated = Node#node{
+						attribute_value_pairs = AVPs ++ [NewAVP]
+					},
+					ok = mnesia:write(nodes, Updated, write)
+			end
+	end.
+
+has_attribute_type_avp(AVPs, AtAttrNref) ->
+	lists:any(fun
+		(#{attribute := A}) -> A =:= AtAttrNref;
+		(_) -> false
+	end, AVPs).
+
+%% classify_attribute_node(Nref, Visited) -> name | literal | relationship | undefined
+%%
+%% Walks the parents cache to determine which top-level attribute
+%% subtree (6/7/8) the node belongs to.  Must run inside a Mnesia
+%% transaction.  Visited list guards against cycles in malformed data.
+classify_attribute_node(?PARENT_NAMES,         _Visited) -> name;
+classify_attribute_node(?PARENT_LITERALS,      _Visited) -> literal;
+classify_attribute_node(?PARENT_RELATIONSHIPS, _Visited) -> relationship;
+classify_attribute_node(Nref, Visited) ->
+	case lists:member(Nref, Visited) of
+		true ->
+			undefined;
+		false ->
+			case mnesia:read(nodes, Nref) of
+				[#node{parents = []}]      -> undefined;
+				[#node{parents = [P | _]}] ->
+					classify_attribute_node(P, [Nref | Visited]);
+				[]                         -> undefined
+			end
+	end.
 
 
 %%-----------------------------------------------------------------------------

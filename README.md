@@ -5,11 +5,10 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 # SeerStoneGraphDb
 
-A distributed graph database written in Erlang/OTP, originally authored by
-Dallas Noyes (SeerStone, Inc., 2008). Dallas passed away before completing the
-project. The goal is to finish and extend his work. PRs are welcome. Treat this
-codebase with care — preserve Dallas's style and conventions wherever possible
-when completing NYI stubs.
+A distributed graph database written in Erlang/OTP (the Open Telecom
+Platform), originally authored by Dallas Noyes (SeerStone, Inc., 2008).
+Dallas passed away before completing the project. The goal is to finish
+and extend his work. PRs are welcome.
 
 ### Current Status
 
@@ -19,17 +18,17 @@ underway:
 
 | Component              | Status                                                                                                                                                                                                         |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `nref` subsystem       | Fully implemented (DETS-backed ID allocator with `set_floor/1`)                                                                                                                                                |
+| `nref` subsystem       | Fully implemented (DETS — Disk-based Erlang Term Storage — backed ID allocator with `set_floor/1`)                                                                                                             |
 | `dictionary` subsystem | `dictionary_imp` implemented; server stubs not yet wired (Task 7)                                                                                                                                              |
-| `graphdb_bootstrap`    | Fully implemented — Mnesia schema/table creation, bootstrap scaffold loader (31 nodes, 30 relationship pairs)                                                                                                  |
+| `graphdb_bootstrap`    | Fully implemented — Mnesia (Erlang's built-in distributed database) schema/table creation, bootstrap scaffold loader (31 nodes, 30 relationship pairs)                                                         |
 | `graphdb_mgr`          | Implemented — bootstrap init, public read API (`get_node`, `get_relationships`), category immutability guard, cache audit/repair (`verify_caches/0`, `rebuild_caches/0`); write operations delegate to workers |
 | `graphdb_attr`         | Fully implemented — attribute library (name, literal, relationship attributes, relationship types)                                                                                                             |
-| `graphdb_class`        | Fully implemented — taxonomic hierarchy with multi-parent inheritance (BFS DAG), qualifying characteristics, class-level inheritance                                                                           |
+| `graphdb_class`        | Fully implemented — taxonomic hierarchy with multi-parent inheritance (BFS — breadth-first search — over a DAG, a directed acyclic graph), qualifying characteristics, class-level inheritance                 |
 | `graphdb_instance`     | Fully implemented — compositional hierarchy, multi-class membership, four-level inheritance with class-resolver ambiguity detection                                                                            |
 | `graphdb_rules`        | Gen_server stub — deferred to Enhancements (pattern recognition, relationship constraints)                                                                                                                     |
 | `graphdb_language`     | Gen_server stub — next to implement (Task 6)                                                                                                                                                                   |
 
-**218 tests** (64 EUnit + 154 Common Test) — all passing. See
+**228 tests** (64 EUnit + 164 Common Test) — all passing. See
 `TASKS-MEDIUM.md` and `TASKS-LOW.md` for the prioritised task list
 (organised by severity).
 
@@ -80,7 +79,7 @@ SeerStoneGraphDb/
 │   ├── seerstone/     # Top-level OTP application and supervisor
 │   ├── database/      # database application (supervises graphdb + dictionary)
 │   ├── graphdb/       # Graph database application and workers
-│   ├── dictionary/    # ETS/file-backed key-value dictionary application
+│   ├── dictionary/    # In-memory (ETS — Erlang Term Storage) and file-backed key-value dictionary
 │   └── nref/          # Globally unique node-reference ID allocator
 ├── rebar.config       # rebar3 umbrella build configuration
 ├── Makefile           # Convenience targets (compile, shell, release, clean)
@@ -150,7 +149,8 @@ domain-specific behavior lives in the ontology; the kernel contains none of it.
 ### Node Types
 
 Every entity in the system — class, attribute, rule, template, or instance — is a
-**concept node** with a stable, unique identity (an Nref).
+**concept node** with a stable, unique identity called an **Nref** (node
+reference number — a positive integer allocated by the `nref` subsystem).
 
 | Type               | Where defined | Description                                                                                                                                    |
 | ------------------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -230,17 +230,17 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 ./rebar3 eunit --app=graphdb && ./rebar3 ct
 ```
 
-| Suite                     | Type  | Tests | Coverage                                                                                                                                            |
-| ------------------------- | ----- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `graphdb_bootstrap_tests` | EUnit | 37    | Term parsing, validation, record conversion                                                                                                         |
-| `graphdb_mgr_tests`       | EUnit | 9     | Direction validation, client-side arg checks                                                                                                        |
-| `graphdb_class_tests`     | EUnit | 11    | `is_valid_parent_kind/1`, `collect_qc_nrefs/2`                                                                                                      |
-| `graphdb_instance_tests`  | EUnit | 7     | `find_avp_value/2`                                                                                                                                  |
-| `graphdb_bootstrap_SUITE` | CT    | 17    | Full bootstrap load, Mnesia tables, idempotency, error handling                                                                                     |
-| `graphdb_mgr_SUITE`       | CT    | 23    | Bootstrap init, read ops, category guard, write stubs, cache audit/repair                                                                           |
-| `graphdb_attr_SUITE`      | CT    | 17    | Attribute create/lookup, seeding, relationship types, atomic reciprocal pair (M4)                                                                   |
-| `graphdb_class_SUITE`     | CT    | 44    | Class create, QC, lookups, hierarchy, multi-inheritance (H3), inheritance, templates                                                                |
-| `graphdb_instance_SUITE`  | CT    | 53    | Instance create, relationships (incl. M3 validation, M5 per-arc AVPs), lookups, hierarchy, four-level inheritance, multi-class membership (H4 + H5) |
+| Suite                     | Type  | Tests | Coverage                                                                                                                                                                    |
+| ------------------------- | ----- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `graphdb_bootstrap_tests` | EUnit | 37    | Term parsing, validation, record conversion                                                                                                                                 |
+| `graphdb_mgr_tests`       | EUnit | 9     | Direction validation, client-side arg checks                                                                                                                                |
+| `graphdb_class_tests`     | EUnit | 11    | `is_valid_parent_kind/1`, `collect_qc_nrefs/2`                                                                                                                              |
+| `graphdb_instance_tests`  | EUnit | 7     | `find_avp_value/2`                                                                                                                                                          |
+| `graphdb_bootstrap_SUITE` | CT    | 17    | Full bootstrap load, Mnesia tables, idempotency, error handling                                                                                                             |
+| `graphdb_mgr_SUITE`       | CT    | 23    | Bootstrap init, read ops, category guard, write stubs, cache audit/repair                                                                                                   |
+| `graphdb_attr_SUITE`      | CT    | 17    | Attribute create/lookup, seeding, relationship types, atomic reciprocal pair (M4)                                                                                           |
+| `graphdb_class_SUITE`     | CT    | 44    | Class create, QC (qualifying characteristics), lookups, hierarchy, multi-inheritance (H3), inheritance, templates                                                           |
+| `graphdb_instance_SUITE`  | CT    | 53    | Instance create, relationships (incl. M3 validation, M5 per-arc AVPs — attribute-value pairs), lookups, hierarchy, four-level inheritance, multi-class membership (H4 + H5) |
 
 Each CT test case runs in an isolated Mnesia database with a fresh nref
 allocator in a private temp directory.

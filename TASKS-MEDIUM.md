@@ -105,20 +105,38 @@ and `ARCHITECTURE.md` §3.
 
 ---
 
-## M8. Attribute "type" (name vs. literal vs. relationship) is implied by parent subtree
+## M8. Attribute "type" (name vs. literal vs. relationship) is implied by parent subtree — RESOLVED
 
-**Spec:** §4 — *"The distinction between relationship attributes and
-literal attributes is architecturally significant."*
+**Status:** Fixed via Option A (AVP-based marker).
+`graphdb_attr` now seeds a fourth runtime literal attribute,
+`attribute_type`, alongside `literal_type`, `target_kind`, and
+`relationship_avp`.  All four `create_*` paths stamp an
+`#{attribute => attribute_type_nref, value => name|literal|relationship}`
+AVP on the new node:
 
-**Evidence:** `graphdb_attr.erl:303-328`. The three `create_*_attribute`
-paths put nodes under different parents (Names=6, Literals=7,
-Relationships=8). The node carries no AVP marking its type. Inferring
-the type at query time means walking the parent chain.
+  - `create_name_attribute/1` → `name`
+  - `create_literal_attribute/2` → `literal`
+  - `create_relationship_attribute/3` → `relationship` (on both
+    forward and reciprocal nodes)
+  - `create_relationship_type/1` → `relationship`
 
-**Fix:** add an `attribute_type :: name | literal | relationship` AVP at
-creation time, keyed by a new seeded `attribute_type` literal attribute.
-Or add a dedicated field to the node record (smaller change to the
-record set already touched by Critical tasks).
+Bootstrap attribute nodes (nrefs 6-31) are retro-stamped at
+`graphdb_attr:init/1` by walking the `parents` cache up to one of the
+three top-level subtrees (Names=6, Literals=7, Relationships=8) — same
+pattern as `ensure_template_avp_marker/1`.  The retro-stamp is
+idempotent across restarts.
+
+New public API: `graphdb_attr:attribute_type_of/1` returns
+`{ok, name | literal | relationship}` directly from the AVP without
+walking the parent chain.  `seeded_nrefs/0` now also reports the
+`attribute_type` key.
+
+Tests: 10 new CT cases under a new `attribute_type` group cover seed
+exposure, AVP stamping on each create path, lookup correctness for
+both runtime and bootstrap nodes, error paths, and retro-stamp
+idempotence.  Existing strict-equality AVP assertions in the
+`creators` group were widened to `lists:member` checks to accommodate
+the additional AVP.
 
 ---
 

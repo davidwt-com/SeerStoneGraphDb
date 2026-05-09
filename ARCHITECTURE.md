@@ -17,31 +17,32 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 | Component           | State                                                                                                                                       |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Build               | Compiles clean — zero warnings (OTP 27 / rebar3 3.24)                                                                                       |
-| `nref` subsystem    | Fully implemented; DETS-backed; `set_floor/1` API                                                                                           |
+| Build               | Compiles clean — zero warnings (Erlang/OTP, the Open Telecom Platform, version 27 / rebar3 3.24)                                            |
+| `nref` subsystem    | Fully implemented; backed by DETS (Disk-based Erlang Term Storage); `set_floor/1` API                                                       |
 | `dictionary_imp`    | Implemented; not yet wired to `dictionary_server` / `term_server`                                                                           |
 | `graphdb_bootstrap` | Implemented — Mnesia schema, table creation, scaffold loader                                                                                |
 | `graphdb_mgr`       | Implemented — bootstrap startup, read API, category guard, cache audit/repair. Write-side delegation pending.                               |
 | `graphdb_attr`      | Implemented — attribute library (name, literal, relationship attributes)                                                                    |
-| `graphdb_class`     | Implemented — taxonomic hierarchy with multi-parent inheritance (BFS DAG walk, H3)                                                          |
+| `graphdb_class`     | Implemented — taxonomic hierarchy with multi-parent inheritance (BFS — breadth-first search — over a DAG, a directed acyclic graph; H3)     |
 | `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance with multi-class membership (H4) and ambiguity-detecting class resolver (H5) |
 | `graphdb_rules`     | Stub                                                                                                                                        |
 | `graphdb_language`  | Stub                                                                                                                                        |
-| Tests               | 218 passing (154 Common Test + 64 EUnit)                                                                                                    |
+| Tests               | 228 passing (164 Common Test + 64 EUnit)                                                                                                    |
 
 The kernel is functional under multi-inheritance and multi-class-
 membership semantics. Template features beyond the connection-arc
-scope AVP (M7) and multilingual support (M6) remain open; see §10.
+scope AVP (an attribute-value pair stored on a node or relationship
+row; M7) and multilingual support (M6) remain open; see §10.
 
 ---
 
 ## 2. Storage
 
-| Subsystem                          | Storage                    | Why                                                       |
-| ---------------------------------- | -------------------------- | --------------------------------------------------------- |
-| `graphdb_*` (nodes, relationships) | **Mnesia** (`disc_copies`) | ACID across tables, secondary indexes, distribution-ready |
-| `nref_allocator` / `nref_server`   | DETS                       | Simple persistent counter; no relational query needs      |
-| `dictionary_imp`                   | ETS + `tab2file`           | In-memory cache, persistent serialisation                 |
+| Subsystem                          | Storage                                          | Why                                                       |
+| ---------------------------------- | ------------------------------------------------ | --------------------------------------------------------- |
+| `graphdb_*` (nodes, relationships) | **Mnesia** (`disc_copies`)                       | ACID across tables, secondary indexes, distribution-ready |
+| `nref_allocator` / `nref_server`   | DETS                                             | Simple persistent counter; no relational query needs      |
+| `dictionary_imp`                   | ETS (in-memory Erlang Term Storage) + `tab2file` | In-memory cache, persistent serialisation                 |
 
 ### Mnesia tables
 

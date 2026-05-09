@@ -75,7 +75,18 @@
 	get_attribute_not_found/1,
 	get_attribute_rejects_non_attribute/1,
 	list_attributes_includes_bootstrap_and_runtime/1,
-	list_relationship_types_includes_buckets/1
+	list_relationship_types_includes_buckets/1,
+	%% Attribute type (M8)
+	seeded_nrefs_includes_attribute_type/1,
+	create_name_stamps_attribute_type/1,
+	create_literal_stamps_attribute_type/1,
+	create_relationship_stamps_attribute_type/1,
+	create_relationship_type_stamps_attribute_type/1,
+	attribute_type_of_returns_kind/1,
+	attribute_type_of_not_found/1,
+	attribute_type_of_non_attribute/1,
+	bootstrap_attributes_retro_stamped/1,
+	retro_stamp_idempotent_on_restart/1
 ]).
 
 
@@ -87,7 +98,8 @@ suite() ->
 	[{timetrap, {seconds, 30}}].
 
 all() ->
-	[{group, seeding}, {group, creators}, {group, lookups}].
+	[{group, seeding}, {group, creators}, {group, lookups},
+	 {group, attribute_type}].
 
 groups() ->
 	[
@@ -113,6 +125,18 @@ groups() ->
 			get_attribute_rejects_non_attribute,
 			list_attributes_includes_bootstrap_and_runtime,
 			list_relationship_types_includes_buckets
+		]},
+		{attribute_type, [], [
+			seeded_nrefs_includes_attribute_type,
+			create_name_stamps_attribute_type,
+			create_literal_stamps_attribute_type,
+			create_relationship_stamps_attribute_type,
+			create_relationship_type_stamps_attribute_type,
+			attribute_type_of_returns_kind,
+			attribute_type_of_not_found,
+			attribute_type_of_non_attribute,
+			bootstrap_attributes_retro_stamped,
+			retro_stamp_idempotent_on_restart
 		]}
 	].
 
@@ -202,26 +226,26 @@ verify_cache_invariant(TC) ->
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
-%% On first startup, graphdb_attr seeds literal_type, target_kind, and
-%% relationship_avp under the Literals subtree (nref 7).
+%% On first startup, graphdb_attr seeds literal_type, target_kind,
+%% relationship_avp, and attribute_type under the Literals subtree
+%% (nref 7).
 %%-----------------------------------------------------------------------------
 seeds_created_on_first_start(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
-	{ok, #{literal_type := Lt, target_kind := Tk, relationship_avp := Ra}} =
-		graphdb_attr:seeded_nrefs(),
+	{ok, #{literal_type := Lt, target_kind := Tk, relationship_avp := Ra,
+			attribute_type := At}} = graphdb_attr:seeded_nrefs(),
 	?assert(is_integer(Lt)),
 	?assert(is_integer(Tk)),
 	?assert(is_integer(Ra)),
-	%% All three are distinct
-	?assertNotEqual(Lt, Tk),
-	?assertNotEqual(Lt, Ra),
-	?assertNotEqual(Tk, Ra),
+	?assert(is_integer(At)),
+	%% All four are distinct
+	?assertEqual(4, length(lists:usort([Lt, Tk, Ra, At]))),
 	%% Each is an attribute node whose parent is the Literals subtree (7)
 	lists:foreach(fun(N) ->
 		{ok, Node} = graphdb_attr:get_attribute(N),
 		?assertEqual(attribute, Node#node.kind),
 		?assertEqual([7], Node#node.parents)
-	end, [Lt, Tk, Ra]).
+	end, [Lt, Tk, Ra, At]).
 
 %%-----------------------------------------------------------------------------
 %% Restarting graphdb_attr must detect existing seeds and NOT create
@@ -246,11 +270,12 @@ seeds_idempotent_on_restart(_Config) ->
 %%-----------------------------------------------------------------------------
 seeded_nrefs_are_above_floor(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
-	{ok, #{literal_type := Lt, target_kind := Tk, relationship_avp := Ra}} =
-		graphdb_attr:seeded_nrefs(),
+	{ok, #{literal_type := Lt, target_kind := Tk, relationship_avp := Ra,
+			attribute_type := At}} = graphdb_attr:seeded_nrefs(),
 	?assert(Lt >= 10000),
 	?assert(Tk >= 10000),
-	?assert(Ra >= 10000).
+	?assert(Ra >= 10000),
+	?assert(At >= 10000).
 
 %%-----------------------------------------------------------------------------
 %% After init, the bootstrap-seeded Template AVP node (nref 31) carries
@@ -297,8 +322,8 @@ create_name_attribute_basic(_Config) ->
 	{ok, Node} = graphdb_attr:get_attribute(Nref),
 	?assertEqual(attribute, Node#node.kind),
 	?assertEqual([6], Node#node.parents),
-	?assertEqual([#{attribute => 18, value => "TestName"}],
-		Node#node.attribute_value_pairs).
+	?assert(lists:member(#{attribute => 18, value => "TestName"},
+		Node#node.attribute_value_pairs)).
 
 %%-----------------------------------------------------------------------------
 %% create_literal_attribute stores the Type argument as an AVP keyed
@@ -389,8 +414,8 @@ create_relationship_type_basic(_Config) ->
 	{ok, Nref} = graphdb_attr:create_relationship_type("Ownership"),
 	{ok, Node} = graphdb_attr:get_attribute(Nref),
 	?assertEqual([8], Node#node.parents),
-	?assertEqual([#{attribute => 18, value => "Ownership"}],
-		Node#node.attribute_value_pairs).
+	?assert(lists:member(#{attribute => 18, value => "Ownership"},
+		Node#node.attribute_value_pairs)).
 
 %%-----------------------------------------------------------------------------
 %% Creating a new attribute must write the compositional parent/child
@@ -456,14 +481,14 @@ get_attribute_rejects_non_attribute(_Config) ->
 
 %%-----------------------------------------------------------------------------
 %% list_attributes returns every attribute-kind node including
-%% bootstrap (26 of them: nrefs 6-30 and 31) plus the three seeds plus
+%% bootstrap (26 of them: nrefs 6-30 and 31) plus the four seeds plus
 %% any runtime creates in this test.
 %%-----------------------------------------------------------------------------
 list_attributes_includes_bootstrap_and_runtime(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, Before} = graphdb_attr:list_attributes(),
-	%% Bootstrap has 26 attribute nodes (nrefs 6-31); seeding adds 3
-	?assertEqual(26 + 3, length(Before)),
+	%% Bootstrap has 26 attribute nodes (nrefs 6-31); seeding adds 4
+	?assertEqual(26 + 4, length(Before)),
 
 	{ok, _} = graphdb_attr:create_name_attribute("One"),
 	{ok, _} = graphdb_attr:create_name_attribute("Two"),
@@ -484,6 +509,166 @@ list_relationship_types_includes_buckets(_Config) ->
 	{ok, After} = graphdb_attr:list_relationship_types(),
 	AfterNrefs = lists:sort([N#node.nref || N <- After]),
 	?assertEqual([13, 14, 15, 16, NewType], AfterNrefs).
+
+
+%%=============================================================================
+%% Attribute Type Tests (M8)
+%%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% seeded_nrefs/0 reports the attribute_type literal alongside the
+%% other three runtime seeds.
+%%-----------------------------------------------------------------------------
+seeded_nrefs_includes_attribute_type(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, Map} = graphdb_attr:seeded_nrefs(),
+	?assert(maps:is_key(attribute_type, Map)),
+	#{attribute_type := At} = Map,
+	?assert(is_integer(At)),
+	?assert(At >= 10000),
+	%% The attribute_type seed itself is a literal-attribute under
+	%% Literals (7) and is retro-stamped with attribute_type=literal.
+	{ok, Node} = graphdb_attr:get_attribute(At),
+	?assert(lists:member(#{attribute => At, value => literal},
+		Node#node.attribute_value_pairs)).
+
+%%-----------------------------------------------------------------------------
+%% create_name_attribute stamps attribute_type=name on the new node.
+%%-----------------------------------------------------------------------------
+create_name_stamps_attribute_type(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
+	{ok, Nref} = graphdb_attr:create_name_attribute("Whatever"),
+	{ok, Node} = graphdb_attr:get_attribute(Nref),
+	?assert(lists:member(#{attribute => At, value => name},
+		Node#node.attribute_value_pairs)).
+
+%%-----------------------------------------------------------------------------
+%% create_literal_attribute stamps attribute_type=literal alongside the
+%% literal_type AVP.
+%%-----------------------------------------------------------------------------
+create_literal_stamps_attribute_type(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{attribute_type := At, literal_type := Lt}} =
+		graphdb_attr:seeded_nrefs(),
+	{ok, Nref} = graphdb_attr:create_literal_attribute("Distance", meters),
+	{ok, Node} = graphdb_attr:get_attribute(Nref),
+	AVPs = Node#node.attribute_value_pairs,
+	?assert(lists:member(#{attribute => Lt, value => meters}, AVPs)),
+	?assert(lists:member(#{attribute => At, value => literal}, AVPs)).
+
+%%-----------------------------------------------------------------------------
+%% create_relationship_attribute stamps attribute_type=relationship on
+%% BOTH forward and reciprocal nodes.
+%%-----------------------------------------------------------------------------
+create_relationship_stamps_attribute_type(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
+	{ok, {FwdNref, RevNref}} =
+		graphdb_attr:create_relationship_attribute("Drives", "DrivenBy",
+			instance),
+	{ok, Fwd} = graphdb_attr:get_attribute(FwdNref),
+	{ok, Rev} = graphdb_attr:get_attribute(RevNref),
+	?assert(lists:member(#{attribute => At, value => relationship},
+		Fwd#node.attribute_value_pairs)),
+	?assert(lists:member(#{attribute => At, value => relationship},
+		Rev#node.attribute_value_pairs)).
+
+%%-----------------------------------------------------------------------------
+%% create_relationship_type stamps attribute_type=relationship on the
+%% new bucket grouping node.
+%%-----------------------------------------------------------------------------
+create_relationship_type_stamps_attribute_type(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
+	{ok, Nref} = graphdb_attr:create_relationship_type("Logistics"),
+	{ok, Node} = graphdb_attr:get_attribute(Nref),
+	?assert(lists:member(#{attribute => At, value => relationship},
+		Node#node.attribute_value_pairs)).
+
+%%-----------------------------------------------------------------------------
+%% attribute_type_of/1 returns the stamped kind for each create_* path
+%% and for retro-stamped bootstrap nodes -- without a parent walk.
+%%-----------------------------------------------------------------------------
+attribute_type_of_returns_kind(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, NameNref} = graphdb_attr:create_name_attribute("AnyName"),
+	{ok, LitNref}  = graphdb_attr:create_literal_attribute("Mass", grams),
+	{ok, {FwdNref, _}} =
+		graphdb_attr:create_relationship_attribute("Owns", "OwnedBy",
+			instance),
+	{ok, BucketNref} = graphdb_attr:create_relationship_type("Custodial"),
+
+	?assertEqual({ok, name},         graphdb_attr:attribute_type_of(NameNref)),
+	?assertEqual({ok, literal},      graphdb_attr:attribute_type_of(LitNref)),
+	?assertEqual({ok, relationship}, graphdb_attr:attribute_type_of(FwdNref)),
+	?assertEqual({ok, relationship},
+		graphdb_attr:attribute_type_of(BucketNref)),
+
+	%% Bootstrap-derived: 17 (Name, under Names subtree) and 21 (Parent
+	%% category arc label, under Relationships subtree) and 7 (Literals
+	%% itself).
+	?assertEqual({ok, name},         graphdb_attr:attribute_type_of(17)),
+	?assertEqual({ok, relationship}, graphdb_attr:attribute_type_of(21)),
+	?assertEqual({ok, literal},      graphdb_attr:attribute_type_of(7)).
+
+%%-----------------------------------------------------------------------------
+%% attribute_type_of/1 returns {error, not_found} for unknown nrefs.
+%%-----------------------------------------------------------------------------
+attribute_type_of_not_found(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	?assertEqual({error, not_found},
+		graphdb_attr:attribute_type_of(99999)).
+
+%%-----------------------------------------------------------------------------
+%% attribute_type_of/1 rejects non-attribute kinds (category, etc.).
+%%-----------------------------------------------------------------------------
+attribute_type_of_non_attribute(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	%% Nref 1 (Root) is a category.
+	?assertEqual({error, not_an_attribute},
+		graphdb_attr:attribute_type_of(1)).
+
+%%-----------------------------------------------------------------------------
+%% Every bootstrap attribute node (nrefs 6..31) is retro-stamped with
+%% an attribute_type AVP whose value matches the subtree it lives under.
+%%-----------------------------------------------------------------------------
+bootstrap_attributes_retro_stamped(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	%% Names subtree -- 6, 9-12, 17-20 should be `name`.
+	NamesGroup = [6, 9, 10, 11, 12, 17, 18, 19, 20],
+	lists:foreach(fun(N) ->
+		?assertEqual({ok, name}, graphdb_attr:attribute_type_of(N))
+	end, NamesGroup),
+
+	%% Literals subtree -- 7 itself should be `literal`.
+	?assertEqual({ok, literal}, graphdb_attr:attribute_type_of(7)),
+
+	%% Relationships subtree -- 8, 13-16, 21-31 should be `relationship`.
+	RelGroup = [8, 13, 14, 15, 16, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+	lists:foreach(fun(N) ->
+		?assertEqual({ok, relationship}, graphdb_attr:attribute_type_of(N))
+	end, RelGroup).
+
+%%-----------------------------------------------------------------------------
+%% Restarting graphdb_attr does not duplicate the retro-stamp -- the
+%% attribute_value_pairs of a sample bootstrap node are byte-identical
+%% before and after a stop/start cycle.
+%%-----------------------------------------------------------------------------
+retro_stamp_idempotent_on_restart(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{atomic, [Before6]}  = mnesia:transaction(fun() -> mnesia:read(nodes, 6) end),
+	{atomic, [Before24]} = mnesia:transaction(fun() -> mnesia:read(nodes, 24) end),
+
+	ok = gen_server:stop(graphdb_attr),
+	{ok, _} = graphdb_attr:start_link(),
+
+	{atomic, [After6]}  = mnesia:transaction(fun() -> mnesia:read(nodes, 6) end),
+	{atomic, [After24]} = mnesia:transaction(fun() -> mnesia:read(nodes, 24) end),
+	?assertEqual(Before6#node.attribute_value_pairs,
+		After6#node.attribute_value_pairs),
+	?assertEqual(Before24#node.attribute_value_pairs,
+		After24#node.attribute_value_pairs).
 
 
 %%=============================================================================
