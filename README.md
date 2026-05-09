@@ -7,9 +7,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 A distributed graph database written in Erlang/OTP, originally authored by
 Dallas Noyes (SeerStone, Inc., 2008). Dallas passed away before completing the
-project. The goal is to finish and extend his work. PRs are welcome. Treat this
-codebase with care — preserve Dallas's style and conventions wherever possible
-when completing NYI stubs.
+project. The goal is to finish and extend his work. PRs are welcome.
 
 ### Current Status
 
