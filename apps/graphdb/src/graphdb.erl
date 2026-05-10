@@ -138,7 +138,7 @@
 %%--------------------------------------------------------------------- 
 
 start(Type, StartArgs) ->
-    case graphdb_sup:start_link(StartArgs) of
+    case graphdb_sup:start_link() of
 		{ok, Pid} ->
 			{ok, Pid};
 		ignore -> 

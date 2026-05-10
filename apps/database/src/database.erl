@@ -139,7 +139,7 @@
 %%--------------------------------------------------------------------- 
 
 start(Type, StartArgs) ->
-    case database_sup:start_link(StartArgs) of
+    case database_sup:start_link() of
 		{ok, Pid} ->
 			{ok, Pid};
 		ignore -> 

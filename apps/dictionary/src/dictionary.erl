@@ -138,7 +138,7 @@
 %%--------------------------------------------------------------------- 
 
 start(Type, StartArgs) ->
-    case dictionary_sup:start_link(StartArgs) of
+    case dictionary_sup:start_link() of
 		{ok, Pid} ->
 			{ok, Pid};
 		ignore -> 
