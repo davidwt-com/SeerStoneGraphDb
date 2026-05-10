@@ -147,3 +147,49 @@ handling. Implement when first hot-upgrade is planned.
 **Evidence:** None of the `.app.src` files define `start_phases`, so
 `start_phase/3` is never called. Correct for the present configuration;
 revisit if phased startup is desired.
+
+---
+
+## E5. Replace `included_applications` with peer-app dependencies
+
+**Evidence:** `apps/database/src/database.app.src` declares
+`included_applications: [graphdb, dictionary]`. `database_sup:init/1`
+owns `graphdb_sup` and `dictionary_sup` directly via childspecs. This is
+Dallas's 2008 OTP idiom; modern OTP discourages `included_applications`
+because the included apps lose independent restart, code reload, and
+proper application-callback semantics.
+
+The `seerstone`↔`database` boundary was modernized on 2026-05-09:
+`database` is now a peer OTP application started by `application_master`
+from `seerstone.app.src`'s `applications:` list, and `seerstone_sup` no
+longer supervises `database_sup`. The same modernization should be
+applied one level deeper (`database`↔`graphdb`/`dictionary`) for
+consistency.
+
+**Fix:**
+
+1. Remove `included_applications: [graphdb, dictionary]` from
+   `database.app.src`. Add `graphdb` and `dictionary` to a higher-level
+   `applications:` dependency list so `application_master` starts them
+   in the right order (likely `seerstone.app.src` after the database
+   entry, or `database.app.src` itself).
+2. Drop `graphdb_sup` and `dictionary_sup` from `database_sup:init/1`'s
+   childspec list.
+3. Decide whether `database` itself remains an OTP application. If
+   `database_sup` ends up empty (like `seerstone_sup` is today), the
+   `database` app may be retired entirely, or kept as an empty
+   placeholder for future database-level coordination workers.
+4. Update `ARCHITECTURE.md` §5 and the supervision-tree diagrams in
+   `CLAUDE.md` files once the shape settles.
+
+**Dependencies:** none. Independent of all M-level work. Best done
+before E3 (`code_change/3`) is implemented, since
+`included_applications` complicates OTP hot upgrades. Also worth doing
+before E2 (takeover/failover) since included apps have ill-defined
+distributed-app semantics.
+
+**Severity rationale:** Low. The current `included_applications`
+arrangement works correctly at runtime. This is OTP-modernization polish
+that pays off when full-system boot tests (e.g., CT suites that exercise
+`application:ensure_all_started/1`), hot upgrades, or independent app
+restart become priorities.
