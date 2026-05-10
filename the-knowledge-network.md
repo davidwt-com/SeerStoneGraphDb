@@ -80,6 +80,8 @@ Not all concept nodes serve the same role. Three kinds are distinguished:
 
 The distinction between relationship attributes and literal attributes is architecturally significant. A relationship attribute connects this node to another node, enabling traversal. A literal attribute stores a value that is data about the node, not a path to another concept. Temperature readings, mass measurements, and file paths are literals. "orbits," "is a parent of," and "catalyzes" are relationship attributes.
 
+Attribute parent/child relations within the attribute library are **taxonomic** — refinements of kind, not part-whole. *Example: a generic "attachment" relationship attribute may be specialized into "welded attachment", "bolted attachment", and "nailed attachment" as taxonomic children, each inheriting from the more general parent.*
+
 ---
 
 ## 5. Four Relationship Types

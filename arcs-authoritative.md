@@ -17,8 +17,9 @@ document is retained as the formal decision record.
 The knowledge graph stores every hierarchical relationship — taxonomic
 parents, compositional parents, class memberships — in two places today:
 
-  - The `relationships` table (25/26 taxonomy arcs, 27/28 composition
-    arcs, 29/30 instantiation arcs).
+  - The `relationships` table (23/24 taxonomy arcs (attribute), 25/26
+    taxonomy arcs (class), 27/28 composition arcs (instance), 29/30
+    instantiation arcs).
   - Fields on the `node` record (`parent`).
 
 `TASKS-MEDIUM.md` M1 already calls out the inconsistency for instances.
@@ -46,8 +47,16 @@ The same shape reappears in H3 (multi-parent classes) and H4
 |----------------|------------------------------------------|--------------------|
 | `node.parents` | 25/26 taxonomy (class)                   | `graphdb_class`    |
 | `node.parents` | 27/28 composition (instance)             | `graphdb_instance` |
-| `node.parents` | 23/24 composition (attribute)            | `graphdb_attr`     |
+| `node.parents` | 23/24 taxonomy (attribute)               | `graphdb_attr`     |
 | `node.classes` | 29 instantiation, instance→class         | `graphdb_instance` |
+
+The arc-label nrefs 23 ("Parent") and 24 ("Child") were minted at
+bootstrap as the attribute-subtree parent/child labels. The arc `kind`
+written alongside them is `taxonomy`, not `composition`: an attribute
+parent/child relation is a refinement of kind ("welded attachment"
+is-a-kind-of "attachment"), not part-whole. The category scaffold
+above the attribute subtree (Root → Attributes/Classes/…) keeps
+`kind=composition` because categories are organisational containers.
 
 ## Single-writer ownership
 
@@ -110,7 +119,7 @@ Post-H0d example:
 
 ```erlang
 {node, 6, attribute, {18, "Names"}, []}.            %% parent comes from the arc below
-{relationship, 2, 24, [], 23, 6, [], composition}.  %% Attributes -> Names
+{relationship, 2, 24, [], 23, 6, [], taxonomy}.     %% Attributes -> Names
 ```
 
 The loader writes nodes with `parents = []`, `classes = []`, then

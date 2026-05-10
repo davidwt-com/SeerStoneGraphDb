@@ -10,7 +10,9 @@
 %%				attributes, relationship attributes (arc labels), and
 %%				relationship-type groupings.  Attribute nodes live in
 %%				the Mnesia `nodes` table with kind=attribute and a
-%%				compositional parent in the attribute library tree.
+%%				taxonomic parent in the attribute library tree (parent
+%%				arcs in the attribute subtree are kind=taxonomy --
+%%				refinement of kind, not part-whole).
 %%
 %%				On first startup, graphdb_attr seeds four runtime
 %%				literal attributes under the `Literals` subtree (nref
@@ -260,7 +262,7 @@ list_attributes() ->
 %%-----------------------------------------------------------------------------
 %% list_relationship_types() -> {ok, [#node{}]} | {error, term()}
 %%
-%% Returns every attribute node whose compositional parent is the
+%% Returns every attribute node whose taxonomic parent is the
 %% `Relationships` subtree (nref 8).  Includes the four bootstrap
 %% buckets (nrefs 13-16) as well as any runtime additions.
 %%-----------------------------------------------------------------------------
@@ -422,7 +424,7 @@ valid_target_kind(_)         -> false.
 %% ensure_seed(Name) -> Nref
 %%
 %% Looks up an existing literal attribute by name under the Literals
-%% subtree; if not found, creates it (node + compositional arc pair).
+%% subtree; if not found, creates it (node + taxonomy arc pair).
 %% Throws {error, Reason} on failure.
 %%-----------------------------------------------------------------------------
 ensure_seed(Name) ->
@@ -447,7 +449,7 @@ ensure_seed(Name) ->
 find_attribute_by_name(ParentNref, Name) ->
 	F = fun() ->
 		Children = downward_children_by_arc(ParentNref, ?ATTR_CHILD_ARC,
-			composition),
+			taxonomy),
 		lists:search(fun(N) -> node_has_name(N, Name) end, Children)
 	end,
 	case mnesia:transaction(F) of
@@ -473,8 +475,8 @@ node_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 %%
 %% Allocates an nref, builds the attribute node record with the name
 %% AVP plus any extras, allocates two relationship ids for the
-%% compositional parent/child arc pair, and writes all three rows in
-%% a single Mnesia transaction.
+%% taxonomy parent/child arc pair, and writes all three rows in a
+%% single Mnesia transaction.
 %%
 %% All nref_server:get_nref/0 calls are issued OUTSIDE the Mnesia
 %% transaction to avoid side-effects on transaction retry.
@@ -492,7 +494,7 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 	Id2 = nref_server:get_nref(),
 	P2C = #relationship{
 		id = Id1,
-		kind = composition,
+		kind = taxonomy,
 		source_nref = ParentNref,
 		characterization = ?ATTR_CHILD_ARC,
 		target_nref = Nref,
@@ -501,7 +503,7 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 	},
 	C2P = #relationship{
 		id = Id2,
-		kind = composition,
+		kind = taxonomy,
 		source_nref = Nref,
 		characterization = ?ATTR_PARENT_ARC,
 		target_nref = ParentNref,
@@ -525,7 +527,7 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 %%
 %% Atomically creates a reciprocal pair of arc-label attribute nodes
 %% under the `Relationships` subtree (nref 8).  Both nodes plus all
-%% four compositional arc rows (parent->child + child->parent for each
+%% four taxonomy arc rows (parent->child + child->parent for each
 %% direction) are written inside a single Mnesia transaction so a
 %% mid-pair abort cannot leave the database with an orphan half-pair.
 %%-----------------------------------------------------------------------------
@@ -552,10 +554,10 @@ do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
 		parents = [?PARENT_RELATIONSHIPS],
 		attribute_value_pairs = RevAVPs
 	},
-	%% Forward node compositional arcs.
+	%% Forward node taxonomy arcs.
 	FwdP2C = #relationship{
 		id = Id1,
-		kind = composition,
+		kind = taxonomy,
 		source_nref = ?PARENT_RELATIONSHIPS,
 		characterization = ?ATTR_CHILD_ARC,
 		target_nref = FwdNref,
@@ -564,17 +566,17 @@ do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
 	},
 	FwdC2P = #relationship{
 		id = Id2,
-		kind = composition,
+		kind = taxonomy,
 		source_nref = FwdNref,
 		characterization = ?ATTR_PARENT_ARC,
 		target_nref = ?PARENT_RELATIONSHIPS,
 		reciprocal = ?ATTR_CHILD_ARC,
 		avps = []
 	},
-	%% Reciprocal node compositional arcs.
+	%% Reciprocal node taxonomy arcs.
 	RevP2C = #relationship{
 		id = Id3,
-		kind = composition,
+		kind = taxonomy,
 		source_nref = ?PARENT_RELATIONSHIPS,
 		characterization = ?ATTR_CHILD_ARC,
 		target_nref = RevNref,
@@ -583,7 +585,7 @@ do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
 	},
 	RevC2P = #relationship{
 		id = Id4,
-		kind = composition,
+		kind = taxonomy,
 		source_nref = RevNref,
 		characterization = ?ATTR_PARENT_ARC,
 		target_nref = ?PARENT_RELATIONSHIPS,
@@ -635,7 +637,7 @@ do_list_attributes() ->
 %%-----------------------------------------------------------------------------
 do_list_children(ParentNref) ->
 	F = fun() ->
-		downward_children_by_arc(ParentNref, ?ATTR_CHILD_ARC, composition)
+		downward_children_by_arc(ParentNref, ?ATTR_CHILD_ARC, taxonomy)
 	end,
 	case mnesia:transaction(F) of
 		{atomic, Nodes}   -> {ok, Nodes};

@@ -24,7 +24,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_language.erl`  | Query language gen_server (stub)                            |
 
 `apps/graphdb/priv/bootstrap.terms` — Erlang Terms file fully written; contains 31 nodes
-(nrefs 1–31, BFS) and 30 compositional relationship pairs. Loaded at first ontology startup.
+(nrefs 1–31, BFS) and 30 hierarchy relationship pairs (4 composition + 26 taxonomy). Loaded at first ontology startup.
 
 ## Application Lifecycle
 
@@ -175,8 +175,8 @@ A logical bidirectional edge is two `relationship` rows written atomically (one 
 20      Name — NameAttrNref for instance nodes (parent: 12)
 21      Parent — category compositional arc label (parent: 13)
 22      Child  — category compositional arc label (parent: 13)
-23      Parent — attribute compositional arc label (parent: 14, self-ref)
-24      Child  — attribute compositional arc label (parent: 14, self-ref)
+23      Parent — attribute taxonomy arc label (parent: 14, self-ref)
+24      Child  — attribute taxonomy arc label (parent: 14, self-ref)
 25      Parent — class compositional arc label (parent: 15)
 26      Child  — class compositional arc label (parent: 15)
 27      Parent — instance compositional arc label (parent: 16)

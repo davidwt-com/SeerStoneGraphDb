@@ -69,7 +69,7 @@
 	create_relationship_attribute_pair_atomic/1,
 	create_relationship_attribute_rejects_bad_kind/1,
 	create_relationship_type_basic/1,
-	new_attribute_writes_compositional_arcs/1,
+	new_attribute_writes_taxonomy_arcs/1,
 	%% Lookups
 	get_attribute_returns_node/1,
 	get_attribute_not_found/1,
@@ -117,7 +117,7 @@ groups() ->
 			create_relationship_attribute_pair_atomic,
 			create_relationship_attribute_rejects_bad_kind,
 			create_relationship_type_basic,
-			new_attribute_writes_compositional_arcs
+			new_attribute_writes_taxonomy_arcs
 		]},
 		{lookups, [], [
 			get_attribute_returns_node,
@@ -366,7 +366,7 @@ create_relationship_attribute_pair(_Config) ->
 
 %%-----------------------------------------------------------------------------
 %% M4: create_relationship_attribute commits both nodes plus all four
-%% compositional arc rows in a single transaction.  After a successful
+%% taxonomy arc rows in a single transaction.  After a successful
 %% call the row deltas must be exactly +2 on `nodes` and +4 on
 %% `relationships` -- no orphan halves, no double-counted arcs.
 %%-----------------------------------------------------------------------------
@@ -380,7 +380,7 @@ create_relationship_attribute_pair_atomic(_Config) ->
 	?assertEqual(RelsBefore  + 4, mnesia:table_info(relationships, size)),
 
 	%% Each new node has exactly one parent->child arc into it and one
-	%% child->parent arc out of it (kind=composition, char=24/23 from
+	%% child->parent arc out of it (kind=taxonomy, char=24/23 from
 	%% the Attribute Relationships subtree).
 	%% Bootstrap nref 8 is the `Relationships` subtree under which all
 	%% relationship-attribute arc labels are filed.
@@ -395,7 +395,7 @@ create_relationship_attribute_pair_atomic(_Config) ->
 		R#relationship.characterization =:= 24],
 	?assertEqual(1, length(FwdInbound)),
 	?assertEqual(1, length(RevInbound)),
-	?assertEqual(composition, (hd(FwdInbound))#relationship.kind).
+	?assertEqual(taxonomy, (hd(FwdInbound))#relationship.kind).
 
 %%-----------------------------------------------------------------------------
 %% create_relationship_attribute rejects invalid target_kind atoms
@@ -418,11 +418,11 @@ create_relationship_type_basic(_Config) ->
 		Node#node.attribute_value_pairs)).
 
 %%-----------------------------------------------------------------------------
-%% Creating a new attribute must write the compositional parent/child
+%% Creating a new attribute must write the taxonomy parent/child
 %% arc pair into the relationships table so the new node is reachable
 %% by traversal from its parent.
 %%-----------------------------------------------------------------------------
-new_attribute_writes_compositional_arcs(_Config) ->
+new_attribute_writes_taxonomy_arcs(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	RelsBefore = mnesia:table_info(relationships, size),
 	{ok, Nref} = graphdb_attr:create_name_attribute("ArcTest"),

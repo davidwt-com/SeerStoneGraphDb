@@ -173,8 +173,8 @@ Cross-database nref resolution: `characterization` and `reciprocal` fields alway
 20      Name — NameAttrNref for instance nodes (parent: 12)
 21      Parent — category compositional arc label (parent: 13)
 22      Child  — category compositional arc label (parent: 13)
-23      Parent — attribute compositional arc label (parent: 14, self-ref)
-24      Child  — attribute compositional arc label (parent: 14, self-ref)
+23      Parent — attribute taxonomy arc label (parent: 14, self-ref)
+24      Child  — attribute taxonomy arc label (parent: 14, self-ref)
 25      Parent — class compositional arc label (parent: 15)
 26      Child  — class compositional arc label (parent: 15)
 27      Parent — instance compositional arc label (parent: 16)
@@ -186,11 +186,11 @@ Cross-database nref resolution: `characterization` and `reciprocal` fields alway
 
 NameAttrNref quick-reference: category=17, attribute=18, class=19, instance=20
 
-Compositional arc labels (`{relationship, ParentNref, ChildArcNref, [], ParentArcNref, ChildNref, []}`):
-- category child: ChildArc=22, ParentArc=21
-- attribute child: ChildArc=24, ParentArc=23
-- class child: ChildArc=26, ParentArc=25
-- instance child: ChildArc=28, ParentArc=27
+Hierarchy arc labels (`{relationship, ParentNref, ChildArcNref, [], ParentArcNref, ChildNref, []}`):
+- category child: ChildArc=22, ParentArc=21 — `kind=composition` (organisational scaffold)
+- attribute child: ChildArc=24, ParentArc=23 — `kind=taxonomy` (refinement of kind)
+- class child: ChildArc=26, ParentArc=25 — `kind=taxonomy` (subclass) or `composition` (template)
+- instance child: ChildArc=28, ParentArc=27 — `kind=composition` (part-whole)
 
 Instance-to-class membership arcs: characterization=29 (Class) instance→class; characterization=30 (Instance) class→instance. Written in the **project** database, not the environment.
 

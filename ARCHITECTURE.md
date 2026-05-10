@@ -112,10 +112,19 @@ Cache field sources:
 | Cache field    | Authoritative arcs                               | Owner worker                                                           |
 | -------------- | ------------------------------------------------ | ---------------------------------------------------------------------- |
 | `node.parents` | 21/22 composition (category)                     | `graphdb_bootstrap` (writes); `graphdb_mgr:rebuild_caches/0` populates |
-| `node.parents` | 23/24 composition (attribute)                    | `graphdb_attr`                                                         |
+| `node.parents` | 23/24 taxonomy (attribute)                       | `graphdb_attr`                                                         |
 | `node.parents` | 25/26 taxonomy (class) or composition (template) | `graphdb_class`                                                        |
 | `node.parents` | 27/28 composition (instance)                     | `graphdb_instance`                                                     |
 | `node.classes` | 29 instantiation (instance → class)              | `graphdb_instance`                                                     |
+
+Note on attribute parent/child arcs: arc-label nrefs 23 ("Parent") and
+24 ("Child") were minted at bootstrap as the attribute-subtree labels.
+Arcs written under those labels carry `kind = taxonomy`, not
+composition: an attribute parent/child relation is a refinement of
+kind ("welded attachment" is-a-kind-of "attachment"), not part-whole.
+The category scaffold above (Root → Attributes/Classes/Languages/
+Projects) keeps `kind = composition` because categories are
+organisational containers.
 
 Each owner worker writes the arcs and the matching cache update inside
 one `mnesia:transaction/1`. Other workers never touch the table

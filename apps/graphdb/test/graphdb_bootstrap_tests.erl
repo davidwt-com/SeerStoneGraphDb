@@ -45,14 +45,14 @@ classify_terms_preserves_relationship_order_test() ->
 		{nref_start, 100},
 		{relationship, 1, 22, [], 21, 2, [], composition},
 		{relationship, 1, 22, [], 21, 3, [], composition},
-		{relationship, 2, 24, [], 23, 6, [], composition}
+		{relationship, 2, 24, [], 23, 6, [], taxonomy}
 	],
 	{_, _, Rels} = graphdb_bootstrap:classify_terms(Terms),
 	?assertEqual(3, length(Rels)),
 	%% File order preserved
 	{relationship, 1, 22, [], 21, 2, [], composition} = lists:nth(1, Rels),
 	{relationship, 1, 22, [], 21, 3, [], composition} = lists:nth(2, Rels),
-	{relationship, 2, 24, [], 23, 6, [], composition} = lists:nth(3, Rels).
+	{relationship, 2, 24, [], 23, 6, [], taxonomy} = lists:nth(3, Rels).
 
 classify_terms_missing_nref_start_test() ->
 	Terms = [{node, 1, category, {17, "Root"}, []}],

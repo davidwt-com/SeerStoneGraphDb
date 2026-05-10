@@ -24,14 +24,19 @@
 %%   class     => 19  (Name under Class Name Attributes)
 %%   instance  => 20  (Name under Instance Name Attributes)
 %%
-%% Compositional arc labels -- {relationship, ParentNref, ChildArcNref, [],
-%%                                            ParentArcNref, ChildNref, [], Kind}
+%% Hierarchy arc labels -- {relationship, ParentNref, ChildArcNref, [],
+%%                                        ParentArcNref, ChildNref, [], Kind}
 %%   Kind ::= taxonomy | composition | connection | instantiation
-%%   All bootstrap arcs are organisational scaffolding -> Kind = composition.
+%%   Bootstrap arcs use two kinds:
+%%     - composition for the category scaffold (Root and its category
+%%       children) -- categories are organisational containers.
+%%     - taxonomy   for the attribute subtree -- attribute parent/child
+%%       relations are refinements of kind ("welded attachment" is-a-kind-of
+%%       "attachment"), not part-whole.
 %%   (Class taxonomy arcs and instance->class membership arcs are written at
 %%   runtime with Kind = taxonomy and Kind = instantiation respectively.)
-%%   category  child: ChildArc=22 (Child/CatRel),  ParentArc=21 (Parent/CatRel)
-%%   attribute child: ChildArc=24 (Child/AttrRel), ParentArc=23 (Parent/AttrRel)
+%%   category  child: ChildArc=22 (Child/CatRel),  ParentArc=21 (Parent/CatRel)  -- composition
+%%   attribute child: ChildArc=24 (Child/AttrRel), ParentArc=23 (Parent/AttrRel) -- taxonomy
 %%   class     child: ChildArc=26 (Child/ClassRel), ParentArc=25 (Parent/ClassRel)
 %%   instance  child: ChildArc=28 (Child/InstRel),  ParentArc=27 (Parent/InstRel)
 %%
@@ -92,8 +97,8 @@
 %% Level 4 -- Arc label nodes (BFS: CatRel, AttrRel, ClassRel, InstRel children)
 {node, 21, attribute, {18, "Parent"},   []}.  %% category  compositional Parent arc label
 {node, 22, attribute, {18, "Child"},    []}.  %% category  compositional Child  arc label
-{node, 23, attribute, {18, "Parent"},   []}.  %% attribute compositional Parent arc label (self-ref)
-{node, 24, attribute, {18, "Child"},    []}.  %% attribute compositional Child  arc label (self-ref)
+{node, 23, attribute, {18, "Parent"},   []}.  %% attribute taxonomy Parent arc label (self-ref)
+{node, 24, attribute, {18, "Child"},    []}.  %% attribute taxonomy Child  arc label (self-ref)
 {node, 25, attribute, {18, "Parent"},   []}.  %% class     compositional Parent arc label
 {node, 26, attribute, {18, "Child"},    []}.  %% class     compositional Child  arc label
 {node, 27, attribute, {18, "Parent"},   []}.  %% instance  compositional Parent arc label
@@ -107,49 +112,52 @@
 {node, 31, attribute, {18, "Template"}, []}.  %% Connection-scope AVP marker
 
 %% =========================================================================
-%% Compositional arcs -- the sole authoritative source of hierarchy.
+%% Hierarchy arcs -- the sole authoritative source of hierarchy.
 %%
-%% {relationship, ParentNref, ChildArcNref, [], ParentArcNref, ChildNref, [], composition}
+%% Category arcs use Kind = composition (organisational scaffold).
+%% Attribute arcs use Kind = taxonomy (refinement of kind, not part-whole).
+%%
+%% {relationship, ParentNref, ChildArcNref, [], ParentArcNref, ChildNref, [], Kind}
 %% =========================================================================
 
-%% Root -> category children  (ChildArc=22, ParentArc=21)
+%% Root -> category children  (ChildArc=22, ParentArc=21, Kind=composition)
 {relationship,  1, 22, [], 21,  2, [], composition}.  %% Root -> Attributes
 {relationship,  1, 22, [], 21,  3, [], composition}.  %% Root -> Classes
 {relationship,  1, 22, [], 21,  4, [], composition}.  %% Root -> Languages
 {relationship,  1, 22, [], 21,  5, [], composition}.  %% Root -> Projects
 
-%% Attributes -> attribute children  (ChildArc=24, ParentArc=23)
-{relationship,  2, 24, [], 23,  6, [], composition}.  %% Attributes -> Names
-{relationship,  2, 24, [], 23,  7, [], composition}.  %% Attributes -> Literals
-{relationship,  2, 24, [], 23,  8, [], composition}.  %% Attributes -> Relationships
+%% Attributes -> attribute children  (ChildArc=24, ParentArc=23, Kind=taxonomy)
+{relationship,  2, 24, [], 23,  6, [], taxonomy}.  %% Attributes -> Names
+{relationship,  2, 24, [], 23,  7, [], taxonomy}.  %% Attributes -> Literals
+{relationship,  2, 24, [], 23,  8, [], taxonomy}.  %% Attributes -> Relationships
 
 %% Names -> attribute children
-{relationship,  6, 24, [], 23,  9, [], composition}.  %% Names -> Category Name Attributes
-{relationship,  6, 24, [], 23, 10, [], composition}.  %% Names -> Attribute Name Attributes
-{relationship,  6, 24, [], 23, 11, [], composition}.  %% Names -> Class Name Attributes
-{relationship,  6, 24, [], 23, 12, [], composition}.  %% Names -> Instance Name Attributes
+{relationship,  6, 24, [], 23,  9, [], taxonomy}.  %% Names -> Category Name Attributes
+{relationship,  6, 24, [], 23, 10, [], taxonomy}.  %% Names -> Attribute Name Attributes
+{relationship,  6, 24, [], 23, 11, [], taxonomy}.  %% Names -> Class Name Attributes
+{relationship,  6, 24, [], 23, 12, [], taxonomy}.  %% Names -> Instance Name Attributes
 
 %% Relationships -> attribute children
-{relationship,  8, 24, [], 23, 13, [], composition}.  %% Relationships -> Category Relationships
-{relationship,  8, 24, [], 23, 14, [], composition}.  %% Relationships -> Attribute Relationships
-{relationship,  8, 24, [], 23, 15, [], composition}.  %% Relationships -> Class Relationships
-{relationship,  8, 24, [], 23, 16, [], composition}.  %% Relationships -> Instance Relationships
+{relationship,  8, 24, [], 23, 13, [], taxonomy}.  %% Relationships -> Category Relationships
+{relationship,  8, 24, [], 23, 14, [], taxonomy}.  %% Relationships -> Attribute Relationships
+{relationship,  8, 24, [], 23, 15, [], taxonomy}.  %% Relationships -> Class Relationships
+{relationship,  8, 24, [], 23, 16, [], taxonomy}.  %% Relationships -> Instance Relationships
 
 %% *NameAttributes -> Name  (attribute child)
-{relationship,  9, 24, [], 23, 17, [], composition}.  %% Category Name Attributes  -> Name
-{relationship, 10, 24, [], 23, 18, [], composition}.  %% Attribute Name Attributes -> Name
-{relationship, 11, 24, [], 23, 19, [], composition}.  %% Class Name Attributes     -> Name
-{relationship, 12, 24, [], 23, 20, [], composition}.  %% Instance Name Attributes  -> Name
+{relationship,  9, 24, [], 23, 17, [], taxonomy}.  %% Category Name Attributes  -> Name
+{relationship, 10, 24, [], 23, 18, [], taxonomy}.  %% Attribute Name Attributes -> Name
+{relationship, 11, 24, [], 23, 19, [], taxonomy}.  %% Class Name Attributes     -> Name
+{relationship, 12, 24, [], 23, 20, [], taxonomy}.  %% Instance Name Attributes  -> Name
 
 %% *Relationships -> arc label child nodes  (attribute child)
-{relationship, 13, 24, [], 23, 21, [], composition}.  %% Category Relationships  -> Parent
-{relationship, 13, 24, [], 23, 22, [], composition}.  %% Category Relationships  -> Child
-{relationship, 14, 24, [], 23, 23, [], composition}.  %% Attribute Relationships -> Parent (arc label self-ref)
-{relationship, 14, 24, [], 23, 24, [], composition}.  %% Attribute Relationships -> Child  (arc label self-ref)
-{relationship, 15, 24, [], 23, 25, [], composition}.  %% Class Relationships     -> Parent
-{relationship, 15, 24, [], 23, 26, [], composition}.  %% Class Relationships     -> Child
-{relationship, 16, 24, [], 23, 27, [], composition}.  %% Instance Relationships  -> Parent
-{relationship, 16, 24, [], 23, 28, [], composition}.  %% Instance Relationships  -> Child
-{relationship, 16, 24, [], 23, 29, [], composition}.  %% Instance Relationships  -> Class
-{relationship, 16, 24, [], 23, 30, [], composition}.  %% Instance Relationships  -> Instance
-{relationship, 16, 24, [], 23, 31, [], composition}.  %% Instance Relationships  -> Template
+{relationship, 13, 24, [], 23, 21, [], taxonomy}.  %% Category Relationships  -> Parent
+{relationship, 13, 24, [], 23, 22, [], taxonomy}.  %% Category Relationships  -> Child
+{relationship, 14, 24, [], 23, 23, [], taxonomy}.  %% Attribute Relationships -> Parent (arc label self-ref)
+{relationship, 14, 24, [], 23, 24, [], taxonomy}.  %% Attribute Relationships -> Child  (arc label self-ref)
+{relationship, 15, 24, [], 23, 25, [], taxonomy}.  %% Class Relationships     -> Parent
+{relationship, 15, 24, [], 23, 26, [], taxonomy}.  %% Class Relationships     -> Child
+{relationship, 16, 24, [], 23, 27, [], taxonomy}.  %% Instance Relationships  -> Parent
+{relationship, 16, 24, [], 23, 28, [], taxonomy}.  %% Instance Relationships  -> Child
+{relationship, 16, 24, [], 23, 29, [], taxonomy}.  %% Instance Relationships  -> Class
+{relationship, 16, 24, [], 23, 30, [], taxonomy}.  %% Instance Relationships  -> Instance
+{relationship, 16, 24, [], 23, 31, [], taxonomy}.  %% Instance Relationships  -> Template
