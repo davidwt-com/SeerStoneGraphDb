@@ -47,25 +47,33 @@ SeerStoneGraphDb/
 
 ## OTP Supervision Tree
 
-```
-seerstone (application)
-  └── seerstone_sup (supervisor, one_for_one)
-        └── database_sup (supervisor)
-              ├── graphdb_sup (supervisor)
-              │     ├── graphdb_mgr       (gen_server — implemented: bootstrap init, read API, category guard)
-              │     ├── graphdb_rules     (gen_server — stub, implementation pending)
-              │     ├── graphdb_attr      (gen_server — implemented: seeds + create/lookup API)
-              │     ├── graphdb_class     (gen_server — implemented: taxonomic hierarchy, QC inheritance)
-              │     ├── graphdb_instance  (gen_server — implemented: compositional hierarchy, inheritance)
-              │     └── graphdb_language  (gen_server — stub, implementation pending)
-              └── dictionary_sup (supervisor)
-                    ├── dictionary_server (gen_server — stub, not yet wired to dictionary_imp)
-                    └── term_server       (gen_server — stub, not yet wired to dictionary_imp)
+`nref`, `database`, and `seerstone` are peer OTP applications started by
+`application_master` in dependency order from `seerstone.app.src`'s
+`applications:` list. `graphdb` and `dictionary` are `included_applications`
+of `database` (legacy 2008 idiom; modernization tracked as
+`TASKS-LOW.md` E5).
 
-nref (application — started independently)
+```
+nref (application — started first)
   └── nref_sup (supervisor)
         ├── nref_allocator  (DETS-backed block allocator, gen_server — fully implemented)
         └── nref_server     (serves nrefs to callers, gen_server — fully implemented)
+
+database (application — started after nref)
+  └── database_sup (supervisor)
+        ├── graphdb_sup (supervisor — graphdb is included_application)
+        │     ├── graphdb_mgr       (gen_server — implemented: bootstrap init, read API, category guard)
+        │     ├── graphdb_rules     (gen_server — stub, implementation pending)
+        │     ├── graphdb_attr      (gen_server — implemented: seeds + create/lookup API)
+        │     ├── graphdb_class     (gen_server — implemented: taxonomic hierarchy, QC inheritance)
+        │     ├── graphdb_instance  (gen_server — implemented: compositional hierarchy, inheritance)
+        │     └── graphdb_language  (gen_server — stub, implementation pending)
+        └── dictionary_sup (supervisor — dictionary is included_application)
+              ├── dictionary_server (gen_server — stub, not yet wired to dictionary_imp)
+              └── term_server       (gen_server — stub, not yet wired to dictionary_imp)
+
+seerstone (application — top-level; started last)
+  └── seerstone_sup (supervisor) — empty; placeholder for future seerstone-specific workers
 ```
 
 `nref_include.erl` has been deleted — it was Dallas's earlier unsupervised

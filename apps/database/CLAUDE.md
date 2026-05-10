@@ -18,27 +18,33 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 ## Application Lifecycle
 
-`database` is started by the top-level `seerstone_sup`, which calls:
+`database` is a peer OTP application started by `application_master` —
+listed in `seerstone.app.src`'s `applications:` dependency list, so it
+starts before `seerstone`. The flow:
 
 ```
-seerstone_sup:init/1
-  -> childspec(database_sup)
+application_master
+  -> database:start(normal, [])
     -> database_sup:start_link/0
       -> database_sup:init/1
 ```
 
-`database:start/2` passes `StartArgs` through to `database_sup:start_link/1`.
+`database:start/2` calls `database_sup:start_link/0`. Any `StartArgs` from
+the `.app` file are not threaded through — `database_sup` takes no args,
+matching the `seerstone` / `nref` convention.
 
 ## Supervision Tree Position
 
 ```
-seerstone_sup (one_for_one, MaxR=5, MaxT=5000)
-  └── database_sup   ← this application's supervisor
-        ├── graphdb_sup    (from apps/graphdb/)
-        └── dictionary_sup (from apps/dictionary/)
+database_sup (one_for_one, MaxR=5, MaxT=5000)
+  ├── graphdb_sup    (from apps/graphdb/    — graphdb is included_application)
+  └── dictionary_sup (from apps/dictionary/ — dictionary is included_application)
 ```
 
-`database_sup` is declared as `Type = supervisor`, `Shutdown = infinity` in `seerstone_sup`'s child spec — giving the subtree unlimited time to shut down gracefully.
+`database_sup` is the top supervisor of the `database` application;
+`application_master` owns it. `graphdb_sup` and `dictionary_sup` are direct
+children declared with `Type = supervisor`, `Shutdown = infinity` —
+giving the subtree unlimited time to shut down gracefully.
 
 ## NYI Status
 
@@ -52,7 +58,7 @@ the current deployment model — no phased startup, no pre-shutdown hooks needed
 
 ## Key Design Notes
 
-- `database_sup` receives `StartArgs` forwarded from `database:start/2`
+- `database_sup:start_link/0` takes no args (matches the convention used by every supervisor in the umbrella)
 - The `database` application's `.app` file should declare `graphdb` and `dictionary` as included applications
 
 ## Compile

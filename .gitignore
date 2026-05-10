@@ -6,6 +6,7 @@
 *.dets
 erl_crash.dump
 _build/
+data/
 log/
 .idea/
 .claude/settings.local.json

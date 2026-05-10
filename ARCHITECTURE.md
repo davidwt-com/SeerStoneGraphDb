@@ -207,26 +207,37 @@ sources). API: `graphdb_instance:add_relationship/4,5`.
 
 ## 5. Supervision Tree
 
-```
-seerstone (application)
-  └── seerstone_sup (one_for_one)
-        └── database_sup
-              ├── graphdb_sup
-              │     ├── graphdb_mgr        — primary coordinator, bootstrap startup
-              │     ├── graphdb_attr       — attribute library
-              │     ├── graphdb_class      — taxonomic hierarchy
-              │     ├── graphdb_instance   — compositional hierarchy + inheritance
-              │     ├── graphdb_rules      — rule storage/enforcement (stub)
-              │     └── graphdb_language   — query language (stub)
-              └── dictionary_sup
-                    ├── dictionary_server  — (stub, not wired to dictionary_imp)
-                    └── term_server        — (stub, not wired to dictionary_imp)
+The four OTP applications are peer apps started by `application_master`
+in dependency order from `seerstone.app.src`'s `applications:` list:
+`nref` first, then `database`, then `seerstone`.
 
-nref (application — independent, started before seerstone)
+```
+nref (application — started first)
   └── nref_sup
         ├── nref_allocator                 — DETS-backed counter
         └── nref_server                    — public nref API; calls allocator
+
+database (application — started after nref)
+  └── database_sup
+        ├── graphdb_sup     (graphdb is an included_application of database)
+        │     ├── graphdb_mgr       — primary coordinator, bootstrap startup
+        │     ├── graphdb_attr      — attribute library
+        │     ├── graphdb_class     — taxonomic hierarchy
+        │     ├── graphdb_instance  — compositional hierarchy + inheritance
+        │     ├── graphdb_rules     — rule storage/enforcement (stub)
+        │     └── graphdb_language  — query language (stub)
+        └── dictionary_sup  (dictionary is an included_application of database)
+              ├── dictionary_server — (stub, not wired to dictionary_imp)
+              └── term_server       — (stub, not wired to dictionary_imp)
+
+seerstone (application — top-level; started last)
+  └── seerstone_sup       — empty supervisor; placeholder for future
+                            seerstone-specific workers
 ```
+
+`graphdb` and `dictionary` are `included_applications` of `database` — the
+2008 OTP idiom Dallas adopted. Modernizing them to peer-app status is
+tracked as `TASKS-LOW.md` E5.
 
 Worker boundaries: each `graphdb_*` worker owns the schema/contract it
 maintains. `graphdb_mgr` is the public entry point and routes to the
