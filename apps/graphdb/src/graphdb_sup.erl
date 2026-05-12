@@ -91,7 +91,7 @@
 %%--------------------------------------------------------------------- 
 
 start_link() ->
-	supervisor:start_link(graphdb_sup, []).
+	supervisor:start_link({local, graphdb_sup}, graphdb_sup, []).
 
 
 %%--------------------------------------------------------------------- 

@@ -90,7 +90,7 @@
 %%--------------------------------------------------------------------- 
 
 start_link() ->
-	supervisor:start_link(database_sup, []).
+	supervisor:start_link({local, database_sup}, database_sup, []).
 
 
 %%--------------------------------------------------------------------- 

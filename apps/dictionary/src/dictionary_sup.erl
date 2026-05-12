@@ -91,7 +91,7 @@
 %%--------------------------------------------------------------------- 
 
 start_link() ->
-	supervisor:start_link(dictionary_sup, []).
+	supervisor:start_link({local, dictionary_sup}, dictionary_sup, []).
 
 
 %%--------------------------------------------------------------------- 

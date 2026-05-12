@@ -90,7 +90,7 @@
 %%--------------------------------------------------------------------- 
 
 start_link() ->
-	supervisor:start_link(seerstone_sup, []).
+	supervisor:start_link({local, seerstone_sup}, seerstone_sup, []).
 
 
 %%--------------------------------------------------------------------- 
