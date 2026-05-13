@@ -136,6 +136,7 @@ Relationships are stored in a separate Mnesia table (not embedded in node record
 ```erlang
 -record(relationship, {
   id,               %% integer() — primary key (nref allocated normally)
+  kind,             %% taxonomy | composition | connection | instantiation
   source_nref,      %% integer() — arc origin
   characterization, %% integer() — arc label (an attribute nref from environment)
   target_nref,      %% integer() — arc target (environment or project per target_kind)

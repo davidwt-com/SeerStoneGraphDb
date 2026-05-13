@@ -140,6 +140,261 @@ the additional AVP.
 
 ---
 
+## M6. Multilingual support — language overlay model
+
+**Spec:** §15 — *"Concepts are stored language-neutrally in the
+ontology. Labels, prompts, and vocabulary entries are stored per
+language and swapped at rendering time without modifying the
+knowledge."*
+
+**Design:** The environment node record (`#node{}`) is unchanged and
+the environment database is the English default — the terminal
+fallback for every language chain. English is the practical common
+language of international communication; it is acknowledged as the
+environment's base language without apology. Language-specific labels
+are stored in per-language Mnesia tables within the same schema
+(overlay model). A language chain is a runtime parameter scoped to the
+session, user, or use case; resolution walks the chain left-to-right
+and falls through to the environment node on miss. Per-AVP override
+semantics: a language overlay record carries only the AVPs it
+overrides; all other AVPs resolve from the environment node unchanged.
+
+Dialect distinctions are optionally supported. A dialect code such as
+`en_gb` or `pt_br` (atom, underscore convention) identifies a
+finer-grained overlay table. Dialect overlays carry only terms that
+genuinely differ from the base language; most terms fall through to the
+base language or the environment. Dialectal variants are an explicit
+authoring decision — the system never infers which dialect a string
+belongs to.
+
+Project databases mirror this model. The terminal fallback is the
+project node record, authored in an implementer-chosen language. That
+language is specified as an AVP on the project root node, referencing a
+language concept node in the environment.
+
+**Current state:** `graphdb_language.erl` is a gen_server stub.
+`bootstrap.terms` carries English strings as node AVPs — these are the
+English default and require no migration.
+
+---
+
+### Sub-tasks
+
+**M6-A: Language overlay record and Mnesia schema**
+
+```erlang
+-record(language_node, {
+    nref,   %% integer() — same keyspace as environment nodes table
+    avps    %% [#{attribute => AttrNref, value => Value}]
+             %%   — AVPs that shadow matching AVPs on the environment node
+}).
+```
+
+One Mnesia `disc_copies` table per language or dialect
+(`language_en`, `language_de`, `language_en_gb`, `language_pt_br`, …)
+with `{record_name, language_node}`. Tables are created on demand when
+a language or dialect is registered. `graphdb_bootstrap` creates
+`language_en` at environment init; it will be mostly empty in practice
+since the environment node record is itself the English default — the
+table exists to make `en` a well-formed chain entry.
+
+**M6-B: Language concept nodes**
+
+`graphdb_language:init/1` seeds a language concept node for English
+under the Languages category (nref 4) using the standard
+ensure-seed-by-name pattern. Node kind is determined during
+implementation (candidate: `class`, as languages are ontology-level
+definitional concepts rather than project instances). The English nref
+is cached in gen_server state and exposed via
+`graphdb_language:seeded_nrefs/0`.
+
+Base languages and dialects are both language concept nodes, but
+dialect nodes carry an AVP that references their base language concept
+node:
+
+```erlang
+#{attribute => base_language_nref, value => BaseLanguageConceptNref}
+```
+
+`base_language` is seeded as a literal attribute in
+`graphdb_language:init/1` (same seeding pattern as `target_kind`).
+Base language nodes carry no such AVP. This makes the base/dialect
+relationship explicit, queryable, and independent of the atom naming
+convention.
+
+**M6-C: Label resolver**
+
+```erlang
+graphdb_language:resolve_label(Nref, AttrNref, Chain) -> Value | not_found
+```
+
+`Chain :: [atom()]` — language code atoms in priority order
+(e.g., `[de, en_gb, en, fr]`). Walk: for each code in the chain:
+
+  - If the code equals the environment's declared language (`en` by
+    default, readable from `graphdb_language:seeded_nrefs/0`): skip
+    the overlay table lookup and fall directly to the terminal node
+    read. This makes `en` a zero-cost sentinel — `language_en` is not
+    read, and the environment node record is used immediately.
+  - Otherwise: read `language_<code>` table for Nref; if a record
+    exists and its `avps` contains AttrNref, return that value.
+
+If the chain is exhausted without a match, read from the terminal node
+table (environment `nodes`, or project `nodes` for project nrefs). If
+still absent, return `not_found`.
+
+For project nref resolution, the caller passes the project `nodes`
+table name as an explicit terminal parameter — the resolver has no
+global state about which database owns a given nref.
+
+**M6-D: Language registration**
+
+```erlang
+%% Base language
+graphdb_language:register_language(Code :: atom(), Name :: string())
+    -> {ok, Nref} | {error, already_registered} | {error, _}
+
+%% Dialect — must name an already-registered base language
+graphdb_language:register_dialect(Code :: atom(), Name :: string(),
+                                  BaseCode :: atom())
+    -> {ok, Nref} | {error, base_not_found}
+                  | {error, already_registered}
+                  | {error, _}
+```
+
+Both create the concept node under nref 4 and its Mnesia overlay table.
+`register_dialect/3` additionally stamps the `base_language` AVP on
+the dialect node, referencing the base language concept nref. Calling
+`register_dialect/3` with an unregistered `BaseCode` is an error.
+Both calls are idempotent on restart (seed-by-name pattern).
+
+**M6-E: Overlay write**
+
+```erlang
+graphdb_language:set_labels(Nref, Code :: atom(), AVPs) -> ok | {error, _}
+```
+
+Writes or merges AVPs into the language overlay record for Nref in
+`language_<Code>`. Merge semantics: existing AVPs for other attributes
+on the same record are preserved; only the supplied AttrNrefs are
+updated or added.
+
+**M6-F: Translation agent hook**
+
+```erlang
+graphdb_language:register_translation_hook(Fun) -> ok
+%% Fun :: fun((Nref :: integer(), DefaultAVPs :: [avp()]) -> ok)
+```
+
+Called after environment node creation with the new nref and its
+English AVPs. Initially the hook list is empty (silent no-op). Multiple
+hooks accumulate in registration order; all are called post-commit.
+This is the designed insertion point for a future LLM-based translation
+agent. As language overlays accumulate, translation patterns may emerge
+and be encoded as rules — the hook is the path through which that
+learning is initiated.
+
+**M6-G: Project default language**
+
+Seed `project_language` literal attribute in `graphdb_attr:init/1`
+alongside `target_kind`, `relationship_avp`, `attribute_type`, and
+`literal_type`. The project root node carries:
+
+```erlang
+#{attribute => project_language_nref, value => LanguageConceptNref}
+```
+
+Public API:
+
+```erlang
+graphdb_language:project_language(ProjectRootNref)
+    -> {ok, Code :: atom()} | not_found
+```
+
+Reads the `project_language` AVP from the project root node and
+returns the language code atom for the referenced concept node.
+
+**M6-H: Session chain helper**
+
+```erlang
+graphdb_language:make_chain(Codes :: [atom()]) -> [atom()]
+```
+
+Validates each code against registered languages; drops unknown codes
+with a log warning. Applies the dialect auto-insertion rule: for each
+dialect code, look up the `base_language` AVP on its concept node to
+find the base language code authoritatively (not by atom parsing).
+If the base code does not appear anywhere after the dialect in the
+remaining list, insert it immediately after the dialect. Deduplication:
+when multiple dialects of the same base appear, one insertion suffices.
+When the base is already present after the dialect, no insertion is
+made.
+
+Examples:
+
+  - `[de, en_gb, fr]`       → `[de, en_gb, en, fr]`
+  - `[en_gb, en_us]`        → `[en_gb, en, en_us]`
+  - `[en_gb, en, fr]`       → `[en_gb, en, fr]`  (base already present)
+  - `[pt_br, de]`           → `[pt_br, pt, de]`
+
+Callers do not construct Mnesia table names directly.
+
+**M6-I: Write-path integration**
+
+When the NYI write operations (`create_attribute`, `create_class`,
+`create_instance`) are implemented, each must:
+
+  1. Create the environment node atomically in one Mnesia transaction.
+  2. Call all registered translation hooks post-commit with the new
+     nref and its English AVPs. (Outside the transaction — best-effort.)
+  3. If a session language list is provided with labels, call
+     `set_labels/3` for each language. (Also outside the transaction.)
+
+Steps 2–3 are not atomically coupled to step 1 by design. A failed
+hook or missing language label does not roll back node creation.
+
+Dialect write discipline: do not auto-duplicate environment labels into
+dialect overlay tables. A dialect overlay record is only written when
+the label genuinely differs from the base language. The session
+language list declares the context for new labels; deciding whether a
+term warrants a dialect-specific override is an explicit authoring
+decision, never inferred by the system.
+
+**M6-J: Tests**
+
+EUnit (`graphdb_language_tests.erl`) — pure function coverage:
+
+  - `make_chain/1`: unknown codes silently dropped; known codes
+    preserved in order.
+  - `make_chain/1`: dialect auto-insertion — base inserted after
+    dialect when absent (base determined from concept node AVP, not
+    atom parsing).
+  - `make_chain/1`: multiple dialects of same base — single insertion.
+  - `make_chain/1`: base already present after dialect — no duplicate.
+
+CT (`graphdb_language_SUITE.erl`) — integration:
+
+  - Register language → overlay table created; idempotent on re-register.
+  - Register dialect → concept node carries `base_language` AVP
+    referencing base concept nref; `base_not_found` when base unregistered.
+  - `set_labels/3` → AVP readable via `resolve_label/3`.
+  - Fallback: no overlay record → resolves from environment node.
+  - Chain priority: first-listed language wins over second.
+  - `en` sentinel: chain containing `en` reads environment node
+    directly; `language_en` table is not consulted.
+  - Dialect hit: `en_gb` overlay record returned when present; falls
+    through to environment when absent.
+  - Dialect fallback chain: `[en_gb, en, fr]` — `en_gb` miss → `en`
+    sentinel → environment node (skips `fr` because terminal matched).
+  - Project language AVP written and retrieved correctly.
+  - Translation hook: registered `Fun` called on node creation; empty
+    list is a silent no-op.
+
+**Dependencies:** None remaining. Must land before Task 6 — query
+render-time label resolution depends on the language overlay API.
+
+---
+
 ## Task 6 — `graphdb_language` query language
 
 **Spec:** §13 (query) and §15 (multilingual).
@@ -154,7 +409,7 @@ returning `?UEM` on every call.
 - Template-filtered traversal — kernel-side templates landed (M7);
   this task adds the query-side selectivity that reads the Template
   AVP off connection arcs.
-- Language-tagged label resolution at render time — depends on M6.
+- Language-tagged label resolution at render time — via M6 overlay API.
 - Conversational/natural-language entry point (§13).
 
 **Sub-tasks:**
@@ -162,45 +417,11 @@ returning `?UEM` on every call.
   is later).
 - `parse_query/1`, `execute_query/1`.
 - Path queries: `find_path/3`.
-- Render-time label lookup honoring a per-call `Language :: atom()`.
+- Render-time label lookup: call `resolve_label/3` with the per-call
+  language chain at result rendering time.
 
-**Dependencies:** value from this work multiplies after C1 (relationship
-kind) and H1, H3–H5 (correct inheritance). Recommend not starting until
-those land.
-
----
-
-## M6. Language-neutral name storage (multilingual support)
-
-**Spec:** §15 — *"Concepts are stored language-neutrally in the
-ontology. Labels, prompts, and vocabulary entries are stored per
-language and swapped at rendering time without modifying the
-knowledge."*
-
-**Evidence:** `bootstrap.terms:41-90` — every node carries
-`{17|18|19|20, "Root" | "Names" | ...}` literally as Erlang strings.
-`graphdb_attr.erl:425-429` (and equivalent in `graphdb_class.erl:390-394`)
-searches by raw string equality. The Languages category (nref 4) is in
-the bootstrap but no code reads from it.
-
-**Two options:**
-
-A) **Per-language map AVPs** — name AVP value becomes
-   `#{en => "Root", de => "Wurzel"}`. Render-time lookup:
-   `maps:get(Lang, M, maps:get(en, M))`.
-
-B) **Label nodes** — names become first-class concept nodes with
-   per-language AVPs, connected to the labelled concept via a "label"
-   characterization. Section 3 ("Make searchable things into nodes")
-   pushes toward this — *"If 'blue' is a literal value stored on
-   instances, there is no path to 'find everything that is blue.'"*
-
-**Recommended:** option B for instance/class/attribute names. Ontology
-labels (the bootstrap-fixed names) can stay as map AVPs in option A
-since they aren't searched-from.
-
-**Dependencies:** harder to do later than now — every name AVP touched.
-Prefer to land before any project ships with significant data.
+**Dependencies:** C1, H1, H3–H5 (all landed). M6 must land first —
+render-time label resolution depends on the language overlay API.
 
 ---
 
