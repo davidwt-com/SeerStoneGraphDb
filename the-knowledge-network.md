@@ -21,6 +21,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | **Concept node**           | The universal unit of identity. Every class, attribute, rule, template, instance, and vocabulary entry is a concept node.                                                                                      |
 | **Literal attribute**      | An attribute whose value is raw data — a number, string, measurement, or URL — stored directly on a node. Literal values do not participate in graph traversal.                                                |
 | **Relationship attribute** | An attribute that characterizes a connection between two nodes. Both directions of a connection carry their own characterization.                                                                              |
+| **Renderer**               | A rendering engine that produces output from knowledge. Shared across languages — not tied to any specific one. Also called a *view*.                                                                          |
 
 ---
 
@@ -41,6 +42,27 @@ The knowledge model has two bodies:
 **The ontology** — the definitional knowledge. All classes of things that can exist, their attributes, the rules governing their behavior, the templates through which they are engaged, and the languages in which they are expressed. The ontology is not infrastructure or configuration — it is knowledge. It is live, queryable, and extensible.
 
 **The project** — the instance space. All specific things that exist within a given deployment: instantiated concepts, their values, their compositions, and their connections. A project instantiates *some* of the ontology — the classes relevant to its domain — not all of it. The same ontology can serve multiple projects across unrelated domains.
+
+The top-level structure of the knowledge network:
+
+```
+Knowledge Network
+├── Ontology                          — definitional knowledge, shared across all projects
+│   ├── Classes                       — concept types; Templates are compositional children
+│   │   └── [Template]                — named semantic context scoping connections and attributes
+│   ├── Attributes
+│   │   ├── Name Attributes           — human-readable labels for classes and instances
+│   │   ├── Literal Attributes        — raw data: measurements, strings, URLs
+│   │   └── Relationship Attributes   — arc labels characterizing connections between nodes
+│   ├── Languages
+│   │   ├── Human Languages           — written and verbal natural languages
+│   │   ├── Formal Languages          — programming, query, mathematical notation
+│   │   ├── Diagram Languages         — UML, schematics, tabular and hierarchical forms
+│   │   └── Renderers                 — shared rendering engines (also: views)
+│   └── Rules                         — instantiation, connection, and composition rules
+└── Projects                          — instance spaces; one per deployment domain
+    └── Instances                     — concrete members of classes, in a composition tree
+```
 
 ---
 
@@ -205,15 +227,21 @@ Rules are not only authored — they are inferred from practice and stored perma
 
 ---
 
-## 12. Views
+## 12. Renderers
 
-The knowledge graph supports multiple rendered views simultaneously; the following are representative examples. Switching views changes the rendering; the underlying knowledge is unchanged.
+A **renderer** (also called a *view*) is a rendering engine that produces output from the knowledge graph. Renderers are shared across languages — the same renderer serves multiple languages, each potentially adding restrictions or extensions on top of the base rendering rules.
 
-- **Tree view** — hierarchical browser of taxonomy and composition
-- **Schematic view** — diagram-style rendering; schematic types are themselves template-driven
-- **Template view** — attribute editor for a single instance through a specific template
-- **Gallery view** — spatial arrangement of instances as icons
-- **Natural language query** — text-based query interface
+Renderers form their own taxonomy organized by rendering mechanics, not by semantic domain:
+
+- **Latin-script renderer** — text flow for Latin-alphabet output. Extended by the programming language renderer (adds syntax highlighting and indentation rules) and the table renderer (adds strict columnar layout).
+- **Cyrillic renderer** — parallel to Latin-script; similar flow mechanics applied to a different glyph set.
+- **Tree renderer** — hierarchical parent-child layout; used for taxonomy and composition browsers.
+- **Cluster renderer** — node-and-edge layout for interconnected components. Engineering diagram types that show component relationships add domain-specific icon sets on top.
+- **Flow renderer** — directed paths with decision branching; used for flowcharts and process diagrams.
+- **Gallery renderer** — spatial arrangement of instances as icons or thumbnails.
+- **Schematic renderer** — domain-specific symbol placement; schematic types are themselves template-driven.
+
+A renderer has no meaning outside the context of a language. This is why renderers belong in the Language subtree of the ontology, even though they are not categorized by semantic domain. Languages connect to the renderers they use by relationship — the same renderer node is reachable from many language nodes. A language does not IS-A its renderer.
 
 ---
 
@@ -251,11 +279,28 @@ Schematic drawings can be imported and their symbols recognized automatically. P
 
 ---
 
-## 15. Multilingual Support
+## 15. Languages
 
-Concepts are stored language-neutrally in the ontology. Labels, prompts, and vocabulary entries are stored per language and swapped at rendering time without modifying the knowledge. The same knowledge graph produces output in any configured language.
+A **language** in this system is any communication form with grammar, syntax, and tokens or icons — the units by which meaning is encoded and expressed. The definition is intentionally broad. Human natural languages qualify. So do programming languages, UML, engineering schematic languages, tabular notation, tree diagrams, and query grammars. All share the defining properties: a grammar governing how elements combine, a syntax governing valid arrangements, and a vocabulary of tokens or icons carrying meaning.
+
+Four major categories exist under the Languages node of the ontology:
+
+| Category              | What it contains                                                                          |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| **Human Languages**   | Written and verbal natural languages, organized by script family                          |
+| **Formal Languages**  | Programming languages, query languages, mathematical notation                             |
+| **Diagram Languages** | UML, engineering schematics, tabular forms, hierarchy diagrams, and other visual grammars |
+| **Renderers**         | Shared rendering engines; see §12. Languages connect to renderers by relationship         |
+
+Human Languages, Formal Languages, and Diagram Languages are organized by *semantic domain* — what they encode and express. Renderers are organized by *rendering mechanics* — how they produce output. The asymmetry is intentional: a language and its renderer answer different questions. Renderers are a peer category under Languages because they have no meaning outside the context of a language — not because they share a semantic domain with any language family.
+
+### Human Languages
+
+Concepts in the ontology are stored language-neutrally. Labels, prompts, and vocabulary entries are stored per human language and resolved at rendering time without modifying the knowledge. The same knowledge graph produces output in any configured language.
 
 *Example: the concept of water is stored once. In English it is labeled "water"; in German, "Wasser"; in French, "eau". The knowledge — its molecular composition, its physical properties, its relationships to other concepts — is identical across all languages. Changing the output language changes labels only.*
+
+Human languages within the ontology are organized by script family — Latin-script languages, Cyrillic languages, and so on — because script family determines which renderer a language connects to.
 
 ---
 
