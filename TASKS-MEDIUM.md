@@ -180,6 +180,12 @@ English default and require no migration.
 
 ### Sub-tasks
 
+> **Pre-implementation gate:** Blockers R1–R4 in the Architecture
+> Review section below must each have a recorded decision before any
+> sub-task here is coded. R1 (project nref collision) and R2 (dialect
+> algorithm) affect API signatures and test cases; resolving them first
+> prevents cascading rework.
+
 **M6-A: Language overlay record and Mnesia schema**
 
 ```erlang
@@ -197,6 +203,11 @@ a language or dialect is registered. `graphdb_bootstrap` creates
 `language_en` at environment init; it will be mostly empty in practice
 since the environment node record is itself the English default — the
 table exists to make `en` a well-formed chain entry.
+
+> **R6 (should fix):** Specify runtime `mnesia:create_table/2`
+> behaviour in `register_language/2` and `register_dialect/3` —
+> synchronous vs. async, timeout, concurrent-registration safety across
+> nodes. See Architecture Review.
 
 **M6-B: Language concept nodes**
 
@@ -221,6 +232,15 @@ node:
 Base language nodes carry no such AVP. This makes the base/dialect
 relationship explicit, queryable, and independent of the atom naming
 convention.
+
+> **R3 (blocker):** Decide language concept node `kind` before
+> implementing — `class` requires explicitly forbidding taxonomic arcs
+> as a second base/dialect mechanism. Record decision before coding.
+> See Architecture Review.
+>
+> **R4 (should fix):** Move `project_language` seeding from
+> `graphdb_attr:init/1` to `graphdb_language:init/1` — owning worker
+> pattern. See Architecture Review.
 
 **M6-C: Label resolver**
 
@@ -247,6 +267,18 @@ For project nref resolution, the caller passes the project `nodes`
 table name as an explicit terminal parameter — the resolver has no
 global state about which database owns a given nref.
 
+> **R1 (blocker):** Signature is missing the terminal-table parameter,
+> and project nrefs share the same integer keyspace as environment
+> nrefs — a single `language_*` table keyed by nref alone cannot
+> distinguish them. Resolve the project-side overlay story (shared vs.
+> per-project tables, key scheme) and update the signature before
+> coding. See Architecture Review.
+>
+> **R8 (should fix):** Specify where the environment's declared
+> language code is stored (config, AVP, constant) — the sentinel
+> optimisation depends on this lookup being authoritative and fast.
+> See Architecture Review.
+
 **M6-D: Language registration**
 
 ```erlang
@@ -267,6 +299,10 @@ Both create the concept node under nref 4 and its Mnesia overlay table.
 the dialect node, referencing the base language concept nref. Calling
 `register_dialect/3` with an unregistered `BaseCode` is an error.
 Both calls are idempotent on restart (seed-by-name pattern).
+
+> **R6 (should fix):** Specify runtime `mnesia:create_table/2`
+> behaviour — synchronous, timeout, concurrent-registration safety.
+> See Architecture Review.
 
 **M6-E: Overlay write**
 
@@ -294,6 +330,12 @@ agent. As language overlays accumulate, translation patterns may emerge
 and be encoded as rules — the hook is the path through which that
 learning is initiated.
 
+> **R7 (should fix):** Hook must be invoked in a spawned process
+> (`proc_lib:spawn/1`), never inline — inline blocks all callers and
+> crashes the worker on exception. Add `unregister_translation_hook/1`
+> for test cleanup. Clarify return-value contract (currently
+> unspecified). See Architecture Review.
+
 **M6-G: Project default language**
 
 Seed `project_language` literal attribute in `graphdb_attr:init/1`
@@ -313,6 +355,10 @@ graphdb_language:project_language(ProjectRootNref)
 
 Reads the `project_language` AVP from the project root node and
 returns the language code atom for the referenced concept node.
+
+> **R1 (blocker):** Project-side overlay story unresolved — see M6-C
+> callout and Architecture Review. This API cannot be fully specified
+> until the project nref keyspace collision is resolved.
 
 **M6-H: Session chain helper**
 
@@ -339,6 +385,13 @@ Examples:
 
 Callers do not construct Mnesia table names directly.
 
+> **R2 (blocker):** Dialect auto-insertion algorithm is incorrect as
+> written — "not after the dialect" produces wrong results for
+> `[en_gb, en_us]` (inserts `en` twice). Correct rule: insert base if
+> absent **anywhere in the chain as built so far**. Replace prose with
+> operational pseudocode; re-derive all examples from the pseudocode
+> before coding. See Architecture Review.
+
 **M6-I: Write-path integration**
 
 When the NYI write operations (`create_attribute`, `create_class`,
@@ -359,6 +412,11 @@ the label genuinely differs from the base language. The session
 language list declares the context for new labels; deciding whether a
 term warrants a dialect-specific override is an explicit authoring
 decision, never inferred by the system.
+
+> **R1 (blocker):** Write-path integration for project instances cannot
+> be specified until the project-side overlay story is resolved —
+> including whether project-instance labels go into shared or
+> per-project overlay tables. See Architecture Review R1 and R13.
 
 **M6-J: Tests**
 
@@ -390,8 +448,192 @@ CT (`graphdb_language_SUITE.erl`) — integration:
   - Translation hook: registered `Fun` called on node creation; empty
     list is a silent no-op.
 
+> **R9 (should fix):** Add missing test cases before closing M6-J —
+> hook crash during node creation (creation must succeed), `set_labels/3`
+> for unregistered code (error, no write), re-register with different
+> name (decide + test), dialect with deleted base concept (graceful
+> resolution), `make_chain([])` → `[]`, transaction abort in
+> `set_labels/3` (no partial write). See Architecture Review.
+
 **Dependencies:** None remaining. Must land before Task 6 — query
 render-time label resolution depends on the language overlay API.
+
+---
+
+### Architecture Review — Open Issues
+
+Post-design audit conducted before implementation. Each blocker must be
+resolved (with a decision recorded in the Decision Log) before any M6
+code is written. Should-fix items should be resolved during the relevant
+sub-task. Notes are informational and do not block.
+
+#### Blockers
+
+**R1. Project-side overlay story is unspecified — and nref collision
+risk.** *(M6-C, M6-G, M6-I)*
+
+`resolve_label/3` text says "caller passes project `nodes` table name
+as explicit terminal parameter" but the 3-argument signature has no
+such parameter. More critically: project nrefs start at 1 — the same
+keyspace as environment nrefs. A project nref=5 and environment nref=5
+are different nodes; a single `language_*` table keyed by nref alone
+cannot distinguish them. Resolution options:
+
+  - Extend to `resolve_label/4` with an explicit terminal-table atom;
+    keep `language_*` tables environment-only; project overlays use
+    separate per-project `<project_id>_language_*` tables.
+  - Or: key overlay records by `{Scope, Nref}` (one table, two-part
+    key) rather than nref alone.
+
+Decision must also answer: do project instances get their own overlay
+tables, or does label localisation for project nodes live elsewhere?
+M6-I (write-path integration) cannot be specified until this is resolved.
+
+**R2. Dialect auto-insertion algorithm produces incorrect results.**
+*(M6-H)*
+
+The stated rule — "if the base code does not appear anywhere *after*
+the dialect in the remaining list" — is wrong for the supplied
+examples. Applied to `[en_gb, en_us]`:
+
+  1. Process `en_gb`: base=`en`, not after `en_gb` in `[en_gb, en_us]`
+     → insert: `[en_gb, en, en_us]`.
+  2. Process `en_us`: base=`en`, not after `en_us` in
+     `[en_gb, en, en_us]` → inserts again: `[en_gb, en, en_us, en]`.
+
+Stated result was `[en_gb, en, en_us]`. Also, `[en, en_gb, fr]` would
+wrongly trigger insertion because `en` is not *after* the dialect. The
+correct rule is: **insert base if it does not appear anywhere in the
+chain as built so far (not just after the dialect)**. Replace the
+prose description with operational pseudocode and verify each example
+derives from the pseudocode mechanically. Correct the algorithm in
+M6-H and generate the M6-J EUnit cases from the corrected spec.
+
+**R3. Language concept node `kind` must be decided before implementation.**
+*(M6-B)*
+
+Leaving `kind` as "candidate: `class`" creates a risk: if `class` is
+chosen, the taxonomic IS-A arc system provides a *second* mechanism for
+expressing base/dialect beside the `base_language` AVP. Two mechanisms
+for the same fact will diverge. Decision required:
+
+  - Choose `class`: explicitly forbid using class taxonomy for the
+    base/dialect relationship; `base_language` AVP is the sole
+    authority.
+  - Or: introduce `kind = language` (updates `kind_order/1`,
+    validators, and bootstrap across the board).
+
+`class` is simpler. Record the decision and the constraint.
+
+**R4. Seeded literal attribute ownership is inconsistent.** *(M6-B,
+M6-G)*
+
+`base_language` is seeded by `graphdb_language:init/1`; `project_language`
+is seeded by `graphdb_attr:init/1`. Both are AVP-marker literals with
+the same structural role. The established pattern (`qualifying_characteristic`
+seeded by `graphdb_class`, `target_kind` by `graphdb_instance`) is:
+the *owning worker* seeds its own attributes. `project_language` belongs
+to the language layer, not the attribute library. Move its seeding to
+`graphdb_language:init/1`.
+
+#### Should Fix
+
+**R5. §15 departure is undocumented.** *(Design)*
+
+§15 says "concepts are stored language-neutrally." The design stores
+English directly on environment nodes. This is a defensible choice, but
+it is a departure from the strict reading of §15. Add a Decision Log
+entry documenting the departure and its rationale before closing M6.
+
+**R6. Runtime Mnesia table creation needs operational specification.**
+*(M6-A, M6-D)*
+
+`mnesia:create_table/2` called from a running gen_server holds a schema
+write-lock and can block under load or fail under partition in a
+distributed schema. Specify: synchronous call during
+`register_language/2`? Timeout? Concurrent-registration safety across
+nodes? What happens if the node is `disc_copies` but the peer hasn't
+seen the schema change?
+
+**R7. Translation hook execution model is unsafe as written.** *(M6-F)*
+
+Inline hook invocation from a gen_server blocks all other callers for
+the hook's duration and crashes the worker if a hook raises. Required
+changes:
+
+  - Invoke each hook in a spawned process (`proc_lib:spawn/1`), never
+    inline.
+  - Catch all errors; log and discard — never propagate to the caller.
+  - Forbid synchronous re-entry into `graphdb_language` from a hook
+    (deadlock).
+  - Add `unregister_translation_hook(Fun) -> ok` — tests must be able
+    to clean up between cases; accumulating hooks across tests is a
+    resource leak.
+
+**R8. Environment language declaration mechanism is unspecified.**
+*(M6-C)*
+
+M6-C says "`en` by default, readable from `seeded_nrefs/0`" but
+`seeded_nrefs/0` returns nrefs, not language codes. Where is the
+environment's declared language code stored? Hard-coded atom? Config
+parameter? AVP on the Languages category node (nref 4)? The sentinel
+optimisation in `resolve_label` depends on this lookup being
+authoritative and fast. Specify storage and retrieval before coding
+M6-C.
+
+**R9. Test coverage gaps.** *(M6-J)*
+
+Missing cases from the current test spec:
+
+  - Translation hook crashes mid-create: node creation must succeed.
+  - `set_labels/3` with an unregistered language code: error before
+    any write.
+  - Re-register an already-registered language with a different name:
+    error or overwrite? (Decision + test.)
+  - Dialect concept node whose `base_language` AVP references a
+    deleted/missing concept: graceful resolution path.
+  - `make_chain([])` → `[]`.
+  - Mnesia transaction abort during `set_labels/3`: caller sees error,
+    no partial write.
+
+#### Notes
+
+**R10. Locale code format is undocumented.** `en_gb` (underscore,
+lowercase atom) departs from IETF BCP 47 (`en-GB`). Fine for atom
+convenience but should be a documented choice in the Decision Log.
+
+**R11. No batch resolver API.** `resolve_label/3` is per-AVP.
+Task 6 render-time will call it per attribute per node. A future
+`resolve_labels(Nref, [AttrNref], Chain) -> #{AttrNref => Value}` will
+be wanted. Note for Task 6 planning; not blocking M6.
+
+**R12. Mnesia table proliferation ceiling.** Default Mnesia schema
+supports ~1024 tables. ISO 639 base codes (~200) plus dialects could
+approach that in a fully-internationalised deployment. Most deployments
+stay well under 20. Acceptable now; fallback design is a single
+`language_overlays` table keyed by `{Code, Nref}`. Revisit if a
+deployment actually approaches the ceiling.
+
+**R13. Project-side overlays absent from write-path plan.** *(M6-I)*
+
+Project instances have labels (instance names, project-specific terms).
+The plan covers project *terminal fallback* (project root carries
+`project_language` AVP) but does not specify how project-instance
+labels are written into overlay tables or retrieved. Overlaps with
+blocker R1 — resolving R1 should also answer this.
+
+**R14. Snapshot consistency during render.** Multiple sequential
+`resolve_label/3` calls while a concurrent `set_labels/3` is mid-flight
+can return a mix of old and new values for the same node. Acceptable
+for labels but should be noted in the Decision Log so it is not later
+misconstrued as a correctness bug.
+
+**R15. Translation hook return value contract undefined.** *(M6-F)*
+
+The current signature `Fun :: fun((Nref, DefaultAVPs) -> ok)` implies
+the return is always `ok`, but this is not enforced. Document explicitly
+that the return value is discarded, or change the contract to
+`-> ok | {error, Reason}` and specify what happens on error.
 
 ---
 
