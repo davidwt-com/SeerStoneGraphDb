@@ -5,6 +5,10 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 # SeerStoneGraphDb — Low-Severity Tasks
 
+> **SUPERSEDED.** This file is replaced by `TASKS.md` (Engineering
+> Hygiene section). It is kept here per the retirement workflow and
+> will be removed in the next PR.
+
 Correctness, contract, naming, and OTP-plumbing items. None of these
 block the spec; each one improves clarity, performance, or future-
 maintenance posture.

@@ -5,6 +5,10 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 # SeerStoneGraphDb — Medium-Severity Tasks
 
+> **SUPERSEDED.** This file is replaced by `TASKS.md` (phase-based
+> ordering) and `TASKS-DONE.md` (resolved items archive). It is kept
+> here per the retirement workflow and will be removed in the next PR.
+
 Semantic departures from `the-knowledge-network.md` plus the surviving
 feature work from the original TASKS.md (query language, rules engine).
 The kernel works without these, but each one is a load-bearing piece of
