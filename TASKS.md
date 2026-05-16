@@ -19,12 +19,15 @@ they will be removed in the next PR.
 
 ---
 
-## F1. Language Ontology Bootstrap
+## F1. Language Ontology Bootstrap — RESOLVED
 
 Gate: must land before F2. `the-knowledge-network.md` §15 now documents
 Languages as any communication form with grammar, syntax, and tokens or
 icons — significantly broader than human natural languages alone. Four
 top-level categories belong under the Languages node (nref 4):
+
+**Status:** Complete. Nrefs 32–35 seeded in `bootstrap.terms`. CT
+coverage in `graphdb_bootstrap_SUITE` (`load_language_subcategories`).
 
 - Human Languages — written and verbal natural languages
 - Formal Languages — programming languages, query languages,
@@ -148,7 +151,7 @@ table exists to make `en` a well-formed chain entry.
 **M6-B: Language concept nodes**
 
 `graphdb_language:init/1` seeds a language concept node for English
-under Human Languages (nref assigned in F1) using the standard
+under Human Languages (nref 32) using the standard
 ensure-seed-by-name pattern. Node kind is determined during
 implementation (candidate: `class`, as languages are ontology-level
 definitional concepts rather than project instances). The English nref
@@ -230,8 +233,7 @@ graphdb_language:register_dialect(Code :: atom(), Name :: string(),
                   | {error, _}
 ```
 
-Both create the concept node under Human Languages (nref assigned in
-F1) and its Mnesia overlay table. `register_dialect/3` additionally
+Both create the concept node under Human Languages (nref 32) and its Mnesia overlay table. `register_dialect/3` additionally
 stamps the `base_language` AVP on the dialect node, referencing the
 base language concept nref. Calling `register_dialect/3` with an
 unregistered `BaseCode` is an error. Both calls are idempotent on

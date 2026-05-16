@@ -23,8 +23,8 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_instance.erl`  | Instance/compositional hierarchy gen_server (stub)          |
 | `graphdb_language.erl`  | Query language gen_server (stub)                            |
 
-`apps/graphdb/priv/bootstrap.terms` — Erlang Terms file fully written; contains 31 nodes
-(nrefs 1–31, BFS) and 30 hierarchy relationship pairs (4 composition + 26 taxonomy). Loaded at first ontology startup.
+`apps/graphdb/priv/bootstrap.terms` — Erlang Terms file fully written; contains 35 nodes
+(nrefs 1–35, BFS) and 34 hierarchy relationship pairs (8 composition + 26 taxonomy). Loaded at first ontology startup.
 
 ## Application Lifecycle
 
@@ -54,7 +54,7 @@ Two database roles operate in parallel:
 The ontology is shared across all projects and is a **living, growing database**: new literal attributes, relationship attributes, and classes are added over time. Only category nodes (nrefs 1–5) are permanently fixed.
 
 nref spaces:
-- **Environment**: bootstrap nrefs 1–31; runtime nrefs 10000+ (floor set by `{nref_start, 10000}` directive in `bootstrap.terms`)
+- **Environment**: bootstrap nrefs 1–35; runtime nrefs 10000+ (floor set by `{nref_start, 10000}` directive in `bootstrap.terms`)
 - **Project**: allocator starts at **1** — no pre-assigned nrefs, no bootstrap file, no floor needed
 
 Cross-database nref resolution: `characterization` and `reciprocal` fields always reference environment nrefs; `target_nref` is routed to environment or project based on the arc label's `target_kind` AVP.
@@ -151,7 +151,7 @@ A logical bidirectional edge is two `relationship` rows written atomically (one 
 
 ---
 
-## Bootstrap Nref Quick-Reference (BFS, nrefs 1–31)
+## Bootstrap Nref Quick-Reference (BFS, nrefs 1–35)
 
 ```
  1  Root (category)
@@ -185,6 +185,10 @@ A logical bidirectional edge is two `relationship` rows written atomically (one 
 29      Class  — instance→class membership arc (parent: 16)
 30      Instance — class→instances membership arc (parent: 16)
 31      Template — Connection-arc scope AVP marker (parent: 16)
+32      Human Languages  — Language subcategory (parent: 4)
+33      Formal Languages  — Language subcategory (parent: 4)
+34      Diagram Languages — Language subcategory (parent: 4)
+35      Renderers         — Language subcategory (parent: 4)
 ```
 
 NameAttrNref quick-reference: category=17, attribute=18, class=19, instance=20

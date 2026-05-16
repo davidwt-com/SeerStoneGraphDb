@@ -148,15 +148,15 @@ Two database roles:
 | **Ontology**                 | All category, attribute, class, and language nodes; bootstrap scaffold; arc label definitions | Category nodes: immutable (bootstrap-only). All other nodes grow freely at runtime. |
 | **Project (instance space)** | Instance nodes and their relationships; one database per project                              | Fully mutable at runtime                                                            |
 
-The environment is shared across all projects. Only bootstrap nrefs (1–31) and a small number of explicitly seeded runtime nrefs (e.g., `target_kind`) are referenced by nref constant in code — all other runtime-added nodes are treated generically.
+The environment is shared across all projects. Only bootstrap nrefs (1–35) and a small number of explicitly seeded runtime nrefs (e.g., `target_kind`) are referenced by nref constant in code — all other runtime-added nodes are treated generically.
 
 nref spaces:
-- **Environment**: bootstrap nrefs 1–30; runtime nrefs 10000+ (protected by `{nref_start, 10000}` in `bootstrap.terms`)
+- **Environment**: bootstrap nrefs 1–35; runtime nrefs 10000+ (protected by `{nref_start, 10000}` in `bootstrap.terms`)
 - **Project**: allocator starts at **1** — no pre-assigned nrefs, no bootstrap file, no floor needed
 
 Cross-database nref resolution: `characterization` and `reciprocal` fields always reference environment nrefs; `target_nref` is routed to environment or project based on the arc label's `target_kind` AVP stored in the environment attribute library.
 
-### Bootstrap Nref Quick-Reference (BFS, nrefs 1–31)
+### Bootstrap Nref Quick-Reference (BFS, nrefs 1–35)
 
 ```
  1  Root (category)
@@ -190,6 +190,10 @@ Cross-database nref resolution: `characterization` and `reciprocal` fields alway
 29      Class  — instance→class membership arc (parent: 16)
 30      Instance — class→instances membership arc (parent: 16)
 31      Template — Connection-arc scope AVP marker (parent: 16)
+32      Human Languages  — Language subcategory (parent: 4)
+33      Formal Languages  — Language subcategory (parent: 4)
+34      Diagram Languages — Language subcategory (parent: 4)
+35      Renderers         — Language subcategory (parent: 4)
 ```
 
 NameAttrNref quick-reference: category=17, attribute=18, class=19, instance=20
