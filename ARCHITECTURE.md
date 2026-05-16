@@ -158,7 +158,7 @@ Five top-level categories are pre-assigned at bootstrap:
 5  └── Projects    (organisational anchor for project databases — see §6)
 ```
 
-The full 31-node BFS scaffold (nrefs 1–31) is documented in
+The full 35-node BFS scaffold (nrefs 1–35) is documented in
 `apps/graphdb/priv/bootstrap.terms`. Code that needs specific nrefs uses
 the constants defined as macros in the worker that owns them
 (`graphdb_attr`, `graphdb_class`, `graphdb_instance`).
