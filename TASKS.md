@@ -10,8 +10,6 @@ shown — each gates the next. Engineering Hygiene tasks have no blocking
 dependencies and can be interleaved at any point.
 
 Resolved tasks are archived in `TASKS-DONE.md`.
-`TASKS-MEDIUM.md` and `TASKS-LOW.md` are superseded by this file;
-they will be removed in the next PR.
 
 ---
 

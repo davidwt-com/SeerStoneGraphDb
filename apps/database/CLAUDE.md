@@ -73,7 +73,6 @@ erlc apps/database/src/database_sup.erl apps/database/src/database.erl
 
 ## Remaining Work
 
-See `apps/graphdb/CLAUDE.md` and the severity-grouped task files
-(`TASKS-MEDIUM.md`, `TASKS-LOW.md`) at the project root for the
+See `apps/graphdb/CLAUDE.md` and `TASKS.md` at the project root for the
 remaining graphdb work and `dictionary_server` / `term_server` wiring
-(Task 7 in `TASKS-LOW.md`).
+(Task 7 in `TASKS.md`).

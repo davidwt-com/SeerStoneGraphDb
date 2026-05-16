@@ -9,7 +9,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 > implementation progresses within an already-described component. The canonical
 > spec is [`the-knowledge-network.md`](the-knowledge-network.md); the kernel
 > implements that model. Outstanding work is grouped by severity in
-> `TASKS-MEDIUM.md` and `TASKS-LOW.md`.
+> `TASKS.md`.
 
 ---
 
@@ -32,7 +32,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 The kernel is functional under multi-inheritance, multi-class-
 membership, and per-class template semantics.  Multilingual label
 storage (M6) is the only open kernel-level question (§10);
-template-scoped queries land with the query DSL (TASKS-MEDIUM Task 6).
+template-scoped queries land with the query DSL (TASKS.md F3).
 
 ---
 
@@ -237,12 +237,12 @@ seerstone (application — top-level; started last)
 
 `graphdb` and `dictionary` are `included_applications` of `database` — the
 2008 OTP idiom Dallas adopted. Modernizing them to peer-app status is
-tracked as `TASKS-LOW.md` E5.
+tracked as `TASKS.md` E5.
 
 Worker boundaries: each `graphdb_*` worker owns the schema/contract it
 maintains. `graphdb_mgr` is the public entry point and routes to the
 workers — read path implemented; write-side routing is pending
-(`TASKS-LOW.md` L4).
+(`TASKS.md` L4).
 
 ---
 
@@ -411,4 +411,4 @@ Names are currently raw Erlang strings on every node. Spec §15 requires
 language-neutral concept storage with per-language labels resolved at
 render time. Two design options (per-language map AVPs vs. label
 nodes) are open; choice affects every node in the database. See
-`TASKS-MEDIUM.md` M6.
+`TASKS.md` F2.

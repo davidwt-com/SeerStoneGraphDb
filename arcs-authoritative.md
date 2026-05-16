@@ -22,8 +22,8 @@ parents, compositional parents, class memberships — in two places today:
     instantiation arcs).
   - Fields on the `node` record (`parent`).
 
-`TASKS-MEDIUM.md` M1 already calls out the inconsistency for instances.
-The same shape reappears in H3 (multi-parent classes) and H4
+M1 (resolved in PR #10) called out this inconsistency for instances.
+The same shape reappeared in H3 (multi-parent classes) and H4
 (multi-class instances). A uniform answer is needed before H3 lands.
 
 ## Decision

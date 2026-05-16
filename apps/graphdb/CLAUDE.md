@@ -277,7 +277,7 @@ All six worker modules (`graphdb_mgr`, `graphdb_rules`, `graphdb_attr`, `graphdb
 ## Key Design Notes
 
 - `graphdb_sup:start_link/0` takes no args, matching every supervisor in the umbrella. `graphdb_sup` is started by `database_sup`'s childspec via the zero-arg `{graphdb_sup, start_link, []}` form, not by `graphdb:start/2`.
-- `graphdb_bootstrap`, `graphdb_mgr` (startup + read API), `graphdb_attr`, `graphdb_class`, and `graphdb_instance` are implemented. Remaining work is grouped by severity in `TASKS-MEDIUM.md` and `TASKS-LOW.md` at the project root.
+- `graphdb_bootstrap`, `graphdb_mgr` (startup + read API), `graphdb_attr`, `graphdb_class`, and `graphdb_instance` are implemented. Remaining work is in `TASKS.md` at the project root.
 - Consult `the-knowledge-network.md` for the full model spec before implementing
 
 ## Compile
@@ -294,5 +294,4 @@ erlc apps/graphdb/src/graphdb_sup.erl apps/graphdb/src/graphdb.erl
 
 `graphdb_bootstrap.erl` is implemented; `graphdb_mgr`, `graphdb_attr`,
 `graphdb_class`, and `graphdb_instance` are implemented. Outstanding work
-(query language, rules engine, etc.) is grouped by severity in
-`TASKS-MEDIUM.md` and `TASKS-LOW.md` at the project root.
+(query language, rules engine, etc.) is in `TASKS.md` at the project root.
