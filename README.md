@@ -26,11 +26,10 @@ underway:
 | `graphdb_class`        | Fully implemented — taxonomic hierarchy with multi-parent inheritance (BFS — breadth-first search — over a DAG, a directed acyclic graph), qualifying characteristics, class-level inheritance                 |
 | `graphdb_instance`     | Fully implemented — compositional hierarchy, multi-class membership, four-level inheritance with class-resolver ambiguity detection                                                                            |
 | `graphdb_rules`        | Gen_server stub — deferred to Enhancements (pattern recognition, relationship constraints)                                                                                                                     |
-| `graphdb_language`     | Gen_server stub — next to implement (Task 6)                                                                                                                                                                   |
+| `graphdb_language`     | Gen_server stub — next to implement (TASKS.md F3)                                                                                                                                                              |
 
-**228 tests** (64 EUnit + 164 Common Test) — all passing. See
-`TASKS-MEDIUM.md` and `TASKS-LOW.md` for the prioritised task list
-(organised by severity).
+**229 tests** (64 EUnit + 165 Common Test) — all passing. See
+`TASKS.md` for the prioritised task list.
 
 ---
 
@@ -83,8 +82,6 @@ SeerStoneGraphDb/
 │   └── nref/          # Globally unique node-reference ID allocator
 ├── rebar.config       # rebar3 umbrella build configuration
 ├── Makefile           # Convenience targets (compile, shell, release, clean)
-├── TASKS-MEDIUM.md    # Semantic departures + query language + rules engine
-├── TASKS-LOW.md       # Polish, perf, OTP plumbing, dictionary wiring
 └── CLAUDE.md          # Project guide and coding conventions
 ```
 
@@ -236,7 +233,7 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 | `graphdb_mgr_tests`       | EUnit | 9     | Direction validation, client-side arg checks                                                                                                                                |
 | `graphdb_class_tests`     | EUnit | 11    | `is_valid_parent_kind/1`, `collect_qc_nrefs/2`                                                                                                                              |
 | `graphdb_instance_tests`  | EUnit | 7     | `find_avp_value/2`                                                                                                                                                          |
-| `graphdb_bootstrap_SUITE` | CT    | 17    | Full bootstrap load, Mnesia tables, idempotency, error handling                                                                                                             |
+| `graphdb_bootstrap_SUITE` | CT    | 18    | Full bootstrap load, Mnesia tables, idempotency, error handling, Language subcategory nodes                                                                                 |
 | `graphdb_mgr_SUITE`       | CT    | 23    | Bootstrap init, read ops, category guard, write stubs, cache audit/repair                                                                                                   |
 | `graphdb_attr_SUITE`      | CT    | 17    | Attribute create/lookup, seeding, relationship types, atomic reciprocal pair (M4)                                                                                           |
 | `graphdb_class_SUITE`     | CT    | 44    | Class create, QC (qualifying characteristics), lookups, hierarchy, multi-inheritance (H3), inheritance, templates                                                           |
@@ -314,8 +311,7 @@ controlled by `logger_level` in `config/sys.config`.
 
 See `CLAUDE.md` for detailed coding conventions, the NYI/UEM macro pattern,
 module header format, naming conventions, and the git workflow. See
-`TASKS-MEDIUM.md` and `TASKS-LOW.md` for the prioritised list of remaining
-implementation work, organised by severity.
+`TASKS.md` for the prioritised list of remaining implementation work.
 
 Key conventions at a glance:
 
