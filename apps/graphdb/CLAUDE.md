@@ -54,7 +54,7 @@ Two database roles operate in parallel:
 The ontology is shared across all projects and is a **living, growing database**: new literal attributes, relationship attributes, and classes are added over time. Only category nodes (nrefs 1–5) are permanently fixed.
 
 nref spaces:
-- **Environment**: bootstrap nrefs 1–35; runtime nrefs 10000+ (floor set by `{nref_start, 10000}` directive in `bootstrap.terms`)
+- **Environment**: bootstrap nrefs 1–35 (scaffold) + nref 10000 (English permanent seed); runtime nrefs 100000+ (floor set by `{nref_start, 100000}` directive in `bootstrap.terms`)
 - **Project**: allocator starts at **1** — no pre-assigned nrefs, no bootstrap file, no floor needed
 
 Cross-database nref resolution: `characterization` and `reciprocal` fields always reference environment nrefs; `target_nref` is routed to environment or project based on the arc label's `target_kind` AVP.
@@ -208,7 +208,7 @@ Loaded by `graphdb_mgr:init/1` when the Mnesia `nodes` table is empty (first sta
 - Creates the Mnesia schema and tables (`nodes`, `relationships`)
 - Reads `bootstrap_file` path from `application:get_env(seerstone_graph_db, bootstrap_file)`
 - Calls `file:consult/1` on the bootstrap file; validates all terms
-- Calls `nref_server:set_floor(10000)` first, then writes nodes and relationship pairs
+- Calls `nref_server:set_floor(100000)` first, then builds a symbol table for atom-labeled nrefs, resolves all labels, then writes nodes and relationship pairs
 - Public API: `graphdb_bootstrap:load() -> ok | {error, Reason}`
 
 ### `graphdb_attr` — Attribute Library

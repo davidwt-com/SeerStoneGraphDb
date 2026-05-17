@@ -8,9 +8,17 @@
 %% nodes table is empty.  After a successful load, nref_server:set_floor/1 is
 %% called and the file is never consulted again.
 %%
-%% Pre-assigned nrefs: 1-35 (nodes).
-%% Relationship record IDs are allocated by nref_server:get_nref/0, which
-%% starts at nref_start (10000) because {nref_start,...} is processed first.
+%% Nref tiers:
+%%   scaffold   (1–9 999):   pre-assigned category/attribute nodes
+%%   permanent  (10 000–99 999): pre-assigned first-class concept seeds
+%%   runtime    (100 000+):  dynamically allocated (floor = nref_start)
+%%
+%% Labeled atom nrefs (e.g. lang_code, lang_human): allocated at load
+%% time by the two-pass loader from the runtime tier (>= nref_start).
+%%
+%% Relationship record IDs are allocated by nref_server:get_nref/0.
+%% Symbol-table allocations happen before relationship writes, so both
+%% categories of runtime IDs land in the runtime tier.
 %%
 %% Node tuple shape (Option B, post-H0d):
 %%   {node, Nref, Kind, {NameAttrNref, NameValue}, ExtraAVPs}
@@ -47,10 +55,10 @@
 %% Each {relationship,...} term expands to two directed rows written atomically.
 
 %% -------------------------------------------------------------------------
-%% nref floor -- processed first; nref_server:set_floor(10000) is called so
-%% all subsequent get_nref/0 calls for relationship IDs return >= 10000.
+%% nref floor -- processed first; nref_server:set_floor(100000) is called so
+%% all subsequent get_nref/0 calls return >= 100000 (runtime tier).
 %% -------------------------------------------------------------------------
-{nref_start, 10000}.
+{nref_start, 100000}.
 
 %% -------------------------------------------------------------------------
 %% Level 0 -- Root
@@ -175,3 +183,55 @@
 {relationship, 16, 24, [], 23, 29, [], taxonomy}.  %% Instance Relationships  -> Class
 {relationship, 16, 24, [], 23, 30, [], taxonomy}.  %% Instance Relationships  -> Instance
 {relationship, 16, 24, [], 23, 31, [], taxonomy}.  %% Instance Relationships  -> Template
+
+%% =========================================================================
+%% Permanent concept nodes (nrefs 10000–99999)
+%%
+%% These are pre-assigned, first-class seeds that serve as canonical
+%% ontology anchors.  Runtime APIs may enrich them (add AVPs, connect
+%% relationships) but their nrefs are fixed forever.
+%% =========================================================================
+
+%% English -- canonical default language; terminal fallback for multilingual
+%% label resolution.  First instance node in the ontology.
+%% lang_code AVP records the ISO 639-1 language code (value = en).
+%%
+%% PROPOSAL: English's compositional parent is currently unset (parents=[]).
+%% Options:
+%%   (a) no parent — English is a free-standing concept in the ontology
+%%   (b) composition arc to Human Languages category (nref 32) — requires
+%%       Template infrastructure to express domain membership correctly
+%% Option (a) is used here; option (b) is deferred until R3 is resolved.
+{node, 10000, instance, {20, "English"}, [{lang_code, en}]}.
+
+%% =========================================================================
+%% Labeled nodes -- zero pre-assigned nrefs.
+%%
+%% Atom labels are symbolic nref placeholders resolved at load time by the
+%% two-pass bootstrap loader (build_symbol_table → apply_symbol_table).
+%% The allocated nrefs land in the runtime tier (>= 100000).
+%%
+%% These nodes are mutable: knowledge improvements (renaming, reparenting,
+%% adding AVPs) do not affect the permanent English node.
+%%
+%% PROPOSAL: The specific attribute/class design below is subject to review.
+%%   lang_code  — literal attribute under Literals (7); stores ISO 639-1 codes
+%%   lang_human — class for human natural languages; child of Classes (3)
+%% =========================================================================
+{node, lang_code,  attribute, {18, "lang_code"},      []}.
+{node, lang_human, class,     {19, "Human Language"}, []}.
+
+%% -------------------------------------------------------------------------
+%% Arcs for labeled and permanent nodes
+%% -------------------------------------------------------------------------
+
+%% Literals (7) -> lang_code  (attribute taxonomy)
+{relationship,  7, 24, [], 23, lang_code,  [], taxonomy}.
+
+%% Classes (3) -> Human Language  (class taxonomy)
+{relationship,  3, 26, [], 25, lang_human, [], taxonomy}.
+
+%% English (10000) -> Human Language  (instance membership)
+%% PROPOSAL: This instantiation arc records English as an instance of
+%% Human Language.  The reverse arc is written automatically by the loader.
+{relationship, 10000, 29, [], 30, lang_human, [], instantiation}.

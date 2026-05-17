@@ -306,12 +306,12 @@ qc_seed_idempotent_on_restart(_Config) ->
 	?assertEqual(NodesBefore, NodesAfter).
 
 %%-----------------------------------------------------------------------------
-%% Seeded nref must be >= the nref_start floor (10000).
+%% Seeded nref must be >= the nref_start floor (100000).
 %%-----------------------------------------------------------------------------
 qc_seed_nref_above_floor(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, QcNref} = graphdb_class:qc_attr_nref(),
-	?assert(QcNref >= 10000).
+	?assert(QcNref >= 100000).
 
 
 %%=============================================================================

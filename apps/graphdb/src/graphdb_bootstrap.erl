@@ -99,7 +99,14 @@
 		validate_relationships/1,
 		term_to_node/1,
 		expand_avps/1,
-		kind_order/1
+		kind_order/1,
+		collect_labels/2,
+		build_symbol_table/2,
+		apply_symbol_table/3,
+		resolve_node/2,
+		resolve_rel/2,
+		resolve_nref/2,
+		validate_no_unresolved_labels/2
 		]).
 -endif.
 
@@ -227,11 +234,14 @@ do_load() ->
 			ok = validate_relationships(Rels),
 			logger:info("graphdb_bootstrap: set_floor(~p)", [NrefStart]),
 			ok = nref_server:set_floor(NrefStart),
-			ok = write_nodes(Nodes),
-			ok = write_relationships(Rels),
+			SymTable = build_symbol_table(Nodes, Rels),
+			{ResNodes, ResRels} = apply_symbol_table(Nodes, Rels, SymTable),
+			ok = validate_no_unresolved_labels(ResNodes, ResRels),
+			ok = write_nodes(ResNodes),
+			ok = write_relationships(ResRels),
 			ok = rebuild_and_verify_caches(),
 			logger:info("graphdb_bootstrap: loaded ~p nodes, ~p relationship pairs",
-				[length(Nodes), length(Rels)]),
+				[length(ResNodes), length(ResRels)]),
 			ok;
 		{error, Reason} ->
 			throw({error, {consult_failed, File, Reason}})
@@ -322,8 +332,9 @@ kind_order(template)  -> 5.
 %%-----------------------------------------------------------------------------
 %% validate(NrefStart, Nodes) -> ok
 %%
-%% Validates that every node nref is a positive integer below NrefStart
-%% and every kind is one of the five legal atoms.
+%% Validates that every node nref is either an atom label (to be resolved
+%% by the symbol table) or a positive integer below NrefStart, and that
+%% every kind is one of the five legal atoms.
 %%-----------------------------------------------------------------------------
 validate(NrefStart, Nodes) ->
 	lists:foreach(fun({node, Nref, Kind, _Name, _AVPs}) ->
@@ -335,16 +346,16 @@ validate(NrefStart, Nodes) ->
 			template  -> ok;
 			_         -> throw({error, {invalid_kind, Nref, Kind}})
 		end,
-		case is_integer(Nref) andalso Nref > 0 of
-			true  -> ok;
-			false -> throw({error, {invalid_nref, Nref}})
-		end,
-		case Nref < NrefStart of
-			true  -> ok;
-			false -> throw({error, {nref_not_below_floor, Nref, NrefStart}})
-		end
+		validate_nref(Nref, NrefStart)
 	end, Nodes),
 	ok.
+
+validate_nref(Label, _NrefStart) when is_atom(Label) -> ok;
+validate_nref(Nref, NrefStart) when is_integer(Nref), Nref > 0, Nref < NrefStart -> ok;
+validate_nref(Nref, NrefStart) when is_integer(Nref), Nref > 0 ->
+	throw({error, {nref_not_below_floor, Nref, NrefStart}});
+validate_nref(Nref, _NrefStart) ->
+	throw({error, {invalid_nref, Nref}}).
 
 
 %%-----------------------------------------------------------------------------
@@ -361,6 +372,111 @@ validate_relationships(Rels) ->
 			instantiation -> ok;
 			_             -> throw({error, {invalid_relationship_kind, Kind, Rel}})
 		end
+	end, Rels),
+	ok.
+
+
+%%-----------------------------------------------------------------------------
+%% build_symbol_table(Nodes, Rels) -> #{atom() => integer()}
+%%
+%% Discovers every atom label used as a node nref or AVP attribute key in
+%% Nodes and Rels, allocates a fresh runtime nref for each (via
+%% nref_server:get_nref/0, which is >= nref_start after set_floor), and
+%% returns the label-to-nref map.  Called after set_floor so all allocated
+%% nrefs land in the runtime tier.
+%%-----------------------------------------------------------------------------
+build_symbol_table(Nodes, Rels) ->
+	Labels = collect_labels(Nodes, Rels),
+	lists:foldl(fun(Label, Acc) ->
+		Nref = nref_server:get_nref(),
+		Acc#{Label => Nref}
+	end, #{}, Labels).
+
+
+%%-----------------------------------------------------------------------------
+%% collect_labels(Nodes, Rels) -> [atom()]
+%%
+%% Returns a sorted, deduplicated list of every atom that appears as a
+%% node nref or as an AVP attribute key (not AVP values) in Nodes or Rels.
+%%-----------------------------------------------------------------------------
+collect_labels(Nodes, Rels) ->
+	NodeNrefLabels = [L || {node, L, _, _, _} <- Nodes, is_atom(L)],
+	RelEndpointLabels = lists:flatten(
+		[[L || L <- [N1, N2], is_atom(L)]
+		 || {relationship, N1, _, _, _, N2, _, _} <- Rels]),
+	AVPAttrLabels = lists:flatten(
+		[[L || {L, _} <- AVPs, is_atom(L)]
+		 || {node, _, _, _, AVPs} <- Nodes]),
+	RelAVPLabels = lists:flatten(
+		[[L || {L, _} <- AVPs1 ++ AVPs2, is_atom(L)]
+		 || {relationship, _, _, AVPs1, _, _, AVPs2, _} <- Rels]),
+	lists:usort(NodeNrefLabels ++ RelEndpointLabels ++ AVPAttrLabels ++ RelAVPLabels).
+
+
+%%-----------------------------------------------------------------------------
+%% apply_symbol_table(Nodes, Rels, SymTable) -> {ResolvedNodes, ResolvedRels}
+%%
+%% Substitutes every atom label in Nodes and Rels with the integer nref
+%% from SymTable.  Throws {error, {undefined_label, Label}} if a label
+%% is not found in the table.
+%%-----------------------------------------------------------------------------
+apply_symbol_table(Nodes, Rels, SymTable) ->
+	ResNodes = [resolve_node(N, SymTable) || N <- Nodes],
+	ResRels  = [resolve_rel(R, SymTable)  || R <- Rels],
+	{ResNodes, ResRels}.
+
+
+%%-----------------------------------------------------------------------------
+%% resolve_node(Node, SymTable) -> ResolvedNode
+%%-----------------------------------------------------------------------------
+resolve_node({node, Nref, Kind, Name, AVPs}, SymTable) ->
+	{node,
+		resolve_nref(Nref, SymTable),
+		Kind,
+		Name,
+		[{resolve_nref(A, SymTable), V} || {A, V} <- AVPs]}.
+
+
+%%-----------------------------------------------------------------------------
+%% resolve_rel(Rel, SymTable) -> ResolvedRel
+%%-----------------------------------------------------------------------------
+resolve_rel({relationship, N1, R1, AVPs1, R2, N2, AVPs2, Kind}, SymTable) ->
+	{relationship,
+		resolve_nref(N1, SymTable), R1,
+		[{resolve_nref(A, SymTable), V} || {A, V} <- AVPs1],
+		R2, resolve_nref(N2, SymTable),
+		[{resolve_nref(A, SymTable), V} || {A, V} <- AVPs2],
+		Kind}.
+
+
+%%-----------------------------------------------------------------------------
+%% resolve_nref(X, SymTable) -> integer()
+%%
+%% Passes integers through unchanged; maps atom labels via SymTable.
+%%-----------------------------------------------------------------------------
+resolve_nref(X, _SymTable) when is_integer(X) -> X;
+resolve_nref(Label, SymTable) when is_atom(Label) ->
+	case maps:find(Label, SymTable) of
+		{ok, Nref} -> Nref;
+		error      -> throw({error, {undefined_label, Label}})
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% validate_no_unresolved_labels(Nodes, Rels) -> ok
+%%
+%% Sanity check after apply_symbol_table: throws if any atom remains as a
+%% node nref or AVP attribute key.  A surviving atom means a label was in
+%% a position not visited by collect_labels — a loader bug, not bad input.
+%%-----------------------------------------------------------------------------
+validate_no_unresolved_labels(Nodes, Rels) ->
+	lists:foreach(fun({node, Nref, _, _, AVPs}) ->
+		is_atom(Nref) andalso throw({error, {unresolved_label, Nref}}),
+		[is_atom(A) andalso throw({error, {unresolved_label, A}}) || {A, _} <- AVPs]
+	end, Nodes),
+	lists:foreach(fun({relationship, N1, _, _, _, N2, _, _}) ->
+		is_atom(N1) andalso throw({error, {unresolved_label, N1}}),
+		is_atom(N2) andalso throw({error, {unresolved_label, N2}})
 	end, Rels),
 	ok.
 
