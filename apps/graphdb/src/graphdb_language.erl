@@ -70,10 +70,9 @@
 
 
 %%---------------------------------------------------------------------
-%% Suppress warnings for records and pure helpers defined for later M6 tasks
+%% Suppress warnings for pure helpers only used under TEST
 %%---------------------------------------------------------------------
 -compile({nowarn_unused_function, [overlay_table_name/2, do_make_chain/3]}).
--compile({nowarn_unused_record, [node, relationship, language_node]}).
 
 %%---------------------------------------------------------------------
 %% Records
@@ -233,9 +232,45 @@ do_make_chain([Code | Rest], Output, DMap) ->
 %%---------------------------------------------------------------------
 
 init([]) ->
-    ?NYI(init),
-    {ok, #state{}}.
+    try
+        LangCodeNref         = find_literal_by_name("lang_code"),
+        LangHumanNref        = find_class_by_name(?PARENT_CLASSES, "Human Language"),
+        BaseLangNref         = ensure_literal_seed("base_language"),
+        ProjectLangNref      = ensure_literal_seed("project_language"),
+        ok = ensure_overlay_table(language_en),
+        {LangCodeMap, DialectMap} =
+            build_lang_maps(LangCodeNref, BaseLangNref, LangHumanNref),
+        logger:info("graphdb_language: started "
+            "(lang_code=~p, lang_human=~p, base_language=~p, "
+            "project_language=~p, registered=~p)",
+            [LangCodeNref, LangHumanNref, BaseLangNref, ProjectLangNref,
+             maps:size(LangCodeMap)]),
+        {ok, #state{
+            lang_code_nref        = LangCodeNref,
+            lang_human_nref       = LangHumanNref,
+            base_language_nref    = BaseLangNref,
+            project_language_nref = ProjectLangNref,
+            lang_code_map         = LangCodeMap,
+            dialect_map           = DialectMap
+        }}
+    catch
+        throw:{error, Reason} ->
+            logger:error("graphdb_language: init failed: ~p", [Reason]),
+            {stop, {init_failed, Reason}};
+        _Class:Reason:Stack ->
+            logger:error("graphdb_language: init crashed: ~p ~p",
+                [Reason, Stack]),
+            {stop, {init_failed, Reason}}
+    end.
 
+handle_call(seeded_nrefs, _From,
+        #state{lang_code_nref        = LC,
+               base_language_nref    = BL,
+               project_language_nref = PL} = State) ->
+    {reply, {ok, #{lang_code          => LC,
+                   base_language      => BL,
+                   project_language   => PL,
+                   env_language_code  => ?ENV_LANGUAGE_CODE}}, State};
 handle_call(Request, From, State) ->
     ?UEM(handle_call, {Request, From, State}),
     {noreply, State}.
@@ -254,3 +289,185 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     ?NYI(code_change),
     {ok, State}.
+
+
+%%=====================================================================
+%% Private Helper Functions
+%%=====================================================================
+
+%%---------------------------------------------------------------------
+%% find_literal_by_name(Name) -> Nref
+%%
+%% Finds an attribute-kind child of the Literals subtree (7) by name.
+%% Throws {error, Reason} if not found (bootstrap requirement).
+%%---------------------------------------------------------------------
+find_literal_by_name(Name) ->
+	case graphdb_attr:find_attribute_by_name(?PARENT_LITERALS, Name) of
+		{ok, Nref} -> Nref;
+		not_found  -> throw({error, {literal_not_found, Name}})
+	end.
+
+
+%%---------------------------------------------------------------------
+%% find_class_by_name(ParentNref, Name) -> Nref
+%%
+%% Finds a class-kind child of ParentNref whose class-name AVP matches
+%% Name.  Runs a Mnesia transaction.
+%% Throws {error, Reason} if not found.
+%%---------------------------------------------------------------------
+find_class_by_name(ParentNref, Name) ->
+	F = fun() ->
+		Children = downward_children_by_arc(ParentNref, ?CLASS_CHILD_ARC,
+			taxonomy),
+		lists:search(fun(N) -> class_has_name(N, Name) end, Children)
+	end,
+	case mnesia:transaction(F) of
+		{atomic, {value, #node{nref = Nref}}} -> Nref;
+		{atomic, false} -> throw({error, {class_not_found, Name}});
+		{aborted, R}    -> throw({error, R})
+	end.
+
+
+%%---------------------------------------------------------------------
+%% ensure_literal_seed(Name) -> Nref
+%%
+%% Same pattern as graphdb_attr:ensure_seed/1 — looks up a literal
+%% attribute by name under Literals (7); creates it if absent.
+%%---------------------------------------------------------------------
+ensure_literal_seed(Name) ->
+	case graphdb_attr:find_attribute_by_name(?PARENT_LITERALS, Name) of
+		{ok, Nref} ->
+			Nref;
+		not_found ->
+			Nref = nref_server:get_nref(),
+			NameAVP = #{attribute => ?NAME_ATTR_FOR_ATTRIBUTE, value => Name},
+			Node = #node{
+				nref = Nref,
+				kind = attribute,
+				parents = [?PARENT_LITERALS],
+				attribute_value_pairs = [NameAVP]
+			},
+			Id1 = nref_server:get_nref(),
+			Id2 = nref_server:get_nref(),
+			P2C = #relationship{
+				id             = Id1,
+				kind           = taxonomy,
+				source_nref    = ?PARENT_LITERALS,
+				characterization = ?ATTR_CHILD_ARC,
+				target_nref    = Nref,
+				reciprocal     = ?ATTR_PARENT_ARC,
+				avps           = []
+			},
+			C2P = #relationship{
+				id             = Id2,
+				kind           = taxonomy,
+				source_nref    = Nref,
+				characterization = ?ATTR_PARENT_ARC,
+				target_nref    = ?PARENT_LITERALS,
+				reciprocal     = ?ATTR_CHILD_ARC,
+				avps           = []
+			},
+			F = fun() ->
+				ok = mnesia:write(nodes, Node, write),
+				ok = mnesia:write(relationships, P2C, write),
+				ok = mnesia:write(relationships, C2P, write)
+			end,
+			case mnesia:transaction(F) of
+				{atomic, ok}      -> Nref;
+				{aborted, Reason} -> throw({error, Reason})
+			end
+	end.
+
+
+%%---------------------------------------------------------------------
+%% ensure_overlay_table(TableName) -> ok
+%%
+%% Creates a disc_copies Mnesia table for language_node records if it
+%% does not already exist.
+%%---------------------------------------------------------------------
+ensure_overlay_table(TableName) ->
+	case mnesia:create_table(TableName, [
+			{attributes, record_info(fields, language_node)},
+			{record_name, language_node},
+			{disc_copies, [node()]}]) of
+		{atomic, ok}                       -> ok;
+		{aborted, {already_exists, _}}     -> ok;
+		{aborted, Reason}                  -> throw({error, Reason})
+	end.
+
+
+%%---------------------------------------------------------------------
+%% build_lang_maps(LangCodeNref, BaseLangNref, LangHumanNref)
+%%     -> {LangCodeMap, DialectMap}
+%%
+%% Scans all instances of the lang_human class to rebuild in-memory maps.
+%%---------------------------------------------------------------------
+build_lang_maps(LangCodeNref, BaseLangNref, LangHumanNref) ->
+	F = fun() ->
+		Arcs = mnesia:index_read(relationships, LangHumanNref,
+			#relationship.source_nref),
+		InstNrefs = [A#relationship.target_nref || A <- Arcs,
+			A#relationship.kind          =:= instantiation,
+			A#relationship.characterization =:= ?INSTANCE_MEMBERSHIP_ARC],
+		Nodes = lists:flatmap(fun(N) -> mnesia:read(nodes, N) end, InstNrefs),
+		{CM, NC} = lists:foldl(fun
+			(#node{nref = Nref, attribute_value_pairs = AVPs}, {C, N}) ->
+				case avp_value(LangCodeNref, AVPs) of
+					not_found -> {C, N};
+					Code -> {C#{Code => Nref}, N#{Nref => Code}}
+				end
+		end, {#{}, #{}}, Nodes),
+		DM = lists:foldl(fun
+			(#node{nref = Nref, attribute_value_pairs = AVPs}, D) ->
+				case avp_value(BaseLangNref, AVPs) of
+					not_found -> D;
+					BaseNref ->
+						MyCode   = maps:get(Nref, NC, undefined),
+						BaseCode = maps:get(BaseNref, NC, undefined),
+						case {MyCode, BaseCode} of
+							{undefined, _} -> D;
+							{_, undefined} -> D;
+							{C, B}         -> D#{C => B}
+						end
+				end
+		end, #{}, Nodes),
+		{CM, DM}
+	end,
+	case mnesia:transaction(F) of
+		{atomic, {CM, DM}} -> {CM, DM};
+		{aborted, Reason}  -> throw({error, {build_lang_maps_failed, Reason}})
+	end.
+
+
+%%---------------------------------------------------------------------
+%% downward_children_by_arc(ParentNref, ChildArc, RelKind) -> [#node{}]
+%%
+%% Must run inside an active mnesia transaction.
+%%---------------------------------------------------------------------
+downward_children_by_arc(ParentNref, ChildArc, RelKind) ->
+	Arcs = mnesia:index_read(relationships, ParentNref,
+		#relationship.source_nref),
+	Nrefs = [A#relationship.target_nref || A <- Arcs,
+		A#relationship.kind           =:= RelKind,
+		A#relationship.characterization =:= ChildArc],
+	lists:flatmap(fun(N) -> mnesia:read(nodes, N) end, Nrefs).
+
+
+%%---------------------------------------------------------------------
+%% avp_value(AttrNref, AVPs) -> Value | not_found
+%%---------------------------------------------------------------------
+avp_value(AttrNref, AVPs) ->
+	case lists:search(fun(#{attribute := A}) -> A =:= AttrNref end, AVPs) of
+		{value, #{value := V}} -> V;
+		false                  -> not_found
+	end.
+
+
+%%---------------------------------------------------------------------
+%% class_has_name(Node, Name) -> boolean()
+%%---------------------------------------------------------------------
+class_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
+	lists:any(fun
+		(#{attribute := ?NAME_ATTR_FOR_CLASS, value := V}) -> V =:= Name;
+		(_) -> false
+	end, AVPs).
