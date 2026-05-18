@@ -245,13 +245,47 @@ language_en_table_created(_Config) ->
 
 
 %%=====================================================================
-%% Registration Tests (stubs — implemented in Task 4)
+%% Registration Tests
 %%=====================================================================
 
-register_language_creates_concept_node(_Config) -> {skip, not_yet_implemented}.
-register_language_idempotent(_Config)            -> {skip, not_yet_implemented}.
-register_dialect_creates_concept_node(_Config)   -> {skip, not_yet_implemented}.
-register_dialect_base_not_found(_Config)         -> {skip, not_yet_implemented}.
+register_language_creates_concept_node(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    {ok, DeNref} = graphdb_language:register_language(de, "German"),
+    %% Concept node exists in nodes table
+    [#node{kind = instance, attribute_value_pairs = AVPs}] =
+        mnesia:dirty_read(nodes, DeNref),
+    %% lang_code AVP = de
+    {ok, #{lang_code := LCAttr}} = graphdb_language:seeded_nrefs(),
+    {value, #{value := de}} =
+        lists:search(fun(#{attribute := A}) -> A =:= LCAttr end, AVPs),
+    %% Overlay table created
+    ?assert(lists:member(language_de, mnesia:system_info(tables))).
+
+register_language_idempotent(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    {ok, _Nref1} = graphdb_language:register_language(de, "German"),
+    %% Second call returns already_registered
+    {error, already_registered} = graphdb_language:register_language(de, "German").
+
+register_dialect_creates_concept_node(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    %% English is already bootstrapped at nref 10000; look it up rather than registering
+    {ok, EnNref}  = graphdb_language:lookup_language_nref(en),
+    {ok, GbNref}  = graphdb_language:register_dialect(en_gb, "British English", en),
+    %% Concept node exists
+    [#node{kind = instance, attribute_value_pairs = AVPs}] =
+        mnesia:dirty_read(nodes, GbNref),
+    %% base_language AVP references en concept nref
+    {ok, #{base_language := BLAttr}} = graphdb_language:seeded_nrefs(),
+    {value, #{value := EnNref}} =
+        lists:search(fun(#{attribute := A}) -> A =:= BLAttr end, AVPs),
+    %% Overlay table created
+    ?assert(lists:member(language_en_gb, mnesia:system_info(tables))).
+
+register_dialect_base_not_found(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    {error, base_not_found} =
+        graphdb_language:register_dialect(en_gb, "British English", nonexistent_lang).
 
 
 %%=====================================================================

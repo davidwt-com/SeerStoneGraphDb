@@ -271,6 +271,31 @@ handle_call(seeded_nrefs, _From,
                    base_language      => BL,
                    project_language   => PL,
                    env_language_code  => ?ENV_LANGUAGE_CODE}}, State};
+handle_call({register_language, Code, _Name}, _From,
+        #state{lang_code_map = CM} = State)
+        when is_map_key(Code, CM) ->
+    {reply, {error, already_registered}, State};
+handle_call({register_language, Code, Name}, _From, State) ->
+    case do_register_language(Code, Name, State) of
+        {ok, Nref, NewState} -> {reply, {ok, Nref}, NewState};
+        {error, _} = Err     -> {reply, Err, State}
+    end;
+handle_call({register_dialect, Code, _Name, _BaseCode}, _From,
+        #state{lang_code_map = CM} = State)
+        when is_map_key(Code, CM) ->
+    {reply, {error, already_registered}, State};
+handle_call({register_dialect, Code, Name, BaseCode}, _From, State) ->
+    case do_register_dialect(Code, Name, BaseCode, State) of
+        {ok, Nref, NewState} -> {reply, {ok, Nref}, NewState};
+        {error, _} = Err     -> {reply, Err, State}
+    end;
+handle_call({lookup_language_nref, Code}, _From,
+        #state{lang_code_map = CM} = State) ->
+    Reply = case maps:get(Code, CM, not_found) of
+        not_found -> {error, not_found};
+        Nref      -> {ok, Nref}
+    end,
+    {reply, Reply, State};
 handle_call(Request, From, State) ->
     ?UEM(handle_call, {Request, From, State}),
     {noreply, State}.
@@ -471,3 +496,131 @@ class_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 		(#{attribute := ?NAME_ATTR_FOR_CLASS, value := V}) -> V =:= Name;
 		(_) -> false
 	end, AVPs).
+
+
+%%---------------------------------------------------------------------
+%% do_register_language(Code, Name, State) ->
+%%     {ok, Nref, NewState} | {error, Reason}
+%%
+%% Creates a language instance node with kind=instance, parents=[],
+%% classes=[LangHumanNref] (cache pre-populated).
+%% Writes node + class membership arc pair atomically.
+%% Creates the language overlay table after the transaction commits.
+%% Updates lang_code_map after the overlay table is ready.
+%%---------------------------------------------------------------------
+do_register_language(Code, Name, State) ->
+	#state{lang_code_nref  = LCAttr,
+	       lang_human_nref = LHNref} = State,
+	Nref   = nref_server:get_nref(),
+	ArcId1 = nref_server:get_nref(),
+	ArcId2 = nref_server:get_nref(),
+	NameAVP = #{attribute => ?NAME_ATTR_FOR_INSTANCE, value => Name},
+	CodeAVP = #{attribute => LCAttr,                 value => Code},
+	Node = #node{
+		nref                  = Nref,
+		kind                  = instance,
+		parents               = [],
+		classes               = [LHNref],
+		attribute_value_pairs = [NameAVP, CodeAVP]
+	},
+	I2C = #relationship{
+		id               = ArcId1,
+		kind             = instantiation,
+		source_nref      = Nref,
+		characterization = ?CLASS_MEMBERSHIP_ARC,
+		target_nref      = LHNref,
+		reciprocal       = ?INSTANCE_MEMBERSHIP_ARC,
+		avps             = []
+	},
+	C2I = #relationship{
+		id               = ArcId2,
+		kind             = instantiation,
+		source_nref      = LHNref,
+		characterization = ?INSTANCE_MEMBERSHIP_ARC,
+		target_nref      = Nref,
+		reciprocal       = ?CLASS_MEMBERSHIP_ARC,
+		avps             = []
+	},
+	F = fun() ->
+		ok = mnesia:write(nodes, Node, write),
+		ok = mnesia:write(relationships, I2C, write),
+		ok = mnesia:write(relationships, C2I, write)
+	end,
+	case mnesia:transaction(F) of
+		{aborted, Reason} ->
+			{error, Reason};
+		{atomic, ok} ->
+			ok = ensure_overlay_table(overlay_table_name(Code, environment)),
+			NewState = State#state{
+				lang_code_map = maps:put(Code, Nref, State#state.lang_code_map)
+			},
+			{ok, Nref, NewState}
+	end.
+
+
+%%---------------------------------------------------------------------
+%% do_register_dialect(Code, Name, BaseCode, State) ->
+%%     {ok, Nref, NewState} | {error, Reason}
+%%
+%% Same as do_register_language/3 plus stamps a base_language AVP
+%% referencing the base concept nref.  Updates dialect_map on success.
+%%---------------------------------------------------------------------
+do_register_dialect(Code, Name, BaseCode, State) ->
+	#state{lang_code_map      = CM,
+	       base_language_nref = BLAttr} = State,
+	case maps:get(BaseCode, CM, not_found) of
+		not_found ->
+			{error, base_not_found};
+		BaseNref ->
+			#state{lang_code_nref  = LCAttr,
+			       lang_human_nref = LHNref} = State,
+			Nref   = nref_server:get_nref(),
+			ArcId1 = nref_server:get_nref(),
+			ArcId2 = nref_server:get_nref(),
+			NameAVP = #{attribute => ?NAME_ATTR_FOR_INSTANCE, value => Name},
+			CodeAVP = #{attribute => LCAttr,  value => Code},
+			BaseAVP = #{attribute => BLAttr,  value => BaseNref},
+			Node = #node{
+				nref                  = Nref,
+				kind                  = instance,
+				parents               = [],
+				classes               = [LHNref],
+				attribute_value_pairs = [NameAVP, CodeAVP, BaseAVP]
+			},
+			I2C = #relationship{
+				id               = ArcId1,
+				kind             = instantiation,
+				source_nref      = Nref,
+				characterization = ?CLASS_MEMBERSHIP_ARC,
+				target_nref      = LHNref,
+				reciprocal       = ?INSTANCE_MEMBERSHIP_ARC,
+				avps             = []
+			},
+			C2I = #relationship{
+				id               = ArcId2,
+				kind             = instantiation,
+				source_nref      = LHNref,
+				characterization = ?INSTANCE_MEMBERSHIP_ARC,
+				target_nref      = Nref,
+				reciprocal       = ?CLASS_MEMBERSHIP_ARC,
+				avps             = []
+			},
+			F = fun() ->
+				ok = mnesia:write(nodes, Node, write),
+				ok = mnesia:write(relationships, I2C, write),
+				ok = mnesia:write(relationships, C2I, write)
+			end,
+			case mnesia:transaction(F) of
+				{aborted, Reason} ->
+					{error, Reason};
+				{atomic, ok} ->
+					ok = ensure_overlay_table(
+						overlay_table_name(Code, environment)),
+					NewState = State#state{
+						lang_code_map = maps:put(Code, Nref, CM),
+						dialect_map   = maps:put(Code, BaseCode,
+						                    State#state.dialect_map)
+					},
+					{ok, Nref, NewState}
+			end
+	end.
