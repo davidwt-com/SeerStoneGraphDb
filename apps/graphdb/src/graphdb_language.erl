@@ -296,6 +296,28 @@ handle_call({lookup_language_nref, Code}, _From,
         Nref      -> {ok, Nref}
     end,
     {reply, Reply, State};
+handle_call({set_labels, _Nref, Code, _AVPs}, _From,
+        #state{lang_code_map = CM} = State)
+        when not is_map_key(Code, CM) ->
+    {reply, {error, unregistered_language}, State};
+handle_call({set_labels, Nref, Code, NewAVPs}, _From, State) ->
+    Table = overlay_table_name(Code, environment),
+    F = fun() ->
+        Existing = case mnesia:read(Table, Nref) of
+            [#language_node{avps = OldAVPs}] -> OldAVPs;
+            []                               -> []
+        end,
+        NewAttrs = [maps:get(attribute, A) || A <- NewAVPs],
+        Kept = [A || A <- Existing,
+                     not lists:member(maps:get(attribute, A), NewAttrs)],
+        Merged = Kept ++ NewAVPs,
+        mnesia:write(Table,
+            #language_node{nref = Nref, avps = Merged}, write)
+    end,
+    case mnesia:transaction(F) of
+        {atomic, ok}      -> {reply, ok, State};
+        {aborted, Reason} -> {reply, {error, Reason}, State}
+    end;
 handle_call(Request, From, State) ->
     ?UEM(handle_call, {Request, From, State}),
     {noreply, State}.

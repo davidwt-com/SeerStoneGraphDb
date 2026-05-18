@@ -289,12 +289,40 @@ register_dialect_base_not_found(_Config) ->
 
 
 %%=====================================================================
-%% Overlay Write Tests (stubs — implemented in Task 5)
+%% Overlay Write Tests
 %%=====================================================================
 
-set_labels_writes_avp(_Config)           -> {skip, not_yet_implemented}.
-set_labels_merges_avps(_Config)          -> {skip, not_yet_implemented}.
-set_labels_unregistered_code_error(_Config) -> {skip, not_yet_implemented}.
+set_labels_writes_avp(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    {ok, _} = graphdb_language:register_language(de, "German"),
+    {ok, #{lang_code := LCAttr}} = graphdb_language:seeded_nrefs(),
+    %% Write a German label for English nref 10000
+    DeAVP = #{attribute => LCAttr, value => "Englisch"},
+    ok = graphdb_language:set_labels(10000, de, [DeAVP]),
+    %% Read it back directly from the Mnesia table
+    [#language_node{avps = AVPs}] =
+        mnesia:dirty_read(language_de, 10000),
+    {value, #{value := "Englisch"}} =
+        lists:search(fun(#{attribute := A}) -> A =:= LCAttr end, AVPs).
+
+set_labels_merges_avps(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    {ok, _} = graphdb_language:register_language(de, "German"),
+    {ok, #{lang_code := LCAttr, base_language := BLAttr}} =
+        graphdb_language:seeded_nrefs(),
+    AVP1 = #{attribute => LCAttr, value => "Englisch"},
+    AVP2 = #{attribute => BLAttr, value => test_sentinel},
+    ok = graphdb_language:set_labels(10000, de, [AVP1]),
+    ok = graphdb_language:set_labels(10000, de, [AVP2]),
+    %% Both AVPs present after two writes
+    [#language_node{avps = AVPs}] =
+        mnesia:dirty_read(language_de, 10000),
+    2 = length(AVPs).
+
+set_labels_unregistered_code_error(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    {error, unregistered_language} =
+        graphdb_language:set_labels(10000, xx, []).
 
 
 %%=====================================================================
