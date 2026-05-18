@@ -442,9 +442,36 @@ project_language_not_found(_Config) ->
 
 
 %%=====================================================================
-%% Translation Hook Tests (stubs — implemented in Task 9)
+%% Translation Hook Tests
 %%=====================================================================
 
-translation_hook_called_after_registration(_Config) -> {skip, not_yet_implemented}.
-translation_hook_crash_does_not_fail_caller(_Config) -> {skip, not_yet_implemented}.
-translation_hook_unregister(_Config)                 -> {skip, not_yet_implemented}.
+translation_hook_called_after_registration(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    Self = self(),
+    Hook = fun(Nref, AVPs) -> Self ! {hook_fired, Nref, AVPs} end,
+    ok = graphdb_language:register_translation_hook(Hook),
+    graphdb_language:fire_translation_hooks(99, [#{attribute => 20, value => "Test"}]),
+    receive
+        {hook_fired, 99, _AVPs} -> ok
+    after 1000 ->
+        ct:fail(hook_not_fired)
+    end.
+
+translation_hook_crash_does_not_fail_caller(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    CrashHook = fun(_Nref, _AVPs) -> error(deliberate_crash) end,
+    ok = graphdb_language:register_translation_hook(CrashHook),
+    ok = graphdb_language:fire_translation_hooks(99, []).
+
+translation_hook_unregister(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    Self = self(),
+    Hook = fun(Nref, _AVPs) -> Self ! {hook_fired, Nref} end,
+    ok = graphdb_language:register_translation_hook(Hook),
+    ok = graphdb_language:unregister_translation_hook(Hook),
+    graphdb_language:fire_translation_hooks(99, []),
+    receive
+        {hook_fired, _} -> ct:fail(hook_should_be_unregistered)
+    after 200 ->
+        ok
+    end.

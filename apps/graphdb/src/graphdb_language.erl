@@ -338,6 +338,17 @@ handle_call({project_language, ProjectRootNref}, _From,
                lang_code_nref        = LCAttr} = State) ->
     Reply = do_project_language(ProjectRootNref, PLAttr, LCAttr),
     {reply, Reply, State};
+handle_call({register_translation_hook, Fun}, _From,
+        #state{hooks = Hooks} = State) ->
+    {reply, ok, State#state{hooks = Hooks ++ [Fun]}};
+handle_call({unregister_translation_hook, Fun}, _From,
+        #state{hooks = Hooks} = State) ->
+    NewHooks = [H || H <- Hooks, H =/= Fun],
+    {reply, ok, State#state{hooks = NewHooks}};
+handle_call({fire_translation_hooks, Nref, AVPs}, _From,
+        #state{hooks = Hooks} = State) ->
+    spawn_hooks(Hooks, Nref, AVPs),
+    {reply, ok, State};
 handle_call(Request, From, State) ->
     ?UEM(handle_call, {Request, From, State}),
     {noreply, State}.
@@ -733,3 +744,25 @@ do_project_language(ProjectRootNref, PLAttr, LCAttr) ->
 		{atomic, Code}      -> {ok, Code};
 		{aborted, Reason}   -> {error, Reason}
 	end.
+
+
+%%---------------------------------------------------------------------
+%% spawn_hooks(Hooks, Nref, AVPs) -> ok
+%%
+%% Each hook is called in a freshly spawned process.  Crashes are caught
+%% and logged; they never propagate to the caller.
+%% Hooks must not re-enter graphdb_language synchronously (deadlock).
+%%---------------------------------------------------------------------
+spawn_hooks(Hooks, Nref, AVPs) ->
+	lists:foreach(fun(Hook) ->
+		proc_lib:spawn(fun() ->
+			try
+				Hook(Nref, AVPs)
+			catch
+				Class:Reason ->
+					logger:warning(
+						"graphdb_language: translation hook raised ~p:~p",
+						[Class, Reason])
+			end
+		end)
+	end, Hooks).
