@@ -284,3 +284,165 @@ expand_avps_preserves_order_test() ->
 	Input = [{3, c}, {1, a}, {2, b}],
 	Result = graphdb_bootstrap:expand_avps(Input),
 	[3, 1, 2] = [maps:get(attribute, M) || M <- Result].
+
+
+%%=============================================================================
+%% validate/2 — atom label extension
+%%=============================================================================
+
+validate_atom_label_allowed_test() ->
+	%% Atom labels are valid pre-resolution nrefs; must not throw
+	Nodes = [{node, my_label, attribute, {18, "Foo"}, []}],
+	?assertEqual(ok, graphdb_bootstrap:validate(100, Nodes)).
+
+
+%%=============================================================================
+%% collect_labels/2 tests
+%%=============================================================================
+
+collect_labels_empty_test() ->
+	?assertEqual([], graphdb_bootstrap:collect_labels([], [])).
+
+collect_labels_node_nref_label_test() ->
+	Nodes = [{node, foo, attribute, {18, "Foo"}, []}],
+	?assertEqual([foo], graphdb_bootstrap:collect_labels(Nodes, [])).
+
+collect_labels_avp_key_label_test() ->
+	Nodes = [{node, 1, instance, {20, "Inst"}, [{my_attr, some_value}]}],
+	?assertEqual([my_attr], graphdb_bootstrap:collect_labels(Nodes, [])).
+
+collect_labels_rel_endpoint_labels_test() ->
+	Rels = [{relationship, foo, 29, [], 30, bar, [], instantiation}],
+	?assertEqual([bar, foo], graphdb_bootstrap:collect_labels([], Rels)).
+
+collect_labels_deduplicates_test() ->
+	%% lang_code appears as node nref AND as avp key — should appear once
+	Nodes = [{node, foo, attribute, {18, "Foo"}, [{foo, 42}]}],
+	?assertEqual([foo], graphdb_bootstrap:collect_labels(Nodes, [])).
+
+collect_labels_ignores_integer_nrefs_test() ->
+	Nodes = [{node, 1, category, {17, "Root"}, []}],
+	Rels = [{relationship, 1, 22, [], 21, 2, [], composition}],
+	?assertEqual([], graphdb_bootstrap:collect_labels(Nodes, Rels)).
+
+collect_labels_sorted_test() ->
+	%% Result is always sorted regardless of input order
+	Nodes = [{node, zzz, attribute, {18, "Z"}, []},
+	         {node, aaa, attribute, {18, "A"}, []}],
+	?assertEqual([aaa, zzz], graphdb_bootstrap:collect_labels(Nodes, [])).
+
+
+%%=============================================================================
+%% resolve_nref/2 tests
+%%=============================================================================
+
+resolve_nref_integer_passthrough_test() ->
+	?assertEqual(42, graphdb_bootstrap:resolve_nref(42, #{})).
+
+resolve_nref_label_found_test() ->
+	SymTable = #{foo => 99},
+	?assertEqual(99, graphdb_bootstrap:resolve_nref(foo, SymTable)).
+
+resolve_nref_label_not_found_test() ->
+	?assertThrow({error, {undefined_label, bar}},
+		graphdb_bootstrap:resolve_nref(bar, #{})).
+
+
+%%=============================================================================
+%% resolve_node/2 tests
+%%=============================================================================
+
+resolve_node_integer_nref_unchanged_test() ->
+	Node = {node, 5, category, {17, "Root"}, []},
+	?assertEqual({node, 5, category, {17, "Root"}, []},
+		graphdb_bootstrap:resolve_node(Node, #{})).
+
+resolve_node_label_nref_resolved_test() ->
+	Node = {node, foo, attribute, {18, "Foo"}, []},
+	SymTable = #{foo => 100},
+	?assertEqual({node, 100, attribute, {18, "Foo"}, []},
+		graphdb_bootstrap:resolve_node(Node, SymTable)).
+
+resolve_node_avp_key_label_resolved_test() ->
+	Node = {node, 1, instance, {20, "Inst"}, [{my_attr, hello}]},
+	SymTable = #{my_attr => 200},
+	?assertEqual({node, 1, instance, {20, "Inst"}, [{200, hello}]},
+		graphdb_bootstrap:resolve_node(Node, SymTable)).
+
+resolve_node_both_nref_and_avp_label_test() ->
+	Node = {node, x, attribute, {18, "X"}, [{x, val}]},
+	SymTable = #{x => 300},
+	?assertEqual({node, 300, attribute, {18, "X"}, [{300, val}]},
+		graphdb_bootstrap:resolve_node(Node, SymTable)).
+
+
+%%=============================================================================
+%% resolve_rel/2 tests
+%%=============================================================================
+
+resolve_rel_no_labels_test() ->
+	Rel = {relationship, 1, 22, [], 21, 2, [], composition},
+	?assertEqual({relationship, 1, 22, [], 21, 2, [], composition},
+		graphdb_bootstrap:resolve_rel(Rel, #{})).
+
+resolve_rel_endpoint_labels_resolved_test() ->
+	Rel = {relationship, foo, 29, [], 30, bar, [], instantiation},
+	SymTable = #{foo => 100, bar => 200},
+	?assertEqual({relationship, 100, 29, [], 30, 200, [], instantiation},
+		graphdb_bootstrap:resolve_rel(Rel, SymTable)).
+
+resolve_rel_avp_key_resolved_test() ->
+	Rel = {relationship, 1, 22, [{my_key, 1}], 21, 2, [{other_key, 2}], composition},
+	SymTable = #{my_key => 50, other_key => 60},
+	?assertEqual({relationship, 1, 22, [{50, 1}], 21, 2, [{60, 2}], composition},
+		graphdb_bootstrap:resolve_rel(Rel, SymTable)).
+
+
+%%=============================================================================
+%% apply_symbol_table/3 tests
+%%=============================================================================
+
+apply_symbol_table_resolves_all_test() ->
+	Nodes = [{node, foo, attribute, {18, "Foo"}, []}],
+	Rels = [{relationship, 1, 24, [], 23, foo, [], taxonomy}],
+	SymTable = #{foo => 300},
+	{ResNodes, ResRels} = graphdb_bootstrap:apply_symbol_table(Nodes, Rels, SymTable),
+	?assertEqual([{node, 300, attribute, {18, "Foo"}, []}], ResNodes),
+	?assertEqual([{relationship, 1, 24, [], 23, 300, [], taxonomy}], ResRels).
+
+apply_symbol_table_empty_test() ->
+	{[], []} = graphdb_bootstrap:apply_symbol_table([], [], #{}).
+
+
+%%=============================================================================
+%% validate_no_unresolved_labels/2 tests
+%%=============================================================================
+
+validate_no_unresolved_labels_all_integers_test() ->
+	Nodes = [{node, 1, category, {17, "Root"}, []}],
+	Rels = [{relationship, 1, 22, [], 21, 2, [], composition}],
+	?assertEqual(ok,
+		graphdb_bootstrap:validate_no_unresolved_labels(Nodes, Rels)).
+
+validate_no_unresolved_labels_empty_test() ->
+	?assertEqual(ok, graphdb_bootstrap:validate_no_unresolved_labels([], [])).
+
+validate_no_unresolved_labels_unresolved_node_nref_test() ->
+	Nodes = [{node, unresolved, category, {17, "Root"}, []}],
+	?assertThrow({error, {unresolved_label, unresolved}},
+		graphdb_bootstrap:validate_no_unresolved_labels(Nodes, [])).
+
+validate_no_unresolved_labels_unresolved_avp_key_test() ->
+	Nodes = [{node, 1, instance, {20, "I"}, [{dangling_attr, val}]}],
+	?assertThrow({error, {unresolved_label, dangling_attr}},
+		graphdb_bootstrap:validate_no_unresolved_labels(Nodes, [])).
+
+validate_no_unresolved_labels_unresolved_rel_source_test() ->
+	Rels = [{relationship, dangling, 22, [], 21, 2, [], composition}],
+	?assertThrow({error, {unresolved_label, dangling}},
+		graphdb_bootstrap:validate_no_unresolved_labels([], Rels)).
+
+validate_no_unresolved_labels_unresolved_rel_target_test() ->
+	Rels = [{relationship, 1, 22, [], 21, dangling, [], composition}],
+	?assertThrow({error, {unresolved_label, dangling}},
+		graphdb_bootstrap:validate_no_unresolved_labels([], Rels)).

@@ -31,7 +31,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 The kernel is functional under multi-inheritance, multi-class-
 membership, and per-class template semantics.  Multilingual label
-storage (M6) is the only open kernel-level question (§10);
+overlay (M6) is the active kernel-level work (§10);
 template-scoped queries land with the query DSL (TASKS.md F3).
 
 ---
@@ -154,14 +154,16 @@ Five top-level categories are pre-assigned at bootstrap:
 1  Root
 2  ├── Attributes  (parent of Names, Literals, Relationships subtrees)
 3  ├── Classes     (parent of all class taxonomies)
-4  ├── Languages   (multilingual support — see §10)
+4  ├── Languages   (language domain concepts — see §10)
 5  └── Projects    (organisational anchor for project databases — see §6)
 ```
 
-The full 35-node BFS scaffold (nrefs 1–35) is documented in
-`apps/graphdb/priv/bootstrap.terms`. Code that needs specific nrefs uses
-the constants defined as macros in the worker that owns them
-(`graphdb_attr`, `graphdb_class`, `graphdb_instance`).
+The bootstrap loads 38 nodes in total: the 35-node BFS scaffold (nrefs
+1–35), the permanent English instance seed (nref 10000), and 2 labeled
+runtime nodes (`lang_code`, `lang_human` — nrefs ≥ 100000). The full
+content is documented in `apps/graphdb/priv/bootstrap.terms`. Code that
+needs specific nrefs uses the constants defined as macros in the worker
+that owns them (`graphdb_attr`, `graphdb_class`, `graphdb_instance`).
 
 ---
 
@@ -261,15 +263,17 @@ exist on the same node, each with its own Mnesia schema.
 
 ### What lives where
 
-| Concept                                      | Database |
-| -------------------------------------------- | -------- |
-| Category, attribute, class, language nodes   | Ontology |
-| Bootstrap compositional arcs                 | Ontology |
-| Runtime attribute / class compositional arcs | Ontology |
-| Instance nodes                               | Project  |
-| Instance compositional arcs                  | Project  |
-| Instance → class membership arcs             | Project  |
-| Instance user-defined connections            | Project  |
+| Concept                                                    | Database               |
+| ---------------------------------------------------------- | ---------------------- |
+| Category, attribute, class nodes                           | Ontology               |
+| Language class nodes; domain connection arcs               | Ontology — see §10     |
+| Permanent ontology instance seeds (e.g., English nref 10000) | Ontology — see §10   |
+| Bootstrap compositional arcs                               | Ontology               |
+| Runtime attribute / class compositional arcs               | Ontology               |
+| Instance nodes (project entities)                          | Project                |
+| Instance compositional arcs                                | Project                |
+| Instance → class membership arcs                           | Project                |
+| Instance user-defined connections                          | Project                |
 
 ### Cross-database nref resolution
 
@@ -299,13 +303,22 @@ out-of-band credentials. Listing is independent of project existence.
 
 ## 7. nref Allocation
 
-### Ontology allocator
+### Ontology nref tiers
+
+Bootstrap introduces three nref tiers:
+
+| Tier                     | Range           | Contents                                              |
+| ------------------------ | --------------- | ----------------------------------------------------- |
+| Scaffold                 | 1 – 9 999       | Pre-assigned category/attribute bootstrap nodes       |
+| Permanent concept seeds  | 10 000 – 99 999 | Pre-assigned first-class ontology seeds (e.g., English nref 10000) |
+| Runtime                  | 100 000+        | All runtime allocations — symbol-table labels + relationship IDs |
 
 Single global allocator served by `nref_server` / `nref_allocator`,
 DETS-backed. Counter starts at 1 on a fresh node. `graphdb_bootstrap`
-calls `nref_server:set_floor(10000)` once during the first scaffold
-load, advancing the counter past the bootstrap range. All subsequent
-ontology runtime nrefs are ≥ 10000.
+calls `nref_server:set_floor(100000)` once during the first scaffold
+load, advancing the counter into the runtime tier. All subsequent
+runtime allocations (symbol-table labels and relationship IDs) are
+≥ 100000.
 
 ### Project allocators
 
@@ -348,6 +361,11 @@ Erlang terms via `file:consult/1`. Three term shapes (full schema in
 {relationship, N1, R1, AVPs1, R2, N2, AVPs2, Kind}.
 ```
 
+`Nref` (and endpoint fields `N1`, `N2`) may be either a pre-assigned
+`integer()` or an **atom label** — a symbolic placeholder resolved at
+load time. Atom labels allow mutable support nodes to be declared in
+the bootstrap file without pre-assigning nrefs.
+
 Hierarchy is encoded *only* in the relationship arcs — the node tuple
 carries no parent field. Per-arc inline `%%` comments make the file
 readable top-to-bottom.
@@ -359,16 +377,22 @@ dependencies and direct pattern matching.
 
 `graphdb_bootstrap:load/0` is idempotent: creates Mnesia schema and
 tables if absent, loads scaffold only if `nodes` is empty. Called from
-`graphdb_mgr:init/1`. Processing order: floor directive → category
-nodes → attribute nodes → class nodes → instance nodes →
-relationships → cache rebuild + verify (see §3). Relationship IDs are
-allocated outside the Mnesia transaction to avoid retry side-effects.
+`graphdb_mgr:init/1`. Processing is a **two-pass** sequence:
 
-After all nodes and arcs are written the loader calls
-`graphdb_mgr:rebuild_caches/0` followed by
-`graphdb_mgr:verify_caches/0`. A verify mismatch throws
+1. `classify_terms` — partition into `{NrefStart, Nodes, Rels}`
+2. `validate` — accept integer nrefs `< NrefStart` and atom labels; reject unknown kinds
+3. `validate_relationships` — reject unknown relationship kinds
+4. `set_floor(NrefStart)` — advance the nref counter into the runtime tier
+5. `build_symbol_table` — allocate a fresh runtime nref for each unique atom label
+6. `apply_symbol_table` — substitute all atom labels with their allocated nrefs
+7. `validate_no_unresolved_labels` — sanity-check; no atom must survive resolution
+8. `write_nodes` → `write_relationships` — write to Mnesia
+9. `rebuild_caches` + `verify_caches` — enforce the cache invariant (see §3)
+
+Relationship IDs are allocated outside Mnesia transactions to avoid
+retry side-effects. A verify mismatch in step 9 throws
 `{bootstrap_cache_invariant_failed, Mismatches}` as a fatal startup
-error: it means the bootstrap data is internally inconsistent.
+error.
 
 `category` writes are permitted only inside `graphdb_bootstrap`. After
 the loader finishes, `graphdb_mgr` rejects any runtime request to
@@ -400,15 +424,72 @@ Each level is consulted only if higher levels returned `not_found`.
 
 ---
 
-## 10. Open Architectural Questions
+## 10. Languages
 
-Pending architectural decisions. Each item has a detailed task in the
-severity-grouped task files.
+The `Languages` category (nref 4) is the organisational root for all
+communicative systems recognised by the knowledge network. A language, in
+this model, is any system with grammar, syntax, and tokens or icons —
+human natural languages, programming languages, diagram notations, and
+rendering engines all qualify. Four subcategories are established at
+bootstrap:
 
-### Multilingual storage
+| Nref | Name              | Domain                                               |
+| ---- | ----------------- | ---------------------------------------------------- |
+| 32   | Human Languages   | Natural languages spoken or signed by humans         |
+| 33   | Formal Languages  | Programming languages, query languages, notations    |
+| 34   | Diagram Languages | UML, engineering schematics, tabular notation        |
+| 35   | Renderers         | Rendering engines categorised by rendering mechanics |
 
-Names are currently raw Erlang strings on every node. Spec §15 requires
-language-neutral concept storage with per-language labels resolved at
-render time. Two design options (per-language map AVPs vs. label
-nodes) are open; choice affects every node in the database. See
-`TASKS.md` F2.
+The subcategory nodes (nrefs 32–35) are domain markers in the
+organisational scaffold — analogous to `Attributes` and `Classes` — not
+containers for language class nodes. The abstract class hierarchy for
+language concepts lives under `Classes` (nref 3); see below.
+
+Language nodes live in the **ontology** (see §6 for cross-database
+routing). The connection arcs from language class nodes to their domain
+subcategory (e.g., English → Human Languages, nref 32) are also written
+to the ontology.
+
+### Language concepts as a knowledge domain
+
+Languages are not merely label lookup tables. Each language is a
+**knowledge domain**: a self-contained body of concepts covering grammar,
+syntax, vocabulary, and notation. In the knowledge network model:
+
+- The **abstract concepts** — "Human Language", "Dialect", "Grammar Rule",
+  "Word", "Token", "Syntax Rule" — are class nodes in the ontology under a
+  `Language` superclass seeded at runtime under `Classes` (nref 3).
+- Each specific language ("English", "German") is an **instance node** — an
+  instance of the `Human Language` class (or a more specific subclass).
+  English is bootstrapped as a permanent ontology instance at nref 10000.
+- The long-term shape is a dedicated project database per language,
+  populated with instances of `Word`, `GrammarRule`, `SyntaxRule`, and
+  related classes specific to that language.
+
+The long-term consequence is that all concept names, attribute labels, and
+string values are ultimately compositions of instances in language projects.
+A label rendered for a node is not a stored string — it is a reference to a
+vocabulary instance in the appropriate language project, resolved through the
+inheritance chain. This is a direct expression of the self-referential nature
+of knowledge: the graph eventually describes itself in its own terms.
+
+Domain membership is recorded by a lateral connection arc from each language
+class node to the appropriate subcategory (e.g., English → nref 32). The
+subcategory nodes are not parents in the class hierarchy; they are category
+anchors in the organisational scaffold.
+
+### Current implementation — multilingual label overlay (M6)
+
+The full language-project mechanism is a future capability. The current M6
+implementation provides a pragmatic foundation: per-language Mnesia overlay
+tables (`language_en`, `language_de`, …) that store per-attribute label
+overrides keyed by nref. A language **chain** — an ordered list of language
+codes with a resolution context — walks these tables left to right, falling
+back to the terminal ontology node record.
+
+This overlay mechanism is designed as a replaceable abstraction: when
+language projects are built out, the backing will shift from flat per-nref
+rows to traversal into project instance graphs, and the overlay tables will
+become caches of that traversal. The `resolve_label/3` API does not change
+when the backing changes. See `TASKS.md` F2 for current implementation
+scope.

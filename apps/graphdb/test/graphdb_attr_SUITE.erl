@@ -266,16 +266,16 @@ seeds_idempotent_on_restart(_Config) ->
 
 %%-----------------------------------------------------------------------------
 %% Seeded nrefs are runtime-allocated and must be >= the nref_start
-%% floor (10000 from bootstrap.terms).
+%% floor (100000 from bootstrap.terms).
 %%-----------------------------------------------------------------------------
 seeded_nrefs_are_above_floor(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, #{literal_type := Lt, target_kind := Tk, relationship_avp := Ra,
 			attribute_type := At}} = graphdb_attr:seeded_nrefs(),
-	?assert(Lt >= 10000),
-	?assert(Tk >= 10000),
-	?assert(Ra >= 10000),
-	?assert(At >= 10000).
+	?assert(Lt >= 100000),
+	?assert(Tk >= 100000),
+	?assert(Ra >= 100000),
+	?assert(At >= 100000).
 
 %%-----------------------------------------------------------------------------
 %% After init, the bootstrap-seeded Template AVP node (nref 31) carries
@@ -487,8 +487,8 @@ get_attribute_rejects_non_attribute(_Config) ->
 list_attributes_includes_bootstrap_and_runtime(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, Before} = graphdb_attr:list_attributes(),
-	%% Bootstrap has 26 attribute nodes (nrefs 6-31); seeding adds 4
-	?assertEqual(26 + 4, length(Before)),
+	%% Bootstrap has 27 attribute nodes (nrefs 6-31 = 26, plus lang_code); seeding adds 4
+	?assertEqual(27 + 4, length(Before)),
 
 	{ok, _} = graphdb_attr:create_name_attribute("One"),
 	{ok, _} = graphdb_attr:create_name_attribute("Two"),
@@ -525,7 +525,7 @@ seeded_nrefs_includes_attribute_type(_Config) ->
 	?assert(maps:is_key(attribute_type, Map)),
 	#{attribute_type := At} = Map,
 	?assert(is_integer(At)),
-	?assert(At >= 10000),
+	?assert(At >= 100000),
 	%% The attribute_type seed itself is a literal-attribute under
 	%% Literals (7) and is retro-stamped with attribute_type=literal.
 	{ok, Node} = graphdb_attr:get_attribute(At),

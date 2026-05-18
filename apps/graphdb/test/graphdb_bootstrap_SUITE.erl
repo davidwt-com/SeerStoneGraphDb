@@ -69,6 +69,9 @@
 	load_relationship_reciprocal_pairs/1,
 	load_nref_floor_set/1,
 	load_idempotent/1,
+	load_english_instance/1,
+	load_labeled_nodes/1,
+	load_english_class_membership/1,
 	load_missing_config/1,
 	load_nonexistent_file/1,
 	load_invalid_terms/1,
@@ -102,7 +105,10 @@ groups() ->
 			load_relationship_ids_above_floor,
 			load_relationship_reciprocal_pairs,
 			load_nref_floor_set,
-			load_idempotent
+			load_idempotent,
+			load_english_instance,
+			load_labeled_nodes,
+			load_english_class_membership
 		]},
 		{errors, [], [
 			load_missing_config,
@@ -228,18 +234,21 @@ load_creates_tables(_Config) ->
 	?assert(lists:member(relationships, mnesia:system_info(tables))).
 
 %%-----------------------------------------------------------------------------
-%% Verify exactly 35 nodes are loaded (nrefs 1–31 plus Language subcategories 32–35).
+%% Verify exactly 38 nodes are loaded:
+%%   nrefs 1–35 (scaffold), nref 10000 (English permanent), plus
+%%   2 labeled runtime nodes (lang_code, lang_human — nrefs >= 100000).
 %%-----------------------------------------------------------------------------
 load_writes_all_nodes(_Config) ->
 	ok = graphdb_bootstrap:load(),
-	?assertEqual(35, mnesia:table_info(nodes, size)).
+	?assertEqual(38, mnesia:table_info(nodes, size)).
 
 %%-----------------------------------------------------------------------------
-%% Verify exactly 68 relationship rows (34 pairs x 2 directions).
+%% Verify exactly 74 relationship rows (37 pairs x 2 directions).
+%%   34 original + 3 new (Literals->lang_code, Classes->lang_human, English->lang_human)
 %%-----------------------------------------------------------------------------
 load_writes_all_relationships(_Config) ->
 	ok = graphdb_bootstrap:load(),
-	?assertEqual(68, mnesia:table_info(relationships, size)).
+	?assertEqual(74, mnesia:table_info(relationships, size)).
 
 %%-----------------------------------------------------------------------------
 %% Verify the root node (nref 1) has correct structure.
@@ -355,15 +364,15 @@ load_relationship_structure(_Config) ->
 	?assertEqual([], Arc#relationship.avps).
 
 %%-----------------------------------------------------------------------------
-%% Verify all relationship IDs are >= 10000 (nref_start floor).
+%% Verify all relationship IDs are >= 100000 (nref_start floor).
 %%-----------------------------------------------------------------------------
 load_relationship_ids_above_floor(_Config) ->
 	ok = graphdb_bootstrap:load(),
 	{atomic, AllRels} = mnesia:transaction(fun() ->
 		mnesia:foldl(fun(Rec, Acc) -> [Rec | Acc] end, [], relationships)
 	end),
-	?assertEqual(68, length(AllRels)),
-	BelowFloor = [R || R <- AllRels, R#relationship.id < 10000],
+	?assertEqual(74, length(AllRels)),
+	BelowFloor = [R || R <- AllRels, R#relationship.id < 100000],
 	?assertEqual([], BelowFloor).
 
 %%-----------------------------------------------------------------------------
@@ -389,14 +398,14 @@ load_relationship_reciprocal_pairs(_Config) ->
 	end, AllRels).
 
 %%-----------------------------------------------------------------------------
-%% Verify the nref floor was set: next nref from nref_server is >= 10000.
+%% Verify the nref floor was set: next nref from nref_server is >= 100000.
+%% 2 symbol-table labels + 37 relationship pairs (74 IDs) = 76 allocations
+%% starting at 100000, so next nref >= 100076.
 %%-----------------------------------------------------------------------------
 load_nref_floor_set(_Config) ->
 	ok = graphdb_bootstrap:load(),
-	%% 34 relationship pairs = 68 IDs consumed, starting at 10000
-	%% Next nref should be >= 10068
 	NextNref = nref_server:get_nref(),
-	?assert(NextNref >= 10068).
+	?assert(NextNref >= 100076).
 
 %%-----------------------------------------------------------------------------
 %% Verify load/0 is idempotent: calling it again does not duplicate data.
@@ -413,6 +422,55 @@ load_idempotent(_Config) ->
 
 	?assertEqual(NodesBefore, NodesAfter),
 	?assertEqual(RelsBefore, RelsAfter).
+
+
+%%-----------------------------------------------------------------------------
+%% Verify the English permanent instance node (nref 10000).
+%%-----------------------------------------------------------------------------
+load_english_instance(_Config) ->
+	ok = graphdb_bootstrap:load(),
+	{atomic, [Eng]} = mnesia:transaction(fun() ->
+		mnesia:read(nodes, 10000)
+	end),
+	?assertEqual(10000, Eng#node.nref),
+	?assertEqual(instance, Eng#node.kind),
+	%% Find lang_code attribute nref by name (do not hardcode the runtime nref)
+	LangCodeNref = find_attribute_nref_by_name("lang_code"),
+	?assert(LangCodeNref >= 100000),
+	?assert(lists:member(#{attribute => LangCodeNref, value => en},
+		Eng#node.attribute_value_pairs)).
+
+%%-----------------------------------------------------------------------------
+%% Verify that labeled nodes (lang_code, lang_human) exist with runtime nrefs.
+%%-----------------------------------------------------------------------------
+load_labeled_nodes(_Config) ->
+	ok = graphdb_bootstrap:load(),
+	LangCodeNref = find_attribute_nref_by_name("lang_code"),
+	?assert(LangCodeNref >= 100000),
+	LangHumanNref = find_class_nref_by_name("Human Language"),
+	?assert(LangHumanNref >= 100000).
+
+%%-----------------------------------------------------------------------------
+%% Verify English's class membership arc and the classes cache.
+%%-----------------------------------------------------------------------------
+load_english_class_membership(_Config) ->
+	ok = graphdb_bootstrap:load(),
+	LangHumanNref = find_class_nref_by_name("Human Language"),
+	%% English's classes cache must contain LangHuman nref
+	{atomic, [Eng]} = mnesia:transaction(fun() ->
+		mnesia:read(nodes, 10000)
+	end),
+	?assert(lists:member(LangHumanNref, Eng#node.classes)),
+	?assertEqual([], Eng#node.parents),
+	%% Instantiation arc English -> Human Language exists
+	{atomic, MemberArcs} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, 10000, #relationship.source_nref)
+	end),
+	ClassArcs = [A || A <- MemberArcs,
+		A#relationship.kind =:= instantiation,
+		A#relationship.characterization =:= 29,
+		A#relationship.target_nref =:= LangHumanNref],
+	?assertEqual(1, length(ClassArcs)).
 
 
 %%=============================================================================
@@ -529,4 +587,50 @@ do_delete_dir(Dir) ->
 			file:del_dir(Dir);
 		false ->
 			ok
+	end.
+
+%%-----------------------------------------------------------------------------
+%% find_attribute_nref_by_name(Name) -> integer()
+%%
+%% Scans the nodes table for an attribute node whose name AVP has the
+%% given string value.  Uses NameAttrNref=18 (attribute-node Name).
+%%-----------------------------------------------------------------------------
+find_attribute_nref_by_name(Name) ->
+	{atomic, Matches} = mnesia:transaction(fun() ->
+		mnesia:foldl(fun(N, Acc) ->
+			case N#node.kind =:= attribute andalso
+			     lists:member(#{attribute => 18, value => Name},
+			                  N#node.attribute_value_pairs) of
+				true  -> [N#node.nref | Acc];
+				false -> Acc
+			end
+		end, [], nodes)
+	end),
+	case Matches of
+		[Nref] -> Nref;
+		[]     -> ct:fail({attribute_not_found, Name});
+		_      -> ct:fail({duplicate_attribute, Name, Matches})
+	end.
+
+%%-----------------------------------------------------------------------------
+%% find_class_nref_by_name(Name) -> integer()
+%%
+%% Scans the nodes table for a class node whose name AVP has the given
+%% string value.  Uses NameAttrNref=19 (class-node Name).
+%%-----------------------------------------------------------------------------
+find_class_nref_by_name(Name) ->
+	{atomic, Matches} = mnesia:transaction(fun() ->
+		mnesia:foldl(fun(N, Acc) ->
+			case N#node.kind =:= class andalso
+			     lists:member(#{attribute => 19, value => Name},
+			                  N#node.attribute_value_pairs) of
+				true  -> [N#node.nref | Acc];
+				false -> Acc
+			end
+		end, [], nodes)
+	end),
+	case Matches of
+		[Nref] -> Nref;
+		[]     -> ct:fail({class_not_found, Name});
+		_      -> ct:fail({duplicate_class, Name, Matches})
 	end.
