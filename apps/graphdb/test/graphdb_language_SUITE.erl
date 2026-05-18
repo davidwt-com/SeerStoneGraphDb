@@ -414,11 +414,31 @@ make_chain_dialect_insertion(_Config) ->
 
 
 %%=====================================================================
-%% Project Language Tests (stubs — implemented in Task 8)
+%% Project Language Tests
 %%=====================================================================
 
-project_language_avp_roundtrip(_Config) -> {skip, not_yet_implemented}.
-project_language_not_found(_Config)     -> {skip, not_yet_implemented}.
+project_language_avp_roundtrip(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    {ok, _} = graphdb_language:register_language(de, "German"),
+    {ok, DeNref} = graphdb_language:lookup_language_nref(de),
+    {ok, #{project_language := PLAttr}} = graphdb_language:seeded_nrefs(),
+    %% Stamp the project_language AVP onto nref 10000 (reuse for simplicity)
+    F = fun() ->
+        [#node{attribute_value_pairs = AVPs} = N] =
+            mnesia:read(nodes, 10000),
+        Updated = N#node{
+            attribute_value_pairs =
+                [#{attribute => PLAttr, value => DeNref} | AVPs]
+        },
+        mnesia:write(nodes, Updated, write)
+    end,
+    {atomic, ok} = mnesia:transaction(F),
+    {ok, de} = graphdb_language:project_language(10000).
+
+project_language_not_found(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    %% Nref 10000 has no project_language AVP yet
+    not_found = graphdb_language:project_language(10000).
 
 
 %%=====================================================================

@@ -333,6 +333,11 @@ handle_call({make_chain, Codes}, _From,
     end,
     Chain = do_make_chain(ValidCodes, [], DM),
     {reply, Chain, State};
+handle_call({project_language, ProjectRootNref}, _From,
+        #state{project_language_nref = PLAttr,
+               lang_code_nref        = LCAttr} = State) ->
+    Reply = do_project_language(ProjectRootNref, PLAttr, LCAttr),
+    {reply, Reply, State};
 handle_call(Request, From, State) ->
     ?UEM(handle_call, {Request, From, State}),
     {noreply, State}.
@@ -694,4 +699,37 @@ do_register_dialect(Code, Name, BaseCode, State) ->
 					},
 					{ok, Nref, NewState}
 			end
+	end.
+
+
+%%---------------------------------------------------------------------
+%% do_project_language(ProjectRootNref, PLAttr, LCAttr) ->
+%%     {ok, Code :: atom()} | not_found
+%%
+%% Reads the project_language AVP from the project root node.
+%% Dereferences the stored language concept nref to read the lang_code.
+%%---------------------------------------------------------------------
+do_project_language(ProjectRootNref, PLAttr, LCAttr) ->
+	F = fun() ->
+		case mnesia:read(nodes, ProjectRootNref) of
+			[#node{attribute_value_pairs = AVPs}] ->
+				case avp_value(PLAttr, AVPs) of
+					not_found ->
+						not_found;
+					LangNref ->
+						case mnesia:read(nodes, LangNref) of
+							[#node{attribute_value_pairs = LangAVPs}] ->
+								avp_value(LCAttr, LangAVPs);
+							[] ->
+								not_found
+						end
+				end;
+			[] ->
+				not_found
+		end
+	end,
+	case mnesia:transaction(F) of
+		{atomic, not_found} -> not_found;
+		{atomic, Code}      -> {ok, Code};
+		{aborted, Reason}   -> {error, Reason}
 	end.
