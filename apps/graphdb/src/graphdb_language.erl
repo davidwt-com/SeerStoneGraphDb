@@ -318,6 +318,9 @@ handle_call({set_labels, Nref, Code, NewAVPs}, _From, State) ->
         {atomic, ok}      -> {reply, ok, State};
         {aborted, Reason} -> {reply, {error, Reason}, State}
     end;
+handle_call({resolve_label, Nref, AttrNref, Chain, Scope}, _From, State) ->
+    Reply = do_resolve_label(Nref, AttrNref, Chain, Scope),
+    {reply, Reply, State};
 handle_call(Request, From, State) ->
     ?UEM(handle_call, {Request, From, State}),
     {noreply, State}.
@@ -518,6 +521,40 @@ class_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 		(#{attribute := ?NAME_ATTR_FOR_CLASS, value := V}) -> V =:= Name;
 		(_) -> false
 	end, AVPs).
+
+
+%%---------------------------------------------------------------------
+%% do_resolve_label(Nref, AttrNref, Chain, Scope) -> {ok, Value} | not_found
+%%---------------------------------------------------------------------
+do_resolve_label(Nref, AttrNref, Chain, Scope) ->
+	do_resolve_chain(Nref, AttrNref, Chain, Scope).
+
+do_resolve_chain(Nref, AttrNref, [], Scope) ->
+	read_terminal(Nref, AttrNref, Scope);
+do_resolve_chain(Nref, AttrNref, [?ENV_LANGUAGE_CODE | _Rest], environment) ->
+	read_terminal(Nref, AttrNref, environment);
+do_resolve_chain(Nref, AttrNref, [Code | Rest], Scope) ->
+	Table = overlay_table_name(Code, Scope),
+	case mnesia:dirty_read(Table, Nref) of
+		[#language_node{avps = AVPs}] ->
+			case avp_value(AttrNref, AVPs) of
+				not_found -> do_resolve_chain(Nref, AttrNref, Rest, Scope);
+				Value     -> {ok, Value}
+			end;
+		[] ->
+			do_resolve_chain(Nref, AttrNref, Rest, Scope)
+	end.
+
+read_terminal(Nref, AttrNref, _Scope) ->
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{attribute_value_pairs = AVPs}] ->
+			case avp_value(AttrNref, AVPs) of
+				not_found -> not_found;
+				Value     -> {ok, Value}
+			end;
+		[] ->
+			not_found
+	end.
 
 
 %%---------------------------------------------------------------------

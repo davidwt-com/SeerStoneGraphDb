@@ -326,16 +326,71 @@ set_labels_unregistered_code_error(_Config) ->
 
 
 %%=====================================================================
-%% Label Resolution Tests (stubs — implemented in Task 6)
+%% Label Resolution Tests
 %%=====================================================================
 
-resolve_label_from_environment_fallback(_Config) -> {skip, not_yet_implemented}.
-resolve_label_from_overlay(_Config)              -> {skip, not_yet_implemented}.
-resolve_label_chain_priority(_Config)            -> {skip, not_yet_implemented}.
-resolve_label_en_sentinel(_Config)               -> {skip, not_yet_implemented}.
-resolve_label_dialect_hit(_Config)               -> {skip, not_yet_implemented}.
-resolve_label_dialect_fallback(_Config)          -> {skip, not_yet_implemented}.
-resolve_label_not_found(_Config)                 -> {skip, not_yet_implemented}.
+%% Helper used by several tests below
+avp(A, V) -> #{attribute => A, value => V}.
+
+resolve_label_from_environment_fallback(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    %% Chain [en] → en sentinel → read terminal node directly
+    %% English nref 10000, instance name AVP attr = 20, value = "English"
+    {ok, "English"} =
+        graphdb_language:resolve_label(10000, 20, [en], environment).
+
+resolve_label_from_overlay(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    {ok, _} = graphdb_language:register_language(de, "German"),
+    {ok, #{lang_code := LCAttr}} = graphdb_language:seeded_nrefs(),
+    ok = graphdb_language:set_labels(10000, de, [avp(LCAttr, "Englisch")]),
+    {ok, "Englisch"} =
+        graphdb_language:resolve_label(10000, LCAttr, [de], environment).
+
+resolve_label_chain_priority(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    {ok, _} = graphdb_language:register_language(de, "German"),
+    {ok, _} = graphdb_language:register_language(fr, "French"),
+    {ok, #{lang_code := LCAttr}} = graphdb_language:seeded_nrefs(),
+    ok = graphdb_language:set_labels(10000, de, [avp(LCAttr, "Englisch")]),
+    ok = graphdb_language:set_labels(10000, fr, [avp(LCAttr, "Anglais")]),
+    %% de appears first — de wins
+    {ok, "Englisch"} =
+        graphdb_language:resolve_label(10000, LCAttr, [de, fr], environment).
+
+resolve_label_en_sentinel(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    %% Write a wrong value into language_en — sentinel must bypass it
+    WrongRec = #language_node{nref = 10000, avps = [avp(20, "WRONG")]},
+    ok = mnesia:dirty_write(language_en, WrongRec),
+    %% en sentinel skips language_en and reads environment node directly
+    {ok, "English"} =
+        graphdb_language:resolve_label(10000, 20, [en], environment).
+
+resolve_label_dialect_hit(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    %% en is already bootstrapped at nref 10000; no need to register it
+    {ok, _} = graphdb_language:register_dialect(en_gb, "British English", en),
+    ok = graphdb_language:set_labels(10000, en_gb, [avp(20, "English (UK)")]),
+    {ok, "English (UK)"} =
+        graphdb_language:resolve_label(10000, 20, [en_gb, en], environment).
+
+resolve_label_dialect_fallback(_Config) ->
+    %% [en_gb, en, fr]: en_gb miss → en sentinel → environment (fr skipped)
+    {ok, _} = graphdb_language:start_link(),
+    %% en is already bootstrapped at nref 10000; no need to register it
+    {ok, _} = graphdb_language:register_dialect(en_gb, "British English", en),
+    {ok, _} = graphdb_language:register_language(fr, "French"),
+    ok = graphdb_language:set_labels(10000, fr, [avp(20, "Anglais")]),
+    %% en_gb has no overlay for nref 10000 → fall through; en → sentinel → env node
+    {ok, "English"} =
+        graphdb_language:resolve_label(10000, 20, [en_gb, en, fr], environment).
+
+resolve_label_not_found(_Config) ->
+    {ok, _} = graphdb_language:start_link(),
+    %% AttrNref 99999 does not exist on nref 10000
+    not_found =
+        graphdb_language:resolve_label(10000, 99999, [en], environment).
 
 
 %%=====================================================================
