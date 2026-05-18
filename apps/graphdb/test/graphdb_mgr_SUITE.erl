@@ -260,9 +260,9 @@ init_runs_bootstrap(_Config) ->
 	%% Tables should exist
 	?assert(lists:member(nodes, mnesia:system_info(tables))),
 	?assert(lists:member(relationships, mnesia:system_info(tables))),
-	%% 38 nodes and 74 relationship rows should be loaded
+	%% 38 nodes and 76 relationship rows should be loaded
 	?assertEqual(38, mnesia:table_info(nodes, size)),
-	?assertEqual(74, mnesia:table_info(relationships, size)).
+	?assertEqual(76, mnesia:table_info(relationships, size)).
 
 %%-----------------------------------------------------------------------------
 %% Verify that stopping and restarting graphdb_mgr is idempotent --
