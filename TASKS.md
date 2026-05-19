@@ -742,7 +742,7 @@ multi-row writes and reads that must observe atomic state.
 
 ---
 
-### L4. Wire `graphdb_mgr` write-side to workers
+### L4. Wire `graphdb_mgr` write-side to workers — RESOLVED
 
 **Evidence:** `graphdb_mgr.erl:278-296`. `create_attribute`,
 `create_class`, `create_instance`, `add_relationship` all return
@@ -785,6 +785,35 @@ this as a known gap: wire the delegation first, then plan the template
 attribute list and instance-only enforcement as a follow-on task (likely
 adjacent to F4/E1, which adds rule-driven instantiation). Document the
 gap in the Decision Log when L4 lands.
+
+#### Decision Log
+
+**L4 — `create_attribute` routing by ParentNref** (2026-05-18)
+
+`graphdb_mgr:create_attribute/3` routes to the appropriate
+`graphdb_attr` worker function based on `ParentNref`:
+- 6 / 9–12 (Names subtree) → `create_name_attribute/1`
+- 7 (Literals) → `create_literal_attribute/2`; `type` extracted from `AVPs` map (default `string`)
+- 8 / 13–16 (Relationships subtree) → `create_relationship_attribute/3` if both
+  `reciprocal_name` and `target_kind` present; `create_relationship_type/1` if neither;
+  `{error, {missing_avps, ...}}` if exactly one is present
+- Unknown parent → `{error, {unknown_attribute_parent, Nref}}`
+
+`create_relationship_attribute/3` returns `{ok, {FwdNref, RevNref}}`; the mgr
+normalises to `{ok, FwdNref}` (forward arc nref only).
+
+**L4 — Instance-only attribute enforcement deferred** (2026-05-18)
+
+The template attribute list (which would declare per-class, per-template whether an
+attribute is class-bindable or instance-only) does not yet exist. `create_class`
+and `update_node_avps` accept any AVP write without enforcement. This is a known
+gap; enforcement is a follow-on task adjacent to F4/E1 (rule-driven instantiation).
+
+**L4 — `delete_node` and `update_node_avps` remain `not_implemented`** (2026-05-18)
+
+No worker currently implements node deletion or general AVP-update. Both operations
+pass through the category guard (rejecting category nrefs 1–5) and then return
+`{error, not_implemented}`. These will be wired when a worker adds the functionality.
 
 ---
 
