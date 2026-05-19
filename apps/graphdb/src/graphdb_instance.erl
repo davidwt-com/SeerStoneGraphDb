@@ -422,7 +422,9 @@ find_avp_value([], _AttrNref) ->
 find_avp_value([#{attribute := A, value := V} | _], A) when V =/= undefined ->
 	{ok, V};
 find_avp_value([#{attribute := A} | _], A) ->
-	%% value is undefined — QC declaration only, not a bound value
+	%% value is undefined — QC declaration only, not a bound value.
+	%% Stopping here is correct: AVP lists have no duplicate attribute keys
+	%% (enforced by do_add_qc's idempotency guard), so no further match exists.
 	not_found;
 find_avp_value([_ | Rest], AttrNref) ->
 	find_avp_value(Rest, AttrNref).

@@ -754,10 +754,12 @@ inherited_qcs_multi_parent(_Config) ->
 	?assert(lists:member({20, undefined}, QcPairs)),
 	?assert(lists:member({17, undefined}, QcPairs)),
 	?assert(lists:member({18, undefined}, QcPairs)),
-	%% Order: C's local QC before ancestors.
+	%% Order: C's local QC before ancestors; BFS visits A before B (A is the
+	%% creation parent, B added via add_superclass), so 17 appears before 18.
 	Attrs = [A2 || {A2, _} <- QcPairs],
 	?assert(lists_index_of(20, Attrs) < lists_index_of(17, Attrs)),
-	?assert(lists_index_of(20, Attrs) < lists_index_of(18, Attrs)).
+	?assert(lists_index_of(20, Attrs) < lists_index_of(18, Attrs)),
+	?assert(lists_index_of(17, Attrs) < lists_index_of(18, Attrs)).
 
 %%-----------------------------------------------------------------------------
 %% class_in_ancestry finds a parent added via add_superclass.
@@ -787,9 +789,10 @@ inherited_qcs_local_only(_Config) ->
 	ok = graphdb_class:add_qualifying_characteristic(ClassNref, 18),
 	{ok, QcPairs} = graphdb_class:inherited_qcs(ClassNref),
 	%% Class has name AVP (attr=19, value="Color") plus two QC AVPs.
-	%% inherited_qcs returns ALL AVPs; QC attrs 17 and 18 should be present.
+	%% inherited_qcs filters out the name AVP; only QC attrs 17 and 18 appear.
 	?assert(lists:member({17, undefined}, QcPairs)),
-	?assert(lists:member({18, undefined}, QcPairs)).
+	?assert(lists:member({18, undefined}, QcPairs)),
+	?assertNot(lists:keymember(19, 1, QcPairs)).
 
 %%-----------------------------------------------------------------------------
 %% inherited_qcs includes QCs from ancestor classes.

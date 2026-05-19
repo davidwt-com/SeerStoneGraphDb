@@ -156,7 +156,7 @@
 -ifdef(TEST).
 -export([
 		is_valid_parent_kind/1,
-		collect_all_avps/1
+		collect_qc_avps/1
 		]).
 -endif.
 
@@ -403,8 +403,6 @@ code_change(_OldVsn, State, _Extra) ->
 is_valid_parent_kind(category) -> true;
 is_valid_parent_kind(class)    -> true;
 is_valid_parent_kind(_)        -> false.
-
-
 
 
 %%-----------------------------------------------------------------------------
@@ -734,8 +732,9 @@ do_add_qc(ClassNref, AttrNref) ->
 			[#node{kind = class, attribute_value_pairs = AVPs} = Node] ->
 				case mnesia:read(nodes, AttrNref) of
 					[#node{kind = attribute}] ->
-						Already = lists:keymember(AttrNref, 1,
-							[{A, V} || #{attribute := A, value := V} <- AVPs]),
+						Already = lists:any(fun(#{attribute := A}) -> A =:= AttrNref;
+									   (_)              -> false
+									end, AVPs),
 						case Already of
 							true ->
 								already_exists;
@@ -873,7 +872,7 @@ do_inherited_qcs(ClassNref) ->
 			case do_ancestors(ClassNref) of
 				{ok, Ancestors} ->
 					AllNodes = [Node | Ancestors],
-					{ok, collect_all_avps(AllNodes)};
+					{ok, collect_qc_avps(AllNodes)};
 				{error, _} = Err ->
 					Err
 			end;
@@ -883,17 +882,22 @@ do_inherited_qcs(ClassNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% collect_all_avps(Nodes) -> [{integer(), term() | undefined}]
+%% collect_qc_avps(Nodes) -> [{integer(), term() | undefined}]
 %%
-%% Collects all {AttrNref, Value} pairs from a list of nodes,
-%% deduplicating by AttrNref in list order (first occurrence wins).
+%% Collects qualifying-characteristic {AttrNref, Value} pairs from a
+%% list of nodes.  The class name AVP (attribute = ?NAME_ATTR_FOR_CLASS)
+%% is excluded — it is not a QC.  Deduplicates by AttrNref in list order
+%% (first occurrence wins).
 %%-----------------------------------------------------------------------------
-collect_all_avps(Nodes) ->
+collect_qc_avps(Nodes) ->
 	lists:foldl(fun(#node{attribute_value_pairs = AVPs}, Acc) ->
-		lists:foldl(fun(#{attribute := A, value := V}, A2) ->
-			case lists:keymember(A, 1, A2) of
-				true  -> A2;
-				false -> A2 ++ [{A, V}]
-			end
+		lists:foldl(fun
+			(#{attribute := ?NAME_ATTR_FOR_CLASS}, A) ->
+				A;  % skip class name AVP
+			(#{attribute := Attr, value := V}, A) ->
+				case lists:keymember(Attr, 1, A) of
+					true  -> A;
+					false -> A ++ [{Attr, V}]
+				end
 		end, Acc, AVPs)
 	end, [], Nodes).
