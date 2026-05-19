@@ -666,7 +666,7 @@ No blocking dependencies on any feature phase. Interleave at any point.
 
 ---
 
-### L1. Rename `inherited_attributes/1` → `inherited_qcs/1`
+### L1. Rename `inherited_attributes/1` → `inherited_qcs/1` — RESOLVED (subsumed by L2)
 
 **Evidence:** `graphdb_class.erl:230-238, 638-651`.
 
@@ -681,7 +681,7 @@ as its own API.
 
 ---
 
-### L2. Unify QC declarations and class-bound values into a single AVP shape
+### L2. Unify QC declarations and class-bound values into a single AVP shape — RESOLVED
 
 **Evidence:** `graphdb_class.erl:524-562, 863-908, 1001-1040`.
 `do_add_qc` currently writes a sentinel-keyed AVP
@@ -730,7 +730,7 @@ class nodes. Subsumes L1 (`inherited_attributes/1` → `inherited_qcs/1`).
 
 ---
 
-### L3. Single-row reads run inside `mnesia:transaction/1`
+### L3. Single-row reads run inside `mnesia:transaction/1` — RESOLVED
 
 **Evidence:** `graphdb_class.erl:506, 569-575, 601-611`,
 `graphdb_instance.erl:393, 406, 453-459, 486, 499`,
