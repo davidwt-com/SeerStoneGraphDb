@@ -646,11 +646,10 @@ template_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 %%     {ok, #node{}} | {error, not_found | not_a_template | term()}
 %%-----------------------------------------------------------------------------
 do_get_template(Nref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
-		{atomic, [#node{kind = template} = Node]} -> {ok, Node};
-		{atomic, [_Other]}                        -> {error, not_a_template};
-		{atomic, []}                              -> {error, not_found};
-		{aborted, Reason}                         -> {error, Reason}
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = template} = Node] -> {ok, Node};
+		[_Other]                        -> {error, not_a_template};
+		[]                              -> {error, not_found}
 	end.
 
 
@@ -706,14 +705,13 @@ do_class_in_ancestry(CandidateNref, ClassNref) ->
 do_validate_parent(?CLASSES_CATEGORY) ->
 	ok;
 do_validate_parent(Nref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
-		{atomic, [#node{kind = Kind}]} ->
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = Kind}] ->
 			case is_valid_parent_kind(Kind) of
 				true  -> ok;
 				false -> {error, {invalid_parent_kind, Kind}}
 			end;
-		{atomic, []}                     -> {error, parent_not_found};
-		{aborted, Reason}                -> {error, Reason}
+		[] -> {error, parent_not_found}
 	end.
 
 
@@ -771,11 +769,10 @@ do_add_qc(ClassNref, AttrNref) ->
 %%     {ok, #node{}} | {error, not_found | not_a_class | term()}
 %%-----------------------------------------------------------------------------
 do_get_class(Nref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
-		{atomic, [#node{kind = class} = Node]} -> {ok, Node};
-		{atomic, [_Other]}                     -> {error, not_a_class};
-		{atomic, []}                           -> {error, not_found};
-		{aborted, Reason}                      -> {error, Reason}
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = class} = Node] -> {ok, Node};
+		[_Other]                     -> {error, not_a_class};
+		[]                           -> {error, not_found}
 	end.
 
 
@@ -808,16 +805,14 @@ do_subclasses(ClassNref) ->
 %% (nearest-first) order.
 %%-----------------------------------------------------------------------------
 do_ancestors(ClassNref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, ClassNref) end) of
-		{atomic, [#node{kind = class, parents = Parents}]} ->
+	case mnesia:dirty_read(nodes, ClassNref) of
+		[#node{kind = class, parents = Parents}] ->
 			Initial = [P || P <- Parents, P =/= ?CLASSES_CATEGORY],
 			do_walk_ancestors(Initial, sets:from_list(Initial), []);
-		{atomic, [_]} ->
+		[_] ->
 			{error, not_a_class};
-		{atomic, []} ->
-			{error, not_found};
-		{aborted, Reason} ->
-			{error, Reason}
+		[] ->
+			{error, not_found}
 	end.
 
 %% BFS over the parent DAG.  Queue is the FIFO of nrefs to visit;
@@ -827,8 +822,8 @@ do_ancestors(ClassNref) ->
 do_walk_ancestors([], _Visited, Acc) ->
 	{ok, lists:reverse(Acc)};
 do_walk_ancestors([Nref | Rest], Visited, Acc) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
-		{atomic, [#node{kind = class, parents = Parents} = Node]} ->
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = class, parents = Parents} = Node] ->
 			New = [P || P <- Parents,
 				P =/= ?CLASSES_CATEGORY,
 				not sets:is_element(P, Visited)],

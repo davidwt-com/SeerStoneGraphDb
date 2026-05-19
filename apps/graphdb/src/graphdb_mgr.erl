@@ -400,10 +400,9 @@ validate_direction(Dir)      -> {error, {invalid_direction, Dir}}.
 %% Reads a node from the Mnesia nodes table.
 %%-----------------------------------------------------------------------------
 do_get_node(Nref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
-		{atomic, [Node]}   -> {ok, Node};
-		{atomic, []}       -> {error, not_found};
-		{aborted, Reason}  -> {error, Reason}
+	case mnesia:dirty_read(nodes, Nref) of
+		[Node] -> {ok, Node};
+		[]     -> {error, not_found}
 	end.
 
 
