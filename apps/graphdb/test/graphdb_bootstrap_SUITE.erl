@@ -243,12 +243,13 @@ load_writes_all_nodes(_Config) ->
 	?assertEqual(38, mnesia:table_info(nodes, size)).
 
 %%-----------------------------------------------------------------------------
-%% Verify exactly 74 relationship rows (37 pairs x 2 directions).
-%%   34 original + 3 new (Literals->lang_code, Classes->lang_human, English->lang_human)
+%% Verify exactly 76 relationship rows (38 pairs x 2 directions).
+%%   34 original + 4 new (Literals->lang_code, Classes->lang_human,
+%%                        English->lang_human, HumanLanguages->English)
 %%-----------------------------------------------------------------------------
 load_writes_all_relationships(_Config) ->
 	ok = graphdb_bootstrap:load(),
-	?assertEqual(74, mnesia:table_info(relationships, size)).
+	?assertEqual(76, mnesia:table_info(relationships, size)).
 
 %%-----------------------------------------------------------------------------
 %% Verify the root node (nref 1) has correct structure.
@@ -371,7 +372,7 @@ load_relationship_ids_above_floor(_Config) ->
 	{atomic, AllRels} = mnesia:transaction(fun() ->
 		mnesia:foldl(fun(Rec, Acc) -> [Rec | Acc] end, [], relationships)
 	end),
-	?assertEqual(74, length(AllRels)),
+	?assertEqual(76, length(AllRels)),
 	BelowFloor = [R || R <- AllRels, R#relationship.id < 100000],
 	?assertEqual([], BelowFloor).
 
@@ -399,13 +400,13 @@ load_relationship_reciprocal_pairs(_Config) ->
 
 %%-----------------------------------------------------------------------------
 %% Verify the nref floor was set: next nref from nref_server is >= 100000.
-%% 2 symbol-table labels + 37 relationship pairs (74 IDs) = 76 allocations
-%% starting at 100000, so next nref >= 100076.
+%% 2 symbol-table labels + 38 relationship pairs (76 IDs) = 78 allocations
+%% starting at 100000, so next nref >= 100078.
 %%-----------------------------------------------------------------------------
 load_nref_floor_set(_Config) ->
 	ok = graphdb_bootstrap:load(),
 	NextNref = nref_server:get_nref(),
-	?assert(NextNref >= 100076).
+	?assert(NextNref >= 100078).
 
 %%-----------------------------------------------------------------------------
 %% Verify load/0 is idempotent: calling it again does not duplicate data.
@@ -461,7 +462,8 @@ load_english_class_membership(_Config) ->
 		mnesia:read(nodes, 10000)
 	end),
 	?assert(lists:member(LangHumanNref, Eng#node.classes)),
-	?assertEqual([], Eng#node.parents),
+	%% English's compositional parent is Human Languages (nref 32)
+	?assertEqual([32], Eng#node.parents),
 	%% Instantiation arc English -> Human Language exists
 	{atomic, MemberArcs} = mnesia:transaction(fun() ->
 		mnesia:index_read(relationships, 10000, #relationship.source_nref)

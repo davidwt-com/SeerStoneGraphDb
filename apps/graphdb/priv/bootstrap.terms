@@ -196,12 +196,10 @@
 %% label resolution.  First instance node in the ontology.
 %% lang_code AVP records the ISO 639-1 language code (value = en).
 %%
-%% PROPOSAL: English's compositional parent is currently unset (parents=[]).
-%% Options:
-%%   (a) no parent — English is a free-standing concept in the ontology
-%%   (b) composition arc to Human Languages category (nref 32) — requires
-%%       Template infrastructure to express domain membership correctly
-%% Option (a) is used here; option (b) is deferred until R3 is resolved.
+%% English has no compositional parent (parents=[]).  Domain membership
+%% (English → Human Languages, nref 32) is recorded as a lateral connection
+%% arc — ASSOCIATE type, template-scoped.  Template infrastructure is not yet
+%% implemented; that arc is deferred to the connection-arc work.
 {node, 10000, instance, {20, "English"}, [{lang_code, en}]}.
 
 %% =========================================================================
@@ -232,6 +230,8 @@
 {relationship,  3, 26, [], 25, lang_human, [], taxonomy}.
 
 %% English (10000) -> Human Language  (instance membership)
-%% PROPOSAL: This instantiation arc records English as an instance of
-%% Human Language.  The reverse arc is written automatically by the loader.
 {relationship, 10000, 29, [], 30, lang_human, [], instantiation}.
+
+%% Human Languages (32) -> English (10000)  (instance composition)
+%% Places English in the Human Languages domain of the organisational scaffold.
+{relationship, 32, 28, [], 27, 10000, [], composition}.

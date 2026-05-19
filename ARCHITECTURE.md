@@ -263,17 +263,19 @@ exist on the same node, each with its own Mnesia schema.
 
 ### What lives where
 
-| Concept                                                    | Database               |
-| ---------------------------------------------------------- | ---------------------- |
-| Category, attribute, class nodes                           | Ontology               |
-| Language class nodes; domain connection arcs               | Ontology — see §10     |
-| Permanent ontology instance seeds (e.g., English nref 10000) | Ontology — see §10   |
-| Bootstrap compositional arcs                               | Ontology               |
-| Runtime attribute / class compositional arcs               | Ontology               |
-| Instance nodes (project entities)                          | Project                |
-| Instance compositional arcs                                | Project                |
-| Instance → class membership arcs                           | Project                |
-| Instance user-defined connections                          | Project                |
+| Concept                                                      | Location                        |
+| ------------------------------------------------------------ | ------------------------------- |
+| Category, attribute, class nodes                             | Ontology                        |
+| Language class nodes; domain connection arcs                 | Ontology — see §10              |
+| Permanent ontology instance seeds (e.g., English nref 10000) | Ontology — see §10              |
+| Bootstrap and runtime compositional arcs                     | Ontology                        |
+| Project anchor nodes (children of Projects nref 5)           | Ontology                        |
+| Language overlay tables for environment nrefs                | Ontology node (`language_<code>`) |
+| Instance nodes (project entities)                            | Project                         |
+| Instance compositional arcs                                  | Project                         |
+| Instance → class membership arcs                             | Project                         |
+| Instance user-defined connections                            | Project                         |
+| Language overlay tables for project nrefs                    | Project node (`language_<code>_<anchor_nref>`) |
 
 ### Cross-database nref resolution
 
@@ -293,11 +295,22 @@ requires it for runtime additions.
 
 ### The `Projects` node (nref 5)
 
-The `Projects` category node is the organisational anchor for known
-projects. Public projects appear as child nodes whose presence is a
-discovery hint — at runtime each is overlaid by the actual project
-database root. Private projects are not listed; access requires
-out-of-band credentials. Listing is independent of project existence.
+Every project **must** have an anchor node in the environment as a
+child of the `Projects` category. That node's environment nref is the
+project's permanent cross-system identity token — used to scope
+project-side language overlay tables and as the stable reference point
+for cross-database arcs.
+
+Projects may be **remote**: all project-side Mnesia tables (`nodes`,
+`relationships`, per-language overlays) reside on the project's own
+node, which may differ from the environment node. Mnesia handles
+transparent remote access within a cluster; fully independent remote
+projects are a future distribution concern.
+
+Visibility of the anchor node is governed by ACL AVPs on that node
+(not yet implemented). Globally visible projects have no access
+restriction; owner-specific projects have a permissioned ACL. The node
+always exists regardless of its visibility.
 
 ---
 
@@ -459,9 +472,15 @@ syntax, vocabulary, and notation. In the knowledge network model:
 - The **abstract concepts** — "Human Language", "Dialect", "Grammar Rule",
   "Word", "Token", "Syntax Rule" — are class nodes in the ontology under a
   `Language` superclass seeded at runtime under `Classes` (nref 3).
-- Each specific language ("English", "German") is an **instance node** — an
-  instance of the `Human Language` class (or a more specific subclass).
-  English is bootstrapped as a permanent ontology instance at nref 10000.
+- Each specific language ("English", "German") and each dialect
+  ("en_gb", "pt_br") is an **instance node** — an instance of `Human
+  Language` or a more specific class. English is bootstrapped as a
+  permanent ontology instance at nref 10000; all other language nodes
+  are seeded at runtime by `graphdb_language:init/1` or
+  `register_language/2`. Using `kind=instance` eliminates the
+  dual-mechanism risk: instances do not participate in taxonomic IS-A
+  arcs, so the `base_language` AVP is the sole authority for the
+  base/dialect relationship.
 - The long-term shape is a dedicated project database per language,
   populated with instances of `Word`, `GrammarRule`, `SyntaxRule`, and
   related classes specific to that language.
