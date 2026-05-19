@@ -13,12 +13,12 @@
 %%				category (nref 3); subclasses are children of other
 %%				class nodes.
 %%
-%%				On first startup, graphdb_class seeds a
-%%				"qualifying_characteristic" literal attribute under the
-%%				Literals subtree (nref 7).  This attribute is used to
-%%				mark which attributes are qualifying characteristics of
-%%				a class.  Subsequent startups detect the existing seed
-%%				by name and cache its nref in the gen_server state.
+%%				Qualifying characteristics (QCs) are stored directly
+%%				as AVPs on the class node using the attribute nref as
+%%				key: #{attribute => AttrNref, value => undefined} for a
+%%				declared-but-unbound QC, or #{attribute => AttrNref,
+%%				value => V} for a class-level bound value.  No sentinel
+%%				attribute is needed.
 %%---------------------------------------------------------------------
 %% Revision History
 %%---------------------------------------------------------------------
@@ -28,8 +28,8 @@
 %% Rev A Date: April 2026 Author: (completion of Dallas Noyes's design)
 %% Initial implementation: taxonomic hierarchy over Mnesia.  Provides
 %% create_class/2, add_qualifying_characteristic/2, get_class/1,
-%% subclasses/1, ancestors/1, inherited_attributes/1.
-%% Seeds qualifying_characteristic at init.
+%% subclasses/1, ancestors/1, inherited_qcs/1.
+%% L2: unified QC AVP shape — value=>undefined for declarations.
 %%---------------------------------------------------------------------
 -module(graphdb_class).
 -behaviour(gen_server).
@@ -81,16 +81,6 @@
 -define(CLASS_CHILD_ARC,  26).  %% Child/ClassRel  -- parent -> child
 -define(CLASS_PARENT_ARC, 25).  %% Parent/ClassRel -- child  -> parent
 
-%% Literals subtree — parent for seeded literal attributes.
--define(PARENT_LITERALS, 7).
-
-%% NameAttrNref for attribute-kind nodes (used when seeding).
--define(NAME_ATTR_FOR_ATTRIBUTE, 18).
-
-%% Compositional arc labels for attribute children (used when seeding).
--define(ATTR_CHILD_ARC,  24).
--define(ATTR_PARENT_ARC, 23).
-
 %% Default template name auto-attached to every newly created class.
 %% Class authors may delete the default template to force explicit
 %% disambiguation on subsequent Connection arcs.
@@ -118,9 +108,7 @@
 	avps					%% [#{attribute => Nref, value => term()}]
 }).
 
--record(state, {
-	qc_attr_nref			%% integer() -- seeded qualifying_characteristic attribute
-}).
+-record(state, {}).
 
 
 %%---------------------------------------------------------------------
@@ -147,9 +135,7 @@
 		%% Template AVP class scope on Connection arcs)
 		class_in_ancestry/2,
 		%% Inheritance
-		inherited_attributes/1,
-		%% Seeded nref accessor
-		qc_attr_nref/0
+		inherited_qcs/1
 		]).
 
 %%---------------------------------------------------------------------
@@ -170,7 +156,7 @@
 -ifdef(TEST).
 -export([
 		is_valid_parent_kind/1,
-		collect_qc_nrefs/2
+		collect_all_avps/1
 		]).
 -endif.
 
@@ -312,25 +298,18 @@ class_in_ancestry(CandidateClassNref, ClassNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% inherited_attributes(ClassNref) -> {ok, [integer()]} | {error, term()}
+%% inherited_qcs(ClassNref) ->
+%%     {ok, [{integer(), term() | undefined}]} | {error, term()}
 %%
-%% Returns the list of qualifying-characteristic attribute nrefs that
-%% apply to this class, including those inherited from ancestor classes.
-%% Local QCs appear first; ancestor QCs are appended in nearest-first
-%% order with duplicates removed (local takes priority).
+%% Returns the list of qualifying-characteristic {AttrNref, Value} pairs
+%% that apply to this class, including those inherited from ancestor
+%% classes.  Local QCs appear first; ancestor QCs are appended in
+%% nearest-first BFS order with duplicates removed (local takes
+%% priority).  A Value of `undefined` means the QC is declared but not
+%% bound at this level.
 %%-----------------------------------------------------------------------------
-inherited_attributes(ClassNref) ->
-	gen_server:call(?MODULE, {inherited_attributes, ClassNref}).
-
-
-%%-----------------------------------------------------------------------------
-%% qc_attr_nref() -> {ok, integer()}
-%%
-%% Returns the nref of the seeded qualifying_characteristic attribute.
-%% Primarily intended for other graphdb workers and integration tests.
-%%-----------------------------------------------------------------------------
-qc_attr_nref() ->
-	gen_server:call(?MODULE, qc_attr_nref).
+inherited_qcs(ClassNref) ->
+	gen_server:call(?MODULE, {inherited_qcs, ClassNref}).
 
 
 %%=============================================================================
@@ -339,21 +318,10 @@ qc_attr_nref() ->
 
 %%-----------------------------------------------------------------------------
 %% init/1
-%%
-%% Seeds the qualifying_characteristic literal attribute under the
-%% Literals subtree (nref 7) and caches its nref in state.  Idempotent:
-%% on restart, detects the existing seed by name and reuses its nref.
 %%-----------------------------------------------------------------------------
 init([]) ->
-	try
-		QcNref = ensure_seed("qualifying_characteristic"),
-		logger:info("graphdb_class: started (qc_attr=~p)", [QcNref]),
-		{ok, #state{qc_attr_nref = QcNref}}
-	catch
-		throw:{error, Reason} ->
-			logger:error("graphdb_class: seeding failed: ~p", [Reason]),
-			{stop, {seed_failed, Reason}}
-	end.
+	logger:info("graphdb_class: started"),
+	{ok, #state{}}.
 
 
 %%-----------------------------------------------------------------------------
@@ -366,8 +334,8 @@ handle_call({add_superclass, ClassNref, AdditionalParentNref}, _From, State) ->
 	{reply, do_add_superclass(ClassNref, AdditionalParentNref), State};
 
 handle_call({add_qualifying_characteristic, ClassNref, AttrNref}, _From,
-		#state{qc_attr_nref = QcAttr} = State) ->
-	{reply, do_add_qc(ClassNref, AttrNref, QcAttr), State};
+		State) ->
+	{reply, do_add_qc(ClassNref, AttrNref), State};
 
 handle_call({add_template, ClassNref, Name}, _From, State) ->
 	{reply, do_add_template(ClassNref, Name), State};
@@ -399,12 +367,8 @@ handle_call({class_in_ancestry, CandidateNref, ClassNref}, _From, State) ->
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Inheritance
 %%-----------------------------------------------------------------------------
-handle_call({inherited_attributes, ClassNref}, _From,
-		#state{qc_attr_nref = QcAttr} = State) ->
-	{reply, do_inherited_attributes(ClassNref, QcAttr), State};
-
-handle_call(qc_attr_nref, _From, #state{qc_attr_nref = QcAttr} = State) ->
-	{reply, {ok, QcAttr}, State};
+handle_call({inherited_qcs, ClassNref}, _From, State) ->
+	{reply, do_inherited_qcs(ClassNref), State};
 
 handle_call(Request, From, State) ->
 	?UEM(handle_call, {Request, From, State}),
@@ -441,111 +405,6 @@ is_valid_parent_kind(class)    -> true;
 is_valid_parent_kind(_)        -> false.
 
 
-%%-----------------------------------------------------------------------------
-%% collect_qc_nrefs(AVPs, QcAttrNref) -> [integer()]
-%%
-%% Extracts qualifying-characteristic attribute nrefs from an AVP list.
-%%-----------------------------------------------------------------------------
-collect_qc_nrefs(AVPs, QcAttr) ->
-	[V || #{attribute := A, value := V} <- AVPs, A =:= QcAttr].
-
-
-%%-----------------------------------------------------------------------------
-%% ensure_seed(Name) -> Nref
-%%
-%% Looks up an existing literal attribute by name under the Literals
-%% subtree; if not found, creates it (node + compositional arc pair).
-%% Throws {error, Reason} on failure.
-%%-----------------------------------------------------------------------------
-ensure_seed(Name) ->
-	case find_attribute_by_name(?PARENT_LITERALS, Name) of
-		{ok, Nref} ->
-			Nref;
-		not_found ->
-			case do_create_seed_attribute(Name) of
-				{ok, Nref}       -> Nref;
-				{error, Reason}  -> throw({error, Reason})
-			end
-	end.
-
-
-%%-----------------------------------------------------------------------------
-%% find_attribute_by_name(ParentNref, Name) -> {ok, Nref} | not_found
-%%
-%% Finds an attribute-kind child of ParentNref whose name AVP matches
-%% Name.  Uses the parent index for O(1) lookup.
-%%-----------------------------------------------------------------------------
-find_attribute_by_name(ParentNref, Name) ->
-	F = fun() ->
-		Children = downward_children_by_arc(ParentNref, ?ATTR_CHILD_ARC,
-			composition),
-		lists:search(fun(N) -> node_has_name(N, Name) end, Children)
-	end,
-	case mnesia:transaction(F) of
-		{atomic, {value, #node{nref = Nref}}} -> {ok, Nref};
-		{atomic, false}                       -> not_found;
-		{aborted, Reason}                     -> throw({error, Reason})
-	end.
-
-
-%%-----------------------------------------------------------------------------
-%% node_has_name(Node, Name) -> boolean()
-%%-----------------------------------------------------------------------------
-node_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
-	lists:any(fun
-		(#{attribute := ?NAME_ATTR_FOR_ATTRIBUTE, value := V}) -> V =:= Name;
-		(_) -> false
-	end, AVPs).
-
-
-%%-----------------------------------------------------------------------------
-%% do_create_seed_attribute(Name) -> {ok, Nref} | {error, term()}
-%%
-%% Creates a literal attribute node under the Literals subtree (nref 7)
-%% with only the name AVP.  Used for seeding the qualifying_characteristic
-%% attribute.  Writes node + compositional arc pair atomically.
-%%
-%% All nref_server:get_nref/0 calls are issued OUTSIDE the Mnesia
-%% transaction to avoid side-effects on transaction retry.
-%%-----------------------------------------------------------------------------
-do_create_seed_attribute(Name) ->
-	Nref = nref_server:get_nref(),
-	NameAVP = #{attribute => ?NAME_ATTR_FOR_ATTRIBUTE, value => Name},
-	Node = #node{
-		nref = Nref,
-		kind = attribute,
-		parents = [?PARENT_LITERALS],
-		attribute_value_pairs = [NameAVP]
-	},
-	Id1 = nref_server:get_nref(),
-	Id2 = nref_server:get_nref(),
-	P2C = #relationship{
-		id = Id1,
-		kind = composition,
-		source_nref = ?PARENT_LITERALS,
-		characterization = ?ATTR_CHILD_ARC,
-		target_nref = Nref,
-		reciprocal = ?ATTR_PARENT_ARC,
-		avps = []
-	},
-	C2P = #relationship{
-		id = Id2,
-		kind = composition,
-		source_nref = Nref,
-		characterization = ?ATTR_PARENT_ARC,
-		target_nref = ?PARENT_LITERALS,
-		reciprocal = ?ATTR_CHILD_ARC,
-		avps = []
-	},
-	Txn = fun() ->
-		ok = mnesia:write(nodes, Node, write),
-		ok = mnesia:write(relationships, P2C, write),
-		ok = mnesia:write(relationships, C2P, write)
-	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}      -> {ok, Nref};
-		{aborted, Reason} -> {error, Reason}
-	end.
 
 
 %%-----------------------------------------------------------------------------
@@ -861,28 +720,28 @@ do_validate_parent(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_add_qc(ClassNref, AttrNref, QcAttr) -> ok | {error, term()}
+%% do_add_qc(ClassNref, AttrNref) -> ok | {error, term()}
 %%
-%% Adds the qualifying-characteristic AVP to the class node.  Validates
-%% both ClassNref (must be class) and AttrNref (must be attribute).
-%% Idempotent: if the QC already exists, returns ok.
+%% Adds the qualifying-characteristic AVP to the class node using the
+%% unified shape: #{attribute => AttrNref, value => undefined}.
+%% Validates both ClassNref (must be class) and AttrNref (must be
+%% attribute).  Idempotent: if any entry for AttrNref already exists
+%% (regardless of value), leaves it alone and returns ok.
 %%-----------------------------------------------------------------------------
-do_add_qc(ClassNref, AttrNref, QcAttr) ->
+do_add_qc(ClassNref, AttrNref) ->
 	Txn = fun() ->
 		case mnesia:read(nodes, ClassNref) of
 			[#node{kind = class, attribute_value_pairs = AVPs} = Node] ->
 				case mnesia:read(nodes, AttrNref) of
 					[#node{kind = attribute}] ->
-						Already = lists:any(fun
-							(#{attribute := A, value := V}) ->
-								A =:= QcAttr andalso V =:= AttrNref;
-							(_) -> false
-						end, AVPs),
+						Already = lists:keymember(AttrNref, 1,
+							[{A, V} || #{attribute := A, value := V} <- AVPs]),
 						case Already of
 							true ->
 								already_exists;
 							false ->
-								NewAVP = #{attribute => QcAttr, value => AttrNref},
+								NewAVP = #{attribute => AttrNref,
+									value => undefined},
 								Updated = Node#node{
 									attribute_value_pairs = AVPs ++ [NewAVP]
 								},
@@ -999,21 +858,22 @@ downward_children_by_arc(ParentNref, ChildArc, RelKind) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_inherited_attributes(ClassNref, QcAttr) ->
-%%     {ok, [integer()]} | {error, term()}
+%% do_inherited_qcs(ClassNref) ->
+%%     {ok, [{integer(), term() | undefined}]} | {error, term()}
 %%
-%% Collects qualifying-characteristic attribute nrefs from the class
-%% and all its ancestors.  Local QCs appear first; ancestor QCs are
-%% appended in nearest-first order with duplicates removed.
+%% Collects {AttrNref, Value} pairs from the class and all its ancestors.
+%% Local QCs appear first; ancestor QCs are appended in nearest-first
+%% BFS order.  Deduplication is by AttrNref — first occurrence wins,
+%% so a local binding takes priority over any ancestor binding for the
+%% same attribute.
 %%-----------------------------------------------------------------------------
-do_inherited_attributes(ClassNref, QcAttr) ->
+do_inherited_qcs(ClassNref) ->
 	case do_get_class(ClassNref) of
 		{ok, Node} ->
 			case do_ancestors(ClassNref) of
 				{ok, Ancestors} ->
 					AllNodes = [Node | Ancestors],
-					QcNrefs = collect_all_qcs(AllNodes, QcAttr),
-					{ok, QcNrefs};
+					{ok, collect_all_avps(AllNodes)};
 				{error, _} = Err ->
 					Err
 			end;
@@ -1023,18 +883,17 @@ do_inherited_attributes(ClassNref, QcAttr) ->
 
 
 %%-----------------------------------------------------------------------------
-%% collect_all_qcs(Nodes, QcAttr) -> [integer()]
+%% collect_all_avps(Nodes) -> [{integer(), term() | undefined}]
 %%
-%% Collects QC nrefs from a list of nodes, deduplicating in list order
-%% (earlier entries take priority).
+%% Collects all {AttrNref, Value} pairs from a list of nodes,
+%% deduplicating by AttrNref in list order (first occurrence wins).
 %%-----------------------------------------------------------------------------
-collect_all_qcs(Nodes, QcAttr) ->
+collect_all_avps(Nodes) ->
 	lists:foldl(fun(#node{attribute_value_pairs = AVPs}, Acc) ->
-		Qcs = collect_qc_nrefs(AVPs, QcAttr),
-		lists:foldl(fun(Q, A) ->
-			case lists:member(Q, A) of
-				true  -> A;
-				false -> A ++ [Q]
+		lists:foldl(fun(#{attribute := A, value := V}, A2) ->
+			case lists:keymember(A, 1, A2) of
+				true  -> A2;
+				false -> A2 ++ [{A, V}]
 			end
-		end, Acc, Qcs)
+		end, Acc, AVPs)
 	end, [], Nodes).

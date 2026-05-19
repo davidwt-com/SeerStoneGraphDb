@@ -412,15 +412,20 @@ code_change(_OldVsn, State, _Extra) ->
 %%
 %% Searches an attribute-value pair list for the first entry matching
 %% the given attribute nref.  Returns its value or not_found.
+%%
+%% An entry with value => undefined is treated as not_found — it is a
+%% schema declaration (QC declared but unbound at this level), not a
+%% resolved value.
 %%-----------------------------------------------------------------------------
-find_avp_value(AVPs, AttrNref) ->
-	case lists:search(
-		fun(#{attribute := A}) -> A =:= AttrNref; (_) -> false end,
-		AVPs)
-	of
-		{value, #{value := V}} -> {ok, V};
-		false                  -> not_found
-	end.
+find_avp_value([], _AttrNref) ->
+	not_found;
+find_avp_value([#{attribute := A, value := V} | _], A) when V =/= undefined ->
+	{ok, V};
+find_avp_value([#{attribute := A} | _], A) ->
+	%% value is undefined — QC declaration only, not a bound value
+	not_found;
+find_avp_value([_ | Rest], AttrNref) ->
+	find_avp_value(Rest, AttrNref).
 
 
 %%-----------------------------------------------------------------------------
