@@ -5,6 +5,7 @@
 *.tar.gz
 *.dets
 erl_crash.dump
+*.crashdump
 _build/
 data/
 log/
@@ -15,3 +16,4 @@ rebar3
 .wolf/
 CLAUDE.local.md
 resume
+ttb_last_config
