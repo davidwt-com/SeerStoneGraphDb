@@ -11,6 +11,7 @@
 -module(graphdb_instance_tests).
 
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
 
 
 %%=============================================================================
@@ -35,9 +36,9 @@ find_avp_value_first_match_wins_test() ->
 
 find_avp_value_among_many_test() ->
 	AVPs = [#{attribute => 10, value => "a"},
-			#{attribute => 20, value => "b"},
-			#{attribute => 30, value => "c"}],
-	?assertEqual({ok, "b"}, graphdb_instance:find_avp_value(AVPs, 20)).
+			#{attribute => ?NAME_ATTR_INSTANCE, value => "b"},
+			#{attribute => ?ARC_CLASS_TO_INST, value => "c"}],
+	?assertEqual({ok, "b"}, graphdb_instance:find_avp_value(AVPs, ?NAME_ATTR_INSTANCE)).
 
 find_avp_value_integer_value_test() ->
 	AVPs = [#{attribute => 5, value => 999}],

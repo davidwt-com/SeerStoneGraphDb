@@ -15,6 +15,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
 
 
 %%---------------------------------------------------------------------
@@ -348,7 +349,7 @@ get_node_root(_Config) ->
 	?assertEqual(1, Root#node.nref),
 	?assertEqual(category, Root#node.kind),
 	?assertEqual([], Root#node.parents),
-	?assertEqual([#{attribute => 17, value => "Root"}],
+	?assertEqual([#{attribute => ?NAME_ATTR_CATEGORY, value => "Root"}],
 		Root#node.attribute_value_pairs).
 
 %%-----------------------------------------------------------------------------
@@ -356,11 +357,11 @@ get_node_root(_Config) ->
 %%-----------------------------------------------------------------------------
 get_node_attribute(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
-	{ok, Node} = graphdb_mgr:get_node(18),
-	?assertEqual(18, Node#node.nref),
+	{ok, Node} = graphdb_mgr:get_node(?NAME_ATTR_ATTRIBUTE),
+	?assertEqual(?NAME_ATTR_ATTRIBUTE, Node#node.nref),
 	?assertEqual(attribute, Node#node.kind),
 	?assertEqual([10], Node#node.parents),    %% parent: Attribute Name Attributes
-	?assertEqual([#{attribute => 18, value => "Name"}],
+	?assertEqual([#{attribute => ?NAME_ATTR_ATTRIBUTE, value => "Name"}],
 		Node#node.attribute_value_pairs).
 
 %%-----------------------------------------------------------------------------
@@ -381,7 +382,7 @@ get_relationships_outgoing(_Config) ->
 	?assertEqual([2, 3, 4, 5], Targets),
 	%% All should have characterization=22 (Child/CatRel)
 	?assert(lists:all(fun(R) ->
-		R#relationship.characterization =:= 22
+		R#relationship.characterization =:= ?ARC_CAT_CHILD
 	end, Rels)).
 
 %%-----------------------------------------------------------------------------
@@ -632,7 +633,7 @@ rebuild_caches_restores_after_poison(_Config) ->
 	{atomic, ok} = mnesia:transaction(fun() ->
 		[N6]  = mnesia:read(nodes, 6),
 		[N7]  = mnesia:read(nodes, 7),
-		[N18] = mnesia:read(nodes, 18),
+		[N18] = mnesia:read(nodes, ?NAME_ATTR_ATTRIBUTE),
 		mnesia:write(nodes, N6#node{parents = [9999]}, write),
 		mnesia:write(nodes, N7#node{classes = [42]}, write),
 		mnesia:write(nodes, N18#node{parents = []}, write)
@@ -642,7 +643,7 @@ rebuild_caches_restores_after_poison(_Config) ->
 	ok = graphdb_mgr:rebuild_caches(),
 	?assertEqual(ok, graphdb_mgr:verify_caches()),
 	{atomic, [Restored18]} = mnesia:transaction(fun() ->
-		mnesia:read(nodes, 18)
+		mnesia:read(nodes, ?NAME_ATTR_ATTRIBUTE)
 	end),
 	?assertEqual([10], Restored18#node.parents).
 
