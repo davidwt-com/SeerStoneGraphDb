@@ -200,7 +200,7 @@ update(Proc_Name, Key, Value) ->
 	rpc(fun(From) -> From!{Proc_Name, ets:insert(get("tab"),{list_to_binary(Key),Value})} end, Proc_Name).
 
 delete(Proc_Name, Key) ->
-	rpc(fun(From) -> From!{Proc_Name,ets:delete(get("tab"),{list_to_binary(Key)})} end, Proc_Name).
+	rpc(fun(From) -> From!{Proc_Name,ets:delete(get("tab"),list_to_binary(Key))} end, Proc_Name).
 
 all(Proc_Name) -> 
 	rpc(fun(From) -> From!{Proc_Name, ets:tab2list(get("tab"))} end, Proc_Name).

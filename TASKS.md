@@ -817,30 +817,20 @@ pass through the category guard (rejecting category nrefs 1–5) and then return
 
 ---
 
-### L5. Relationship row IDs allocated from the global `nref_server`
+### L5. Relationship row IDs allocated from the global `nref_server` — **RESOLVED** (2026-05-19)
 
-**Evidence:** `graphdb_attr.erl:453-454`, `graphdb_class.erl:416-417,
-465-466`, `graphdb_instance.erl:329-332, 421-422`,
-`graphdb_bootstrap.erl:388-389`.
-
-The `id` field is the relationship row's primary key, not a
-graph-visible reference. Sharing the global nref allocator means
-relationship rows consume integers that could otherwise identify nodes.
-
-**Fix:** add a separate `relationship_id_server` (or extend
-`nref_allocator` with a second counter). Migrate all `id` allocations
-to it.
+New `rel_id_server` gen_server added to `apps/graphdb/src/` as first child of
+`graphdb_sup`. All 23 `#relationship.id` allocations across 5 files migrated from
+`nref_server:get_nref/0` to `rel_id_server:get_id/0`. Bootstrap test assertions
+updated (nref floor now `>= 100002`; relationship IDs now start at 1). 4 CT tests added.
 
 ---
 
-### Task 7. Wire `dictionary_server` and `term_server` to `dictionary_imp`
+### Task 7. Wire `dictionary_server` and `term_server` to `dictionary_imp` — **RESOLVED** (2026-05-19)
 
-**Evidence:** `apps/dictionary/src/dictionary_server.erl` and
-`apps/dictionary/src/term_server.erl` are gen_server stubs.
-`dictionary_imp` is fully implemented.
-
-**Fix:** delegate from each gen_server to the relevant `dictionary_imp`
-functions. Independent of all graphdb work.
+Both gen_servers delegate to `dictionary_imp` via `start_dictionary/stop_dictionary`
+in `init/terminate` and forward all CRUD calls. Also fixed a pre-existing one-line bug
+in `dictionary_imp:delete/2` (wrong ETS key type). 14 CT tests added (7 per server).
 
 ---
 
