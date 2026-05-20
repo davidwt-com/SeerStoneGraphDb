@@ -222,14 +222,15 @@ init([]) ->
  		Restart_Strategy = one_for_one, %% one_for_all | one_for_one | rest_for_one | simple_one_for_one
   		MaxR = 5, 					%% maximum number of restarts
 		MaxT = 5000, 				%% restart period,
-	SupFlags = {Restart_Strategy, MaxR, MaxT}, 
-	{ok, ChSpec1} = childspec(graphdb_mgr),	
-	{ok, ChSpec2} = childspec(graphdb_rules),			
-	{ok, ChSpec3} = childspec(graphdb_attr),			
-	{ok, ChSpec4} = childspec(graphdb_class),			
-	{ok, ChSpec5} = childspec(graphdb_instance),			
-	{ok, ChSpec6} = childspec(graphdb_language),			
-	{ok, {SupFlags, [ChSpec1, ChSpec2, ChSpec3, ChSpec4, ChSpec5, ChSpec6]}};
+	SupFlags = {Restart_Strategy, MaxR, MaxT},
+	{ok, ChSpec0} = childspec(rel_id_server),
+	{ok, ChSpec1} = childspec(graphdb_mgr),
+	{ok, ChSpec2} = childspec(graphdb_rules),
+	{ok, ChSpec3} = childspec(graphdb_attr),
+	{ok, ChSpec4} = childspec(graphdb_class),
+	{ok, ChSpec5} = childspec(graphdb_instance),
+	{ok, ChSpec6} = childspec(graphdb_language),
+	{ok, {SupFlags, [ChSpec0, ChSpec1, ChSpec2, ChSpec3, ChSpec4, ChSpec5, ChSpec6]}};
 init(State) -> 
 	?NYI({init, {State}}),
 	ignore.
