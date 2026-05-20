@@ -309,6 +309,8 @@ rebuild_caches() ->
 init([]) ->
 	case graphdb_bootstrap:load() of
 		ok ->
+			code:delete(graphdb_bootstrap),
+			code:purge(graphdb_bootstrap),
 			logger:info("graphdb_mgr: started, bootstrap loaded"),
 			{ok, #state{}};
 		{error, Reason} ->
