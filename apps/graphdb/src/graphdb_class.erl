@@ -419,12 +419,10 @@ is_valid_parent_kind(_)        -> false.
 do_create_class(Name, ParentClassNref) ->
 	case do_validate_parent(ParentClassNref) of
 		ok ->
-			ClassNref      = nref_server:get_nref(),
-			TaxId1         = rel_id_server:get_id(),
-			TaxId2         = rel_id_server:get_id(),
-			TemplateNref   = nref_server:get_nref(),
-			TmplCompId1    = rel_id_server:get_id(),
-			TmplCompId2    = rel_id_server:get_id(),
+			ClassNref              = nref_server:get_nref(),
+			{TaxId1, TaxId2}       = rel_id_server:get_id_pair(),
+			TemplateNref           = nref_server:get_nref(),
+			{TmplCompId1, TmplCompId2} = rel_id_server:get_id_pair(),
 			ClassNameAVP    = #{attribute => ?NAME_ATTR_FOR_CLASS, value => Name},
 			TemplateNameAVP = #{attribute => ?NAME_ATTR_FOR_CLASS,
 				value => ?DEFAULT_TEMPLATE_NAME},
@@ -513,8 +511,7 @@ do_add_superclass(ClassNref, AdditionalParentNref) ->
 	end.
 
 do_write_superclass(ClassNref, AdditionalParentNref) ->
-	Id1 = rel_id_server:get_id(),
-	Id2 = rel_id_server:get_id(),
+	{Id1, Id2} = rel_id_server:get_id_pair(),
 	Txn = fun() ->
 		[#node{kind = class, parents = Parents} = Node] =
 			mnesia:read(nodes, ClassNref),
@@ -576,8 +573,7 @@ do_add_template(ClassNref, Name) ->
 
 do_write_template(ClassNref, Name) ->
 	TemplateNref = nref_server:get_nref(),
-	Id1 = rel_id_server:get_id(),
-	Id2 = rel_id_server:get_id(),
+	{Id1, Id2} = rel_id_server:get_id_pair(),
 	NameAVP = #{attribute => ?NAME_ATTR_FOR_CLASS, value => Name},
 	Node = #node{
 		nref = TemplateNref,

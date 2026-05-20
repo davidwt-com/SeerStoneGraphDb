@@ -454,10 +454,8 @@ do_create_instance(Name, ClassNref, ParentNref) ->
 do_write_instance(Name, ClassNref, ParentNref) ->
 	%% Allocate all nrefs OUTSIDE the Mnesia transaction
 	Nref = nref_server:get_nref(),
-	MembId1 = rel_id_server:get_id(),
-	MembId2 = rel_id_server:get_id(),
-	CompId1 = rel_id_server:get_id(),
-	CompId2 = rel_id_server:get_id(),
+	{MembId1, MembId2} = rel_id_server:get_id_pair(),
+	{CompId1, CompId2} = rel_id_server:get_id_pair(),
 	NameAVP = #{attribute => ?NAME_ATTR_FOR_INSTANCE, value => Name},
 	Node = #node{
 		nref = Nref,
@@ -702,8 +700,7 @@ validate_template_scope(TemplateNref, SourceClass, TargetClass) ->
 %%-----------------------------------------------------------------------------
 write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref, {FwdAVPs, RevAVPs}) ->
-	Id1 = rel_id_server:get_id(),
-	Id2 = rel_id_server:get_id(),
+	{Id1, Id2} = rel_id_server:get_id_pair(),
 	TemplateAVP = #{attribute => ?TEMPLATE_AVP_NREF, value => TemplateNref},
 	Fwd = #relationship{
 		id = Id1, kind = connection,
@@ -752,8 +749,7 @@ do_add_class_membership(InstanceNref, ClassNref) ->
 	end.
 
 do_write_class_membership(InstanceNref, ClassNref) ->
-	Id1 = rel_id_server:get_id(),
-	Id2 = rel_id_server:get_id(),
+	{Id1, Id2} = rel_id_server:get_id_pair(),
 	Txn = fun() ->
 		[#node{kind = instance, classes = Classes} = Node] =
 			mnesia:read(nodes, InstanceNref),

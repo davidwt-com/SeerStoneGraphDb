@@ -545,8 +545,7 @@ write_relationships(Rels) ->
 %%   Row 2: source=N2, characterization=R2, target=N1, reciprocal=R1, kind=Kind
 %%-----------------------------------------------------------------------------
 expand_relationship({relationship, N1, R1, AVPs1, R2, N2, AVPs2, Kind}) ->
-	Id1 = rel_id_server:get_id(),
-	Id2 = rel_id_server:get_id(),
+	{Id1, Id2} = rel_id_server:get_id_pair(),
 	Row1 = #relationship{
 		id = Id1,
 		kind = Kind,

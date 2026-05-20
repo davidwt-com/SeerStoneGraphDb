@@ -491,8 +491,7 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 		parents = [ParentNref],
 		attribute_value_pairs = [NameAVP | ExtraAVPs]
 	},
-	Id1 = rel_id_server:get_id(),
-	Id2 = rel_id_server:get_id(),
+	{Id1, Id2} = rel_id_server:get_id_pair(),
 	P2C = #relationship{
 		id = Id1,
 		kind = taxonomy,
@@ -535,10 +534,8 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
 	FwdNref = nref_server:get_nref(),
 	RevNref = nref_server:get_nref(),
-	Id1 = rel_id_server:get_id(),
-	Id2 = rel_id_server:get_id(),
-	Id3 = rel_id_server:get_id(),
-	Id4 = rel_id_server:get_id(),
+	{Id1, Id2} = rel_id_server:get_id_pair(),
+	{Id3, Id4} = rel_id_server:get_id_pair(),
 	FwdAVPs = [#{attribute => ?NAME_ATTR_FOR_ATTRIBUTE, value => FwdName}
 		| ExtraAVPs],
 	RevAVPs = [#{attribute => ?NAME_ATTR_FOR_ATTRIBUTE, value => RevName}

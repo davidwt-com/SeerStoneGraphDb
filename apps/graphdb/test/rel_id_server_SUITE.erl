@@ -45,7 +45,10 @@
     get_id_returns_integer/1,
     get_id_returns_distinct_values/1,
     get_id_is_monotonic/1,
-    persists_counter_across_restart/1
+    persists_counter_across_restart/1,
+    get_id_pair_returns_integers/1,
+    get_id_pair_are_consecutive/1,
+    get_id_pair_no_overlap_with_get_id/1
 ]).
 
 suite() -> [{timetrap, {seconds, 30}}].
@@ -58,7 +61,10 @@ groups() ->
         get_id_returns_integer,
         get_id_returns_distinct_values,
         get_id_is_monotonic,
-        persists_counter_across_restart
+        persists_counter_across_restart,
+        get_id_pair_returns_integers,
+        get_id_pair_are_consecutive,
+        get_id_pair_no_overlap_with_get_id
     ]}].
 
 
@@ -145,3 +151,19 @@ persists_counter_across_restart(_Config) ->
     ?assert(Id4 > Id1),
     ?assert(Id4 > Id2),
     ?assert(Id4 > Id3).
+
+get_id_pair_returns_integers(_Config) ->
+    {A, B} = rel_id_server:get_id_pair(),
+    ?assert(is_integer(A)),
+    ?assert(is_integer(B)),
+    ?assert(A > 0),
+    ?assert(B > 0).
+
+get_id_pair_are_consecutive(_Config) ->
+    {A, B} = rel_id_server:get_id_pair(),
+    ?assertEqual(A + 1, B).
+
+get_id_pair_no_overlap_with_get_id(_Config) ->
+    {_A, B} = rel_id_server:get_id_pair(),
+    Next = rel_id_server:get_id(),
+    ?assertEqual(B + 1, Next).

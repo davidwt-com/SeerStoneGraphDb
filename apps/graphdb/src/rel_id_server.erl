@@ -54,7 +54,8 @@
 %%---------------------------------------------------------------------
 -export([
 		start_link/0,	%% Starts and links the gen_server.
-		get_id/0		%% Returns next ID, advances counter.
+		get_id/0,		%% Returns next ID, advances counter.
+		get_id_pair/0	%% Returns {Id1, Id2} for one reciprocal arc pair.
 		]).
 
 %%---------------------------------------------------------------------
@@ -92,6 +93,15 @@ get_id() ->
 	gen_server:call(?MODULE, get_id).
 
 
+%%-----------------------------------------------------------------------------
+%% get_id_pair() -> {integer(), integer()}
+%%
+%% Returns two consecutive IDs for a reciprocal arc pair in one call.
+%%-----------------------------------------------------------------------------
+get_id_pair() ->
+	gen_server:call(?MODULE, get_id_pair).
+
+
 %%=============================================================================
 %% gen_server Behaviour Callbacks
 %%=============================================================================
@@ -111,6 +121,9 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 handle_call(get_id, _From, State) ->
 	Reply = do_get_id(),
+	{reply, Reply, State};
+handle_call(get_id_pair, _From, State) ->
+	Reply = do_get_id_pair(),
 	{reply, Reply, State};
 handle_call(Request, From, State) ->
 	?UEM(handle_call, {Request, From, State}),
@@ -210,3 +223,14 @@ do_get_id() ->
 	[{counter, N}] = dets:lookup(?MODULE, counter),
 	ok = dets:insert(?MODULE, {counter, N + 1}),
 	N.
+
+
+%%-----------------------------------------------------------------------------
+%% do_get_id_pair() -> {integer(), integer()}
+%%
+%% Allocates two consecutive IDs atomically for a reciprocal arc pair.
+%%-----------------------------------------------------------------------------
+do_get_id_pair() ->
+	[{counter, N}] = dets:lookup(?MODULE, counter),
+	ok = dets:insert(?MODULE, {counter, N + 2}),
+	{N, N + 1}.
