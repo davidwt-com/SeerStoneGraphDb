@@ -46,3 +46,14 @@ find_avp_value_integer_value_test() ->
 find_avp_value_atom_value_test() ->
 	AVPs = [#{attribute => 7, value => active}],
 	?assertEqual({ok, active}, graphdb_instance:find_avp_value(AVPs, 7)).
+
+find_avp_value_undefined_is_not_found_test() ->
+	%% value => undefined is a QC declaration, not a resolved value.
+	AVPs = [#{attribute => 42, value => undefined}],
+	?assertEqual(not_found, graphdb_instance:find_avp_value(AVPs, 42)).
+
+find_avp_value_undefined_does_not_shadow_bound_in_suffix_test() ->
+	%% undefined in first position should return not_found (no fallthrough).
+	AVPs = [#{attribute => 42, value => undefined},
+			#{attribute => 42, value => "should_not_reach"}],
+	?assertEqual(not_found, graphdb_instance:find_avp_value(AVPs, 42)).

@@ -666,7 +666,7 @@ No blocking dependencies on any feature phase. Interleave at any point.
 
 ---
 
-### L1. Rename `inherited_attributes/1` → `inherited_qcs/1`
+### L1. Rename `inherited_attributes/1` → `inherited_qcs/1` — RESOLVED (subsumed by L2)
 
 **Evidence:** `graphdb_class.erl:230-238, 638-651`.
 
@@ -681,25 +681,56 @@ as its own API.
 
 ---
 
-### L2. Separate QC list from bound values on the class node
+### L2. Unify QC declarations and class-bound values into a single AVP shape — RESOLVED
 
-**Evidence:** `graphdb_class.erl:524-562`. `do_add_qc` writes
-qualifying-characteristic pointers into `attribute_value_pairs` keyed
-by `qc_attr_nref`. Class-bound values are written into the same list,
-keyed by other attribute nrefs. The `resolve_from_class` lookup in
-`graphdb_instance` is already vulnerable to confusion: asking for the
-value of `qc_attr_nref` returns another attribute's nref.
+**Evidence:** `graphdb_class.erl:524-562, 863-908, 1001-1040`.
+`do_add_qc` currently writes a sentinel-keyed AVP
+`#{attribute => QcAttrNref, value => AttrNref}` to record that
+`AttrNref` is a qualifying characteristic. Class-bound values (e.g.
+`#{attribute => ColorAttrNref, value => red}`) share the same AVP list
+but use a different key. `resolve_from_class` in `graphdb_instance`
+must avoid confusing the two, and adding more concept tags in F4 would
+make the list harder to reason about.
 
-**Fix:** add a dedicated `qcs :: [integer()]` field to the `node`
-record (only meaningful for `kind = class`), or mark QC entries with a
-distinct AVP shape (e.g., `#{kind => qc, attribute => AttrNref}`).
+**Fix:** replace the sentinel-keyed pattern with a unified shape:
+
+- **QC declared, no bound value:** `#{attribute => AttrNref, value => undefined}`
+- **QC with class-level bound value:** `#{attribute => AttrNref, value => SomeValue}`
+
+Both forms are normal AVPs keyed by the actual attribute nref. Adding a
+QC writes `undefined`; binding a class value updates the entry (or
+writes it if not yet declared). `resolve_from_class` skips
+`value = undefined` entries — they are schema declarations, not
+resolved values. Inheritance walk collects all unique `attribute` keys
+nearest-first, carrying `{AttrNref, Value | undefined}` pairs.
+
+**Changes required:**
+
+1. Remove the seeded `qualifying_characteristic` literal attribute and
+   `qc_attr_nref` from `graphdb_class` state — no longer needed.
+2. `do_add_qc/3` writes `#{attribute => AttrNref, value => undefined}`.
+   Idempotent: if the key already exists (any value), leave it alone.
+3. `inherited_attributes/1` → `inherited_qcs/1` (L1 rename, fold in
+   here). Return type changes from `[AttrNref]` to
+   `[{AttrNref, Value | undefined}]`, deduplicating by `AttrNref` with
+   nearest-ancestor priority.
+4. `collect_all_qcs/2` and `collect_qc_nrefs/2` simplified to a fold
+   over all AVPs with dedup by `attribute` key.
+5. `search_class_taxonomy` in `graphdb_instance.erl` — guard
+   `value =/= undefined` before treating an AVP as a resolved hit.
+
+**Deferred:** instance-only enforcement (attributes that must never
+receive a class-level value) belongs in the template attribute list,
+which does not yet exist. The `undefined` shape accommodates this
+naturally — an instance-only attribute stays `undefined` at every class
+level. Enforcement is a follow-on task adjacent to L4/F4.
 
 **Note:** best done before F4 (E1) starts adding more concept tags to
-class nodes.
+class nodes. Subsumes L1 (`inherited_attributes/1` → `inherited_qcs/1`).
 
 ---
 
-### L3. Single-row reads run inside `mnesia:transaction/1`
+### L3. Single-row reads run inside `mnesia:transaction/1` — RESOLVED
 
 **Evidence:** `graphdb_class.erl:506, 569-575, 601-611`,
 `graphdb_instance.erl:393, 406, 453-459, 486, 499`,
@@ -711,7 +742,7 @@ multi-row writes and reads that must observe atomic state.
 
 ---
 
-### L4. Wire `graphdb_mgr` write-side to workers
+### L4. Wire `graphdb_mgr` write-side to workers — RESOLVED
 
 **Evidence:** `graphdb_mgr.erl:278-296`. `create_attribute`,
 `create_class`, `create_instance`, `add_relationship` all return
@@ -728,6 +759,61 @@ others in this section — restores the spec's public API contract.*
 - `add_relationship` → `graphdb_instance:add_relationship/4`
 - `delete_node`, `update_node_avps` → category guard, then
   kind-appropriate worker.
+
+**Design note — attribute categories per class context:**
+
+When wiring `create_class` and `update_node_avps`, the write-side must
+account for two categories of attributes that a class declares:
+
+- **Class-bindable** — the class may supply a value (or a useful
+  default) for this attribute. Instances inherit the value and may
+  override it. Example: `num_wheels = 4` on a Car class.
+- **Instance-only** — the class declares the attribute as relevant but
+  binding a value at the class level is a category error. The value is
+  meaningful only per-instance. Example: `serial_number`, `owner_name`.
+  Attempting to bind a class-level value for such an attribute should be
+  rejected or flagged.
+
+This distinction is **per-class, per-template context** — the same
+attribute may be class-bindable in one class's template and instance-only
+in another's. The enforcement point belongs in the template's attribute
+declaration, not on the attribute node globally.
+
+The template attribute list does not yet exist (templates currently carry
+only a name and their compositional arc). L4 implementation should treat
+this as a known gap: wire the delegation first, then plan the template
+attribute list and instance-only enforcement as a follow-on task (likely
+adjacent to F4/E1, which adds rule-driven instantiation). Document the
+gap in the Decision Log when L4 lands.
+
+#### Decision Log
+
+**L4 — `create_attribute` routing by ParentNref** (2026-05-18)
+
+`graphdb_mgr:create_attribute/3` routes to the appropriate
+`graphdb_attr` worker function based on `ParentNref`:
+- 6 / 9–12 (Names subtree) → `create_name_attribute/1`
+- 7 (Literals) → `create_literal_attribute/2`; `type` extracted from `AVPs` map (default `string`)
+- 8 / 13–16 (Relationships subtree) → `create_relationship_attribute/3` if both
+  `reciprocal_name` and `target_kind` present; `create_relationship_type/1` if neither;
+  `{error, {missing_avps, ...}}` if exactly one is present
+- Unknown parent → `{error, {unknown_attribute_parent, Nref}}`
+
+`create_relationship_attribute/3` returns `{ok, {FwdNref, RevNref}}`; the mgr
+normalises to `{ok, FwdNref}` (forward arc nref only).
+
+**L4 — Instance-only attribute enforcement deferred** (2026-05-18)
+
+The template attribute list (which would declare per-class, per-template whether an
+attribute is class-bindable or instance-only) does not yet exist. `create_class`
+and `update_node_avps` accept any AVP write without enforcement. This is a known
+gap; enforcement is a follow-on task adjacent to F4/E1 (rule-driven instantiation).
+
+**L4 — `delete_node` and `update_node_avps` remain `not_implemented`** (2026-05-18)
+
+No worker currently implements node deletion or general AVP-update. Both operations
+pass through the category guard (rejecting category nrefs 1–5) and then return
+`{error, not_implemented}`. These will be wired when a worker adds the functionality.
 
 ---
 

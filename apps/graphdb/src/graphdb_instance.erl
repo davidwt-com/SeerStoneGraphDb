@@ -412,15 +412,22 @@ code_change(_OldVsn, State, _Extra) ->
 %%
 %% Searches an attribute-value pair list for the first entry matching
 %% the given attribute nref.  Returns its value or not_found.
+%%
+%% An entry with value => undefined is treated as not_found — it is a
+%% schema declaration (QC declared but unbound at this level), not a
+%% resolved value.
 %%-----------------------------------------------------------------------------
-find_avp_value(AVPs, AttrNref) ->
-	case lists:search(
-		fun(#{attribute := A}) -> A =:= AttrNref; (_) -> false end,
-		AVPs)
-	of
-		{value, #{value := V}} -> {ok, V};
-		false                  -> not_found
-	end.
+find_avp_value([], _AttrNref) ->
+	not_found;
+find_avp_value([#{attribute := A, value := V} | _], A) when V =/= undefined ->
+	{ok, V};
+find_avp_value([#{attribute := A} | _], A) ->
+	%% value is undefined — QC declaration only, not a bound value.
+	%% Stopping here is correct: AVP lists have no duplicate attribute keys
+	%% (enforced by do_add_qc's idempotency guard), so no further match exists.
+	not_found;
+find_avp_value([_ | Rest], AttrNref) ->
+	find_avp_value(Rest, AttrNref).
 
 
 %%-----------------------------------------------------------------------------
@@ -516,11 +523,10 @@ do_write_instance(Name, ClassNref, ParentNref) ->
 %% do_validate_class(ClassNref) -> ok | {error, term()}
 %%-----------------------------------------------------------------------------
 do_validate_class(ClassNref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, ClassNref) end) of
-		{atomic, [#node{kind = class}]} -> ok;
-		{atomic, [#node{kind = Kind}]}  -> {error, {not_a_class, Kind}};
-		{atomic, []}                    -> {error, class_not_found};
-		{aborted, Reason}               -> {error, Reason}
+	case mnesia:dirty_read(nodes, ClassNref) of
+		[#node{kind = class}]          -> ok;
+		[#node{kind = Kind}]           -> {error, {not_a_class, Kind}};
+		[]                             -> {error, class_not_found}
 	end.
 
 
@@ -530,10 +536,9 @@ do_validate_class(ClassNref) ->
 %% Validates that ParentNref references an existing node.
 %%-----------------------------------------------------------------------------
 do_validate_parent(ParentNref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, ParentNref) end) of
-		{atomic, [_Node]} -> ok;
-		{atomic, []}      -> {error, parent_not_found};
-		{aborted, Reason} -> {error, Reason}
+	case mnesia:dirty_read(nodes, ParentNref) of
+		[_Node] -> ok;
+		[]      -> {error, parent_not_found}
 	end.
 
 
@@ -826,11 +831,10 @@ do_class_of(InstanceNref) ->
 %%     {ok, #node{}} | {error, not_found | not_an_instance | term()}
 %%-----------------------------------------------------------------------------
 do_get_instance(Nref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
-		{atomic, [#node{kind = instance} = Node]} -> {ok, Node};
-		{atomic, [_Other]}                        -> {error, not_an_instance};
-		{atomic, []}                              -> {error, not_found};
-		{aborted, Reason}                         -> {error, Reason}
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = instance} = Node] -> {ok, Node};
+		[_Other]                        -> {error, not_an_instance};
+		[]                              -> {error, not_found}
 	end.
 
 
@@ -859,30 +863,26 @@ do_children(Nref) ->
 %% node.  Returns nearest-first order.
 %%-----------------------------------------------------------------------------
 do_compositional_ancestors(Nref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
-		{atomic, [#node{kind = instance, parents = Parents}]} ->
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = instance, parents = Parents}] ->
 			do_walk_ancestors(head_parent(Parents), []);
-		{atomic, [_]} ->
+		[_] ->
 			{error, not_an_instance};
-		{atomic, []} ->
-			{error, not_found};
-		{aborted, Reason} ->
-			{error, Reason}
+		[] ->
+			{error, not_found}
 	end.
 
 do_walk_ancestors(undefined, Acc) ->
 	{ok, lists:reverse(Acc)};
 do_walk_ancestors(Nref, Acc) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
-		{atomic, [#node{kind = instance, parents = Parents} = Node]} ->
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = instance, parents = Parents} = Node] ->
 			do_walk_ancestors(head_parent(Parents), [Node | Acc]);
-		{atomic, [_]} ->
+		[_] ->
 			%% Hit a non-instance node (e.g., category anchor) — stop
 			{ok, lists:reverse(Acc)};
-		{atomic, []} ->
-			{ok, lists:reverse(Acc)};
-		{aborted, Reason} ->
-			{error, Reason}
+		[] ->
+			{ok, lists:reverse(Acc)}
 	end.
 
 
@@ -1017,20 +1017,18 @@ search_first_in_ancestors(
 resolve_from_ancestors(undefined, _AttrNref) ->
 	not_found;
 resolve_from_ancestors(ParentNref, AttrNref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, ParentNref) end) of
-		{atomic, [#node{kind = instance, parents = GrandParents,
-				attribute_value_pairs = AVPs}]} ->
+	case mnesia:dirty_read(nodes, ParentNref) of
+		[#node{kind = instance, parents = GrandParents,
+				attribute_value_pairs = AVPs}] ->
 			case find_avp_value(AVPs, AttrNref) of
 				{ok, _} = Found -> Found;
 				not_found       -> resolve_from_ancestors(
 									head_parent(GrandParents), AttrNref)
 			end;
-		{atomic, [_]} ->
+		[_] ->
 			not_found;
-		{atomic, []} ->
-			not_found;
-		{aborted, Reason} ->
-			{error, Reason}
+		[] ->
+			not_found
 	end.
 
 
@@ -1096,8 +1094,8 @@ resolve_from_connected(InstNref, AttrNref) ->
 search_targets([], _AttrNref) ->
 	not_found;
 search_targets([Nref | Rest], AttrNref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
-		{atomic, [#node{attribute_value_pairs = AVPs}]} ->
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{attribute_value_pairs = AVPs}] ->
 			case find_avp_value(AVPs, AttrNref) of
 				{ok, _} = Found -> Found;
 				not_found       -> search_targets(Rest, AttrNref)

@@ -56,10 +56,6 @@
 %% Test cases
 %%---------------------------------------------------------------------
 -export([
-	%% Seeding
-	qc_seed_created_on_first_start/1,
-	qc_seed_idempotent_on_restart/1,
-	qc_seed_nref_above_floor/1,
 	%% Creation
 	create_class_top_level/1,
 	create_class_subclass/1,
@@ -102,12 +98,12 @@
 	add_superclass_rejects_non_class_target/1,
 	ancestors_walks_multi_parent_dag/1,
 	ancestors_dedupes_diamond_inheritance/1,
-	inherited_attributes_multi_parent/1,
+	inherited_qcs_multi_parent/1,
 	class_in_ancestry_via_added_parent/1,
 	%% Inheritance
-	inherited_attributes_local_only/1,
-	inherited_attributes_from_ancestors/1,
-	inherited_attributes_deduplicates/1
+	inherited_qcs_local_only/1,
+	inherited_qcs_from_ancestors/1,
+	inherited_qcs_deduplicates/1
 ]).
 
 
@@ -119,17 +115,12 @@ suite() ->
 	[{timetrap, {seconds, 30}}].
 
 all() ->
-	[{group, seeding}, {group, creation}, {group, templates},
+	[{group, creation}, {group, templates},
 	 {group, qualifying}, {group, lookups}, {group, hierarchy},
 	 {group, multi_inheritance}, {group, inheritance}].
 
 groups() ->
 	[
-		{seeding, [], [
-			qc_seed_created_on_first_start,
-			qc_seed_idempotent_on_restart,
-			qc_seed_nref_above_floor
-		]},
 		{creation, [], [
 			create_class_top_level,
 			create_class_subclass,
@@ -177,13 +168,13 @@ groups() ->
 			add_superclass_rejects_non_class_target,
 			ancestors_walks_multi_parent_dag,
 			ancestors_dedupes_diamond_inheritance,
-			inherited_attributes_multi_parent,
+			inherited_qcs_multi_parent,
 			class_in_ancestry_via_added_parent
 		]},
 		{inheritance, [], [
-			inherited_attributes_local_only,
-			inherited_attributes_from_ancestors,
-			inherited_attributes_deduplicates
+			inherited_qcs_local_only,
+			inherited_qcs_from_ancestors,
+			inherited_qcs_deduplicates
 		]}
 	].
 
@@ -269,49 +260,6 @@ verify_cache_invariant(TC) ->
 			end;
 		_ -> ok
 	end.
-
-
-%%=============================================================================
-%% Seeding Tests
-%%=============================================================================
-
-%%-----------------------------------------------------------------------------
-%% On first startup, graphdb_class seeds the qualifying_characteristic
-%% attribute under the Literals subtree (nref 7).
-%%-----------------------------------------------------------------------------
-qc_seed_created_on_first_start(_Config) ->
-	{ok, _} = graphdb_class:start_link(),
-	{ok, QcNref} = graphdb_class:qc_attr_nref(),
-	?assert(is_integer(QcNref)),
-	%% Verify it's a real attribute node under Literals (parent=7)
-	{ok, Node} = graphdb_attr:get_attribute(QcNref),
-	?assertEqual(attribute, Node#node.kind),
-	?assertEqual([7], Node#node.parents).
-
-%%-----------------------------------------------------------------------------
-%% Restarting graphdb_class must detect the existing seed and NOT
-%% create duplicates.
-%%-----------------------------------------------------------------------------
-qc_seed_idempotent_on_restart(_Config) ->
-	{ok, _} = graphdb_class:start_link(),
-	{ok, Nref1} = graphdb_class:qc_attr_nref(),
-	NodesBefore = mnesia:table_info(nodes, size),
-
-	ok = gen_server:stop(graphdb_class),
-	{ok, _} = graphdb_class:start_link(),
-	{ok, Nref2} = graphdb_class:qc_attr_nref(),
-	NodesAfter = mnesia:table_info(nodes, size),
-
-	?assertEqual(Nref1, Nref2),
-	?assertEqual(NodesBefore, NodesAfter).
-
-%%-----------------------------------------------------------------------------
-%% Seeded nref must be >= the nref_start floor (100000).
-%%-----------------------------------------------------------------------------
-qc_seed_nref_above_floor(_Config) ->
-	{ok, _} = graphdb_class:start_link(),
-	{ok, QcNref} = graphdb_class:qc_attr_nref(),
-	?assert(QcNref >= 100000).
 
 
 %%=============================================================================
@@ -535,16 +483,16 @@ class_in_ancestry_unrelated(_Config) ->
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
-%% add_qualifying_characteristic adds an attribute nref to the class's AVPs.
+%% add_qualifying_characteristic adds an attribute nref to the class's AVPs
+%% using the unified shape: #{attribute => AttrNref, value => undefined}.
 %%-----------------------------------------------------------------------------
 add_qc_basic(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
-	{ok, QcAttr} = graphdb_class:qc_attr_nref(),
 	{ok, ClassNref} = graphdb_class:create_class("Color", 3),
 	%% Use bootstrap attribute nref 18 (Name/attribute) as a QC for testing
 	ok = graphdb_class:add_qualifying_characteristic(ClassNref, 18),
 	{ok, Node} = graphdb_class:get_class(ClassNref),
-	?assert(lists:member(#{attribute => QcAttr, value => 18},
+	?assert(lists:member(#{attribute => 18, value => undefined},
 		Node#node.attribute_value_pairs)).
 
 %%-----------------------------------------------------------------------------
@@ -556,10 +504,9 @@ add_qc_idempotent(_Config) ->
 	ok = graphdb_class:add_qualifying_characteristic(ClassNref, 18),
 	ok = graphdb_class:add_qualifying_characteristic(ClassNref, 18),
 	{ok, Node} = graphdb_class:get_class(ClassNref),
-	{ok, QcAttr} = graphdb_class:qc_attr_nref(),
-	QcCount = length([1 || #{attribute := A, value := V} <-
+	QcCount = length([1 || #{attribute := A} <-
 		Node#node.attribute_value_pairs,
-		A =:= QcAttr, V =:= 18]),
+		A =:= 18]),
 	?assertEqual(1, QcCount).
 
 %%-----------------------------------------------------------------------------
@@ -790,10 +737,10 @@ ancestors_dedupes_diamond_inheritance(_Config) ->
 	?assertEqual([B, C, A], AncNrefs).
 
 %%-----------------------------------------------------------------------------
-%% inherited_attributes gathers QCs from all multi-parent ancestors
-%% in BFS order.
+%% inherited_qcs gathers QCs from all multi-parent ancestors in BFS order.
+%% Uses attr 20 for C's local QC to avoid conflict with class name attr 19.
 %%-----------------------------------------------------------------------------
-inherited_attributes_multi_parent(_Config) ->
+inherited_qcs_multi_parent(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, A} = graphdb_class:create_class("A", 3),
 	ok = graphdb_class:add_qualifying_characteristic(A, 17),
@@ -801,10 +748,18 @@ inherited_attributes_multi_parent(_Config) ->
 	ok = graphdb_class:add_qualifying_characteristic(B, 18),
 	{ok, C} = graphdb_class:create_class("C", A),
 	ok = graphdb_class:add_superclass(C, B),
-	ok = graphdb_class:add_qualifying_characteristic(C, 19),
-	{ok, QcNrefs} = graphdb_class:inherited_attributes(C),
-	%% Local (19), then nearest parents A (17), B (18).
-	?assertEqual([19, 17, 18], QcNrefs).
+	ok = graphdb_class:add_qualifying_characteristic(C, 20),
+	{ok, QcPairs} = graphdb_class:inherited_qcs(C),
+	%% Local (20), then nearest parents A (17), B (18) — all value=>undefined.
+	?assert(lists:member({20, undefined}, QcPairs)),
+	?assert(lists:member({17, undefined}, QcPairs)),
+	?assert(lists:member({18, undefined}, QcPairs)),
+	%% Order: C's local QC before ancestors; BFS visits A before B (A is the
+	%% creation parent, B added via add_superclass), so 17 appears before 18.
+	Attrs = [A2 || {A2, _} <- QcPairs],
+	?assert(lists_index_of(20, Attrs) < lists_index_of(17, Attrs)),
+	?assert(lists_index_of(20, Attrs) < lists_index_of(18, Attrs)),
+	?assert(lists_index_of(17, Attrs) < lists_index_of(18, Attrs)).
 
 %%-----------------------------------------------------------------------------
 %% class_in_ancestry finds a parent added via add_superclass.
@@ -824,52 +779,80 @@ class_in_ancestry_via_added_parent(_Config) ->
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
-%% inherited_attributes returns only local QCs when no ancestors have any.
+%% inherited_qcs returns only local QCs when no ancestors have any.
+%% Uses attrs 17 and 18 (not 19 — that is the class name attr and conflicts).
 %%-----------------------------------------------------------------------------
-inherited_attributes_local_only(_Config) ->
+inherited_qcs_local_only(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, ClassNref} = graphdb_class:create_class("Color", 3),
+	ok = graphdb_class:add_qualifying_characteristic(ClassNref, 17),
 	ok = graphdb_class:add_qualifying_characteristic(ClassNref, 18),
-	ok = graphdb_class:add_qualifying_characteristic(ClassNref, 19),
-	{ok, QcNrefs} = graphdb_class:inherited_attributes(ClassNref),
-	?assertEqual([18, 19], QcNrefs).
+	{ok, QcPairs} = graphdb_class:inherited_qcs(ClassNref),
+	%% Class has name AVP (attr=19, value="Color") plus two QC AVPs.
+	%% inherited_qcs filters out the name AVP; only QC attrs 17 and 18 appear.
+	?assert(lists:member({17, undefined}, QcPairs)),
+	?assert(lists:member({18, undefined}, QcPairs)),
+	?assertNot(lists:keymember(19, 1, QcPairs)).
 
 %%-----------------------------------------------------------------------------
-%% inherited_attributes includes QCs from ancestor classes.
+%% inherited_qcs includes QCs from ancestor classes.
 %%-----------------------------------------------------------------------------
-inherited_attributes_from_ancestors(_Config) ->
+inherited_qcs_from_ancestors(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, Animal} = graphdb_class:create_class("Animal", 3),
 	ok = graphdb_class:add_qualifying_characteristic(Animal, 17),
 	{ok, Mammal} = graphdb_class:create_class("Mammal", Animal),
 	ok = graphdb_class:add_qualifying_characteristic(Mammal, 18),
 	{ok, Whale} = graphdb_class:create_class("Whale", Mammal),
-	ok = graphdb_class:add_qualifying_characteristic(Whale, 19),
-	{ok, QcNrefs} = graphdb_class:inherited_attributes(Whale),
-	%% Local first (19), then nearest ancestor (Mammal: 18), then Animal (17)
-	?assertEqual([19, 18, 17], QcNrefs).
+	ok = graphdb_class:add_qualifying_characteristic(Whale, 20),
+	{ok, QcPairs} = graphdb_class:inherited_qcs(Whale),
+	%% QC attrs 20 (local), 18 (from Mammal), 17 (from Animal) must appear.
+	%% Dedup: each appears exactly once; local entry comes first.
+	?assert(lists:member({20, undefined}, QcPairs)),
+	?assert(lists:member({18, undefined}, QcPairs)),
+	?assert(lists:member({17, undefined}, QcPairs)),
+	%% 20 must appear before 18, and 18 must appear before 17.
+	Attrs = [A || {A, _} <- QcPairs],
+	?assert(lists_index_of(20, Attrs) < lists_index_of(18, Attrs)),
+	?assert(lists_index_of(18, Attrs) < lists_index_of(17, Attrs)).
 
 %%-----------------------------------------------------------------------------
-%% inherited_attributes deduplicates: if a child has the same QC as an
-%% ancestor, the local version takes priority and the ancestor's is
-%% not repeated.
+%% inherited_qcs deduplicates: if a child has the same QC as an ancestor,
+%% the local version takes priority and the ancestor's is not repeated.
 %%-----------------------------------------------------------------------------
-inherited_attributes_deduplicates(_Config) ->
+inherited_qcs_deduplicates(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, Parent} = graphdb_class:create_class("Parent", 3),
 	ok = graphdb_class:add_qualifying_characteristic(Parent, 17),
 	ok = graphdb_class:add_qualifying_characteristic(Parent, 18),
 	{ok, Child} = graphdb_class:create_class("Child", Parent),
 	ok = graphdb_class:add_qualifying_characteristic(Child, 18),
-	ok = graphdb_class:add_qualifying_characteristic(Child, 19),
-	{ok, QcNrefs} = graphdb_class:inherited_attributes(Child),
-	%% Child's 18 and 19 first, then Parent's 17 (Parent's 18 is duplicate)
-	?assertEqual([18, 19, 17], QcNrefs).
+	ok = graphdb_class:add_qualifying_characteristic(Child, 20),
+	{ok, QcPairs} = graphdb_class:inherited_qcs(Child),
+	%% 18 appears only once (from Child, not duplicated from Parent).
+	Count18 = length([1 || {A, _} <- QcPairs, A =:= 18]),
+	?assertEqual(1, Count18),
+	%% 17 (from Parent only) and 20 (from Child only) also present.
+	?assert(lists:member({17, undefined}, QcPairs)),
+	?assert(lists:member({18, undefined}, QcPairs)),
+	?assert(lists:member({20, undefined}, QcPairs)).
 
 
 %%=============================================================================
 %% Internal Helpers
 %%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% lists_index_of(Elem, List) -> integer()
+%%
+%% Returns the 1-based position of Elem in List.  Used by ordering assertions.
+%%-----------------------------------------------------------------------------
+lists_index_of(Elem, List) ->
+	lists_index_of(Elem, List, 1).
+
+lists_index_of(Elem, [Elem | _], Idx) -> Idx;
+lists_index_of(Elem, [_ | Rest], Idx) -> lists_index_of(Elem, Rest, Idx + 1).
+
 
 %%-----------------------------------------------------------------------------
 %% ensure_loaded(App) -> ok

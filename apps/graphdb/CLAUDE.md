@@ -229,7 +229,7 @@ Manages the "is a" hierarchy of class nodes in the ontology.
 
 - `create_class/2` (name, parent_class_nref)
 - `add_qualifying_characteristic/2` (class_nref, attribute_nref)
-- `get_class/1`, `subclasses/1`, `ancestors/1`, `inherited_attributes/1`
+- `get_class/1`, `subclasses/1`, `ancestors/1`, `inherited_qcs/1`
 
 ### `graphdb_instance` — Instance & Compositional Hierarchy
 

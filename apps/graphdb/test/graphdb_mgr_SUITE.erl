@@ -75,11 +75,16 @@
 	category_guard_allows_noncategory_delete/1,
 	category_guard_allows_noncategory_update/1,
 	category_guard_delete_nonexistent/1,
-	%% Write stubs
-	create_attribute_not_implemented/1,
-	create_class_not_implemented/1,
-	create_instance_not_implemented/1,
-	add_relationship_not_implemented/1,
+	%% Write delegation (L4)
+	create_name_attribute_delegates/1,
+	create_literal_attribute_delegates/1,
+	create_relationship_attribute_delegates/1,
+	create_relationship_type_delegates/1,
+	create_relationship_attribute_missing_avps/1,
+	create_attribute_unknown_parent/1,
+	create_class_delegates/1,
+	create_instance_delegates/1,
+	add_relationship_delegates/1,
 	%% Cache audit / repair
 	verify_caches_clean_after_bootstrap/1,
 	verify_caches_detects_poisoned_parents/1,
@@ -97,7 +102,7 @@ suite() ->
 
 all() ->
 	[{group, init_tests}, {group, read_ops},
-	 {group, category_guard}, {group, write_stubs},
+	 {group, category_guard}, {group, write_delegation},
 	 {group, cache_audit}].
 
 groups() ->
@@ -123,11 +128,16 @@ groups() ->
 			category_guard_allows_noncategory_update,
 			category_guard_delete_nonexistent
 		]},
-		{write_stubs, [], [
-			create_attribute_not_implemented,
-			create_class_not_implemented,
-			create_instance_not_implemented,
-			add_relationship_not_implemented
+		{write_delegation, [], [
+			create_name_attribute_delegates,
+			create_literal_attribute_delegates,
+			create_relationship_attribute_delegates,
+			create_relationship_type_delegates,
+			create_relationship_attribute_missing_avps,
+			create_attribute_unknown_parent,
+			create_class_delegates,
+			create_instance_delegates,
+			add_relationship_delegates
 		]},
 		{cache_audit, [], [
 			verify_caches_clean_after_bootstrap,
@@ -165,6 +175,9 @@ end_per_suite(_Config) ->
 %% Creates an isolated temp directory, changes cwd so nref DETS files
 %% go there, configures a private Mnesia dir, sets the bootstrap_file
 %% env, starts nref, and (for most tests) starts graphdb_mgr.
+%%
+%% write_delegation tests also start graphdb_attr, graphdb_class, and
+%% graphdb_instance so that delegated calls can reach the workers.
 %%-----------------------------------------------------------------------------
 init_per_testcase(init_fails_on_bad_config, Config) ->
 	%% Special setup for error test -- bad bootstrap path
@@ -172,6 +185,25 @@ init_per_testcase(init_fails_on_bad_config, Config) ->
 	BadPath = filename:join(proplists:get_value(tmp_dir, Config1),
 		"does_not_exist.terms"),
 	application:set_env(seerstone_graph_db, bootstrap_file, BadPath),
+	Config1;
+init_per_testcase(TC, Config) when
+		TC =:= create_name_attribute_delegates;
+		TC =:= create_literal_attribute_delegates;
+		TC =:= create_relationship_attribute_delegates;
+		TC =:= create_relationship_type_delegates;
+		TC =:= create_relationship_attribute_missing_avps;
+		TC =:= create_attribute_unknown_parent;
+		TC =:= create_class_delegates;
+		TC =:= create_instance_delegates;
+		TC =:= add_relationship_delegates ->
+	Config1 = setup_isolated_env(Config),
+	BootstrapFile = proplists:get_value(bootstrap_file, Config),
+	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
+	%% Start mgr first (runs bootstrap, sets up tables), then workers
+	{ok, _} = graphdb_mgr:start_link(),
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, _} = graphdb_class:start_link(),
+	{ok, _} = graphdb_instance:start_link(),
 	Config1;
 init_per_testcase(_TC, Config) ->
 	Config1 = setup_isolated_env(Config),
@@ -202,10 +234,15 @@ setup_isolated_env(Config) ->
 %%-----------------------------------------------------------------------------
 %% end_per_testcase/2
 %%
-%% Stops graphdb_mgr, nref, Mnesia, restores cwd, and deletes temp dir.
+%% Stops workers, graphdb_mgr, nref, Mnesia, restores cwd, and deletes
+%% temp dir.
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
 	verify_cache_invariant(TC),
+	%% Stop workers if running (write_delegation tests start these)
+	catch gen_server:stop(graphdb_instance),
+	catch gen_server:stop(graphdb_class),
+	catch gen_server:stop(graphdb_attr),
 	%% Stop graphdb_mgr if running
 	catch gen_server:stop(graphdb_mgr),
 
@@ -422,40 +459,113 @@ category_guard_delete_nonexistent(_Config) ->
 
 
 %%=============================================================================
-%% Write Stub Tests
+%% Write Delegation Tests (L4)
+%%
+%% Each test verifies that graphdb_mgr correctly routes a write call to
+%% the appropriate worker and that the result is retrievable.  Workers
+%% (graphdb_attr, graphdb_class, graphdb_instance) are pre-started in
+%% init_per_testcase for this group.
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
-%% create_attribute returns not_implemented.
+%% create_attribute delegates to create_name_attribute for Names subtree.
+%% ParentNref=6 (Names).
 %%-----------------------------------------------------------------------------
-create_attribute_not_implemented(_Config) ->
-	{ok, _} = graphdb_mgr:start_link(),
-	?assertEqual({error, not_implemented},
-		graphdb_mgr:create_attribute("TestAttr", 2, [])).
+create_name_attribute_delegates(_Config) ->
+	{ok, Nref} = graphdb_mgr:create_attribute("TestNameAttr", 6, #{}),
+	?assert(is_integer(Nref)),
+	{ok, Node} = graphdb_mgr:get_node(Nref),
+	?assertEqual(attribute, Node#node.kind).
 
 %%-----------------------------------------------------------------------------
-%% create_class returns not_implemented.
+%% create_attribute delegates to create_literal_attribute for Literals subtree.
+%% ParentNref=7 (Literals), AVPs=#{type => string}.
 %%-----------------------------------------------------------------------------
-create_class_not_implemented(_Config) ->
-	{ok, _} = graphdb_mgr:start_link(),
-	?assertEqual({error, not_implemented},
-		graphdb_mgr:create_class("TestClass", 3)).
+create_literal_attribute_delegates(_Config) ->
+	{ok, Nref} = graphdb_mgr:create_attribute("TestLiteralAttr", 7, #{type => string}),
+	?assert(is_integer(Nref)),
+	{ok, Node} = graphdb_mgr:get_node(Nref),
+	?assertEqual(attribute, Node#node.kind).
 
 %%-----------------------------------------------------------------------------
-%% create_instance returns not_implemented.
+%% create_attribute delegates to create_relationship_attribute for the
+%% Relationships subtree when reciprocal_name and target_kind are both present.
+%% Returns {ok, FwdNref} (forward nref of the pair).
 %%-----------------------------------------------------------------------------
-create_instance_not_implemented(_Config) ->
-	{ok, _} = graphdb_mgr:start_link(),
-	?assertEqual({error, not_implemented},
-		graphdb_mgr:create_instance("TestInst", 100, 200)).
+create_relationship_attribute_delegates(_Config) ->
+	{ok, Nref} = graphdb_mgr:create_attribute(
+		"Has", 8, #{reciprocal_name => "BelongsTo", target_kind => instance}),
+	?assert(is_integer(Nref)),
+	{ok, Node} = graphdb_mgr:get_node(Nref),
+	?assertEqual(attribute, Node#node.kind).
 
 %%-----------------------------------------------------------------------------
-%% add_relationship returns not_implemented.
+%% create_attribute delegates to create_relationship_type when no reciprocal
+%% keys are present (bare Relationships parent, no AVPs).
 %%-----------------------------------------------------------------------------
-add_relationship_not_implemented(_Config) ->
-	{ok, _} = graphdb_mgr:start_link(),
-	?assertEqual({error, not_implemented},
-		graphdb_mgr:add_relationship(100, 22, 200, 21)).
+create_relationship_type_delegates(_Config) ->
+	{ok, Nref} = graphdb_mgr:create_attribute("MyRelType", 8, #{}),
+	?assert(is_integer(Nref)),
+	{ok, Node} = graphdb_mgr:get_node(Nref),
+	?assertEqual(attribute, Node#node.kind).
+
+%%-----------------------------------------------------------------------------
+%% create_attribute returns an error when exactly one of reciprocal_name /
+%% target_kind is present (partial AVPs).  Both-or-neither is required for
+%% the Relationships subtree; one-of-two is the missing_avps error path.
+%%-----------------------------------------------------------------------------
+create_relationship_attribute_missing_avps(_Config) ->
+	?assertMatch({error, _},
+		graphdb_mgr:create_attribute("Has", 8, #{reciprocal_name => "BelongsTo"})).
+
+%%-----------------------------------------------------------------------------
+%% create_attribute returns {error, {unknown_attribute_parent, _}} for a
+%% ParentNref that does not belong to any recognised attribute subtree.
+%%-----------------------------------------------------------------------------
+create_attribute_unknown_parent(_Config) ->
+	?assertEqual({error, {unknown_attribute_parent, 99}},
+		graphdb_mgr:create_attribute("Bad", 99, #{})).
+
+%%-----------------------------------------------------------------------------
+%% create_class delegates to graphdb_class; the new node is readable.
+%%-----------------------------------------------------------------------------
+create_class_delegates(_Config) ->
+	{ok, Nref} = graphdb_mgr:create_class("TestClass", 3),
+	?assert(is_integer(Nref)),
+	{ok, Node} = graphdb_mgr:get_node(Nref),
+	?assertEqual(class, Node#node.kind).
+
+%%-----------------------------------------------------------------------------
+%% create_instance delegates to graphdb_instance.  A class must exist first;
+%% we use graphdb_class:create_class/2 directly to set up the prerequisite.
+%%-----------------------------------------------------------------------------
+create_instance_delegates(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("TestClass2", 3),
+	{ok, Nref} = graphdb_mgr:create_instance("TestInst", ClassNref, 5),
+	?assert(is_integer(Nref)),
+	{ok, Node} = graphdb_mgr:get_node(Nref),
+	?assertEqual(instance, Node#node.kind).
+
+%%-----------------------------------------------------------------------------
+%% add_relationship delegates to graphdb_instance.  Two instances and a
+%% relationship attribute pair are created as prerequisites.
+%%-----------------------------------------------------------------------------
+add_relationship_delegates(_Config) ->
+	%% Create a class and two instances
+	{ok, ClassNref} = graphdb_class:create_class("RelClass", 3),
+	{ok, InstA} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, InstB} = graphdb_instance:create_instance("B", ClassNref, 5),
+	%% Create a reciprocal relationship attribute pair (char/reciprocal nrefs)
+	{ok, {CharNref, RecipNref}} =
+		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+	%% Delegate through mgr
+	?assertEqual(ok,
+		graphdb_mgr:add_relationship(InstA, CharNref, InstB, RecipNref)),
+	%% Verify the arc is readable
+	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
+	Targets = [R#relationship.target_nref || R <- Rels,
+		R#relationship.characterization =:= CharNref],
+	?assertEqual([InstB], Targets).
 
 
 %%=============================================================================

@@ -24,6 +24,14 @@
 %% (graphdb_attr, graphdb_class, graphdb_instance) -- stubs return
 %% {error, not_implemented} until those workers are implemented.
 %%---------------------------------------------------------------------
+%% Rev B Date: May 2026 Author: (completion of Dallas Noyes's design)
+%% L4: wire write-side delegation -- create_attribute routes to
+%% graphdb_attr by ParentNref subtree; create_class and create_instance
+%% delegate directly to graphdb_class and graphdb_instance respectively;
+%% add_relationship delegates to graphdb_instance.  delete_node and
+%% update_node_avps remain not_implemented (no worker deletion/AVP-update
+%% API exists yet).
+%%---------------------------------------------------------------------
 -module(graphdb_mgr).
 -behaviour(gen_server).
 
@@ -321,32 +329,33 @@ handle_call({get_relationships, Nref, Direction}, _From, State) ->
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Write operations (delegate to workers)
 %%-----------------------------------------------------------------------------
-handle_call({create_attribute, _Name, _ParentNref, _AVPs}, _From, State) ->
+handle_call({create_attribute, Name, ParentNref, AVPs}, _From, State) ->
 	%% Attribute nodes are kind=attribute -- never category, no guard needed.
-	%% Delegation to graphdb_attr pending Task 3 implementation.
-	{reply, {error, not_implemented}, State};
+	%% Route to the appropriate graphdb_attr function based on ParentNref subtree.
+	{reply, do_create_attribute(Name, ParentNref, AVPs), State};
 
-handle_call({create_class, _Name, _ParentClassNref}, _From, State) ->
+handle_call({create_class, Name, ParentClassNref}, _From, State) ->
 	%% Class nodes are kind=class -- never category, no guard needed.
-	%% Delegation to graphdb_class pending Task 4 implementation.
-	{reply, {error, not_implemented}, State};
+	{reply, graphdb_class:create_class(Name, ParentClassNref), State};
 
-handle_call({create_instance, _Name, _ClassNref, _ParentNref}, _From, State) ->
+handle_call({create_instance, Name, ClassNref, ParentNref}, _From, State) ->
 	%% Instance nodes are kind=instance -- never category, no guard needed.
-	%% Delegation to graphdb_instance pending Task 5 implementation.
-	{reply, {error, not_implemented}, State};
+	{reply, graphdb_instance:create_instance(Name, ClassNref, ParentNref), State};
 
-handle_call({add_relationship, _SourceNref, _CharNref, _TargetNref, _ReciprocalNref},
+handle_call({add_relationship, SourceNref, CharNref, TargetNref, ReciprocalNref},
 		_From, State) ->
-	%% Delegation to graphdb_instance pending Task 5 implementation.
-	{reply, {error, not_implemented}, State};
+	{reply,
+		graphdb_instance:add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref),
+		State};
 
 handle_call({delete_node, Nref}, _From, State) ->
 	case check_category_guard(Nref) of
 		{error, _} = Err ->
 			{reply, Err, State};
 		ok ->
-			%% Delegation to appropriate worker pending implementation.
+			%% No worker currently implements node deletion.  The per-template
+			%% attribute category enforcement (instance-only, scoped by template)
+			%% is a known deferred gap for delete_node and update_node_avps.
 			{reply, {error, not_implemented}, State}
 	end;
 
@@ -355,7 +364,9 @@ handle_call({update_node_avps, Nref, _AVPs}, _From, State) ->
 		{error, _} = Err ->
 			{reply, Err, State};
 		ok ->
-			%% Delegation to appropriate worker pending implementation.
+			%% No worker currently implements AVP-update operations.  The
+			%% instance-only attribute category enforcement (per-template) is a
+			%% known deferred gap for update_node_avps and create_class.
 			{reply, {error, not_implemented}, State}
 	end;
 
@@ -400,10 +411,9 @@ validate_direction(Dir)      -> {error, {invalid_direction, Dir}}.
 %% Reads a node from the Mnesia nodes table.
 %%-----------------------------------------------------------------------------
 do_get_node(Nref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
-		{atomic, [Node]}   -> {ok, Node};
-		{atomic, []}       -> {error, not_found};
-		{aborted, Reason}  -> {error, Reason}
+	case mnesia:dirty_read(nodes, Nref) of
+		[Node] -> {ok, Node};
+		[]     -> {error, not_found}
 	end.
 
 
@@ -542,3 +552,60 @@ rebuild_one(Nref) ->
 	Classes = expected_classes(Nref),
 	Updated = Node#node{parents = Parents, classes = Classes},
 	ok = mnesia:write(nodes, Updated, write).
+
+
+%%-----------------------------------------------------------------------------
+%% do_create_attribute(Name, ParentNref, AVPs) -> {ok, Nref} | {error, term()}
+%%
+%% Routes create_attribute to the appropriate graphdb_attr function based
+%% on the parent nref's position in the attribute library tree:
+%%
+%%   Names subtree  (6, 9-12):
+%%     create_name_attribute(Name) -> {ok, Nref}
+%%
+%%   Literals subtree (7):
+%%     create_literal_attribute(Name, Type)  where Type = maps:get(type, AVPs, string)
+%%
+%%   Relationships subtree (8, 13-16):
+%%     If AVPs contains both reciprocal_name and target_kind:
+%%       create_relationship_attribute(Name, RecipName, TargetKind)
+%%         -> {ok, {FwdNref, RevNref}} -- the forward nref is returned
+%%     If AVPs contains neither (relationship-type grouping):
+%%       create_relationship_type(Name) -> {ok, Nref}
+%%     Otherwise:
+%%       {error, {missing_avps, [reciprocal_name, target_kind]}}
+%%
+%%   Anything else:
+%%     {error, {unknown_attribute_parent, ParentNref}}
+%%
+%% AVPs is a plain Erlang map (not a graph AVP list), e.g. #{type => integer}.
+%%-----------------------------------------------------------------------------
+do_create_attribute(Name, ParentNref, _AVPs)
+		when ParentNref =:= 6;
+		     ParentNref =:= 9; ParentNref =:= 10;
+		     ParentNref =:= 11; ParentNref =:= 12 ->
+	graphdb_attr:create_name_attribute(Name);
+
+do_create_attribute(Name, 7, AVPs) ->
+	Type = maps:get(type, AVPs, string),
+	graphdb_attr:create_literal_attribute(Name, Type);
+
+do_create_attribute(Name, ParentNref, AVPs)
+		when ParentNref =:= 8;
+		     ParentNref =:= 13; ParentNref =:= 14;
+		     ParentNref =:= 15; ParentNref =:= 16 ->
+	case {maps:find(reciprocal_name, AVPs), maps:find(target_kind, AVPs)} of
+		{{ok, RecipName}, {ok, TargetKind}} ->
+			case graphdb_attr:create_relationship_attribute(Name, RecipName, TargetKind) of
+				{ok, {FwdNref, _RevNref}} -> {ok, FwdNref};
+				{error, _} = Err          -> Err
+			end;
+		{error, error} ->
+			%% Neither key present -- treat as relationship-type grouping
+			graphdb_attr:create_relationship_type(Name);
+		_ ->
+			{error, {missing_avps, [reciprocal_name, target_kind]}}
+	end;
+
+do_create_attribute(_Name, ParentNref, _AVPs) ->
+	{error, {unknown_attribute_parent, ParentNref}}.
