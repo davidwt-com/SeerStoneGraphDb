@@ -36,6 +36,7 @@
 %%---------------------------------------------------------------------
 %% Include files
 %%---------------------------------------------------------------------
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
 
 %%---------------------------------------------------------------------
 %% Macro Functions
@@ -52,22 +53,6 @@
 %% The declared base language of the environment database.
 %% Hard-coded; changing this requires a full data migration.
 -define(ENV_LANGUAGE_CODE, en).
-
-%% Bootstrap nrefs
--define(PARENT_LITERALS, 7).    %% Literals subtree
--define(PARENT_CLASSES,  3).    %% Classes root
--define(HUMAN_LANGS,    32).    %% Human Languages category
--define(NAME_ATTR_FOR_ATTRIBUTE, 18).
--define(NAME_ATTR_FOR_CLASS,     19).
--define(NAME_ATTR_FOR_INSTANCE,  20).
--define(ATTR_PARENT_ARC, 23).   %% Parent/AttrRel -- taxonomy
--define(ATTR_CHILD_ARC,  24).   %% Child/AttrRel  -- taxonomy
--define(CLASS_CHILD_ARC, 26).   %% Child/ClassRel -- taxonomy
--define(INST_PARENT_ARC, 27).   %% Parent/InstRel
--define(INST_CHILD_ARC,  28).   %% Child/InstRel
--define(CLASS_MEMBERSHIP_ARC,    29).
--define(INSTANCE_MEMBERSHIP_ARC, 30).
-
 
 %%---------------------------------------------------------------------
 %% Suppress warnings for pure helpers only used under TEST
@@ -234,7 +219,7 @@ do_make_chain([Code | Rest], Output, DMap) ->
 init([]) ->
     try
         LangCodeNref         = find_literal_by_name("lang_code"),
-        LangHumanNref        = find_class_by_name(?PARENT_CLASSES, "Human Language"),
+        LangHumanNref        = find_class_by_name(?NREF_CLASSES, "Human Language"),
         BaseLangNref         = ensure_literal_seed("base_language"),
         ProjectLangNref      = ensure_literal_seed("project_language"),
         ok = ensure_overlay_table(language_en),
@@ -380,7 +365,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% Throws {error, Reason} if not found (bootstrap requirement).
 %%---------------------------------------------------------------------
 find_literal_by_name(Name) ->
-	case graphdb_attr:find_attribute_by_name(?PARENT_LITERALS, Name) of
+	case graphdb_attr:find_attribute_by_name(?NREF_LITERALS, Name) of
 		{ok, Nref} -> Nref;
 		not_found  -> throw({error, {literal_not_found, Name}})
 	end.
@@ -395,7 +380,7 @@ find_literal_by_name(Name) ->
 %%---------------------------------------------------------------------
 find_class_by_name(ParentNref, Name) ->
 	F = fun() ->
-		Children = downward_children_by_arc(ParentNref, ?CLASS_CHILD_ARC,
+		Children = downward_children_by_arc(ParentNref, ?ARC_CLS_CHILD,
 			taxonomy),
 		lists:search(fun(N) -> class_has_name(N, Name) end, Children)
 	end,
@@ -413,35 +398,35 @@ find_class_by_name(ParentNref, Name) ->
 %% attribute by name under Literals (7); creates it if absent.
 %%---------------------------------------------------------------------
 ensure_literal_seed(Name) ->
-	case graphdb_attr:find_attribute_by_name(?PARENT_LITERALS, Name) of
+	case graphdb_attr:find_attribute_by_name(?NREF_LITERALS, Name) of
 		{ok, Nref} ->
 			Nref;
 		not_found ->
 			Nref = nref_server:get_nref(),
-			NameAVP = #{attribute => ?NAME_ATTR_FOR_ATTRIBUTE, value => Name},
+			NameAVP = #{attribute => ?NAME_ATTR_ATTRIBUTE, value => Name},
 			Node = #node{
 				nref = Nref,
 				kind = attribute,
-				parents = [?PARENT_LITERALS],
+				parents = [?NREF_LITERALS],
 				attribute_value_pairs = [NameAVP]
 			},
 			{Id1, Id2} = rel_id_server:get_id_pair(),
 			P2C = #relationship{
 				id             = Id1,
 				kind           = taxonomy,
-				source_nref    = ?PARENT_LITERALS,
-				characterization = ?ATTR_CHILD_ARC,
+				source_nref    = ?NREF_LITERALS,
+				characterization = ?ARC_ATTR_CHILD,
 				target_nref    = Nref,
-				reciprocal     = ?ATTR_PARENT_ARC,
+				reciprocal     = ?ARC_ATTR_PARENT,
 				avps           = []
 			},
 			C2P = #relationship{
 				id             = Id2,
 				kind           = taxonomy,
 				source_nref    = Nref,
-				characterization = ?ATTR_PARENT_ARC,
-				target_nref    = ?PARENT_LITERALS,
-				reciprocal     = ?ATTR_CHILD_ARC,
+				characterization = ?ARC_ATTR_PARENT,
+				target_nref    = ?NREF_LITERALS,
+				reciprocal     = ?ARC_ATTR_CHILD,
 				avps           = []
 			},
 			F = fun() ->
@@ -485,7 +470,7 @@ build_lang_maps(LangCodeNref, BaseLangNref, LangHumanNref) ->
 			#relationship.source_nref),
 		InstNrefs = [A#relationship.target_nref || A <- Arcs,
 			A#relationship.kind          =:= instantiation,
-			A#relationship.characterization =:= ?INSTANCE_MEMBERSHIP_ARC],
+			A#relationship.characterization =:= ?ARC_CLASS_TO_INST],
 		Nodes = lists:flatmap(fun(N) -> mnesia:read(nodes, N) end, InstNrefs),
 		{CM, NC} = lists:foldl(fun
 			(#node{nref = Nref, attribute_value_pairs = AVPs}, {C, N}) ->
@@ -545,7 +530,7 @@ avp_value(AttrNref, AVPs) ->
 %%---------------------------------------------------------------------
 class_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 	lists:any(fun
-		(#{attribute := ?NAME_ATTR_FOR_CLASS, value := V}) -> V =:= Name;
+		(#{attribute := ?NAME_ATTR_CLASS, value := V}) -> V =:= Name;
 		(_) -> false
 	end, AVPs).
 
@@ -599,7 +584,7 @@ do_register_language(Code, Name, State) ->
 	       lang_human_nref = LHNref} = State,
 	Nref              = nref_server:get_nref(),
 	{ArcId1, ArcId2} = rel_id_server:get_id_pair(),
-	NameAVP = #{attribute => ?NAME_ATTR_FOR_INSTANCE, value => Name},
+	NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
 	CodeAVP = #{attribute => LCAttr,                 value => Code},
 	Node = #node{
 		nref                  = Nref,
@@ -612,18 +597,18 @@ do_register_language(Code, Name, State) ->
 		id               = ArcId1,
 		kind             = instantiation,
 		source_nref      = Nref,
-		characterization = ?CLASS_MEMBERSHIP_ARC,
+		characterization = ?ARC_INST_TO_CLASS,
 		target_nref      = LHNref,
-		reciprocal       = ?INSTANCE_MEMBERSHIP_ARC,
+		reciprocal       = ?ARC_CLASS_TO_INST,
 		avps             = []
 	},
 	C2I = #relationship{
 		id               = ArcId2,
 		kind             = instantiation,
 		source_nref      = LHNref,
-		characterization = ?INSTANCE_MEMBERSHIP_ARC,
+		characterization = ?ARC_CLASS_TO_INST,
 		target_nref      = Nref,
-		reciprocal       = ?CLASS_MEMBERSHIP_ARC,
+		reciprocal       = ?ARC_INST_TO_CLASS,
 		avps             = []
 	},
 	F = fun() ->
@@ -661,7 +646,7 @@ do_register_dialect(Code, Name, BaseCode, State) ->
 			       lang_human_nref = LHNref} = State,
 			Nref              = nref_server:get_nref(),
 			{ArcId1, ArcId2} = rel_id_server:get_id_pair(),
-			NameAVP = #{attribute => ?NAME_ATTR_FOR_INSTANCE, value => Name},
+			NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
 			CodeAVP = #{attribute => LCAttr,  value => Code},
 			BaseAVP = #{attribute => BLAttr,  value => BaseNref},
 			Node = #node{
@@ -675,18 +660,18 @@ do_register_dialect(Code, Name, BaseCode, State) ->
 				id               = ArcId1,
 				kind             = instantiation,
 				source_nref      = Nref,
-				characterization = ?CLASS_MEMBERSHIP_ARC,
+				characterization = ?ARC_INST_TO_CLASS,
 				target_nref      = LHNref,
-				reciprocal       = ?INSTANCE_MEMBERSHIP_ARC,
+				reciprocal       = ?ARC_CLASS_TO_INST,
 				avps             = []
 			},
 			C2I = #relationship{
 				id               = ArcId2,
 				kind             = instantiation,
 				source_nref      = LHNref,
-				characterization = ?INSTANCE_MEMBERSHIP_ARC,
+				characterization = ?ARC_CLASS_TO_INST,
 				target_nref      = Nref,
-				reciprocal       = ?CLASS_MEMBERSHIP_ARC,
+				reciprocal       = ?ARC_INST_TO_CLASS,
 				avps             = []
 			},
 			F = fun() ->

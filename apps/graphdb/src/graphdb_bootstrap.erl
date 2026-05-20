@@ -57,6 +57,11 @@
 
 
 %%---------------------------------------------------------------------
+%% Include Files
+%%---------------------------------------------------------------------
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
+
+%%---------------------------------------------------------------------
 %% Record Definitions
 %%---------------------------------------------------------------------
 -record(node, {
@@ -240,6 +245,10 @@ do_load() ->
 			ok = write_nodes(ResNodes),
 			ok = write_relationships(ResRels),
 			ok = rebuild_and_verify_caches(),
+			ok = case graphdb_nrefs:verify() of
+				ok -> ok;
+				{error, _} = E -> throw(E)
+			end,
 			logger:info("graphdb_bootstrap: loaded ~p nodes, ~p relationship pairs",
 				[length(ResNodes), length(ResRels)]),
 			ok;

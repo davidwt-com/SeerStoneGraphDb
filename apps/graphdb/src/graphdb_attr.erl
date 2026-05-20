@@ -57,6 +57,7 @@
 %%---------------------------------------------------------------------
 %% Include files
 %%---------------------------------------------------------------------
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
 
 %%---------------------------------------------------------------------
 %% Macro Functions
@@ -76,29 +77,6 @@
 					io:format("*** UEM ~p:~p ~p ~p~n",[?MODULE, F, ?LINE, X]),
 					exit(uem)
 				 end)).
-
-
-%%---------------------------------------------------------------------
-%% Bootstrap nref constants
-%%---------------------------------------------------------------------
-%% Parents in the attribute library tree.
--define(PARENT_NAMES,         6).  %% Names subtree
--define(PARENT_LITERALS,      7).  %% Literals subtree
--define(PARENT_RELATIONSHIPS, 8).  %% Relationships subtree
-
-%% NameAttrNref for attribute-kind nodes (self-ref in bootstrap).
--define(NAME_ATTR_FOR_ATTRIBUTE, 18).
-
-%% Compositional arc labels for attribute children of attribute parents
-%% (self-referential arc labels 23 and 24 from bootstrap).
--define(ATTR_CHILD_ARC,  24).  %% Child/AttrRel  -- parent -> child
--define(ATTR_PARENT_ARC, 23).  %% Parent/AttrRel -- child  -> parent
-
-%% Bootstrap-seeded `Template` relationship-AVP marker attribute.  The
-%% `relationship_avp => true` flag is stamped on this node by init/1
-%% post-bootstrap (the flag-attribute is seeded first, then this node
-%% is updated -- bootstrap.terms cannot reference a runtime-seeded nref).
--define(TEMPLATE_AVP_NREF, 31).
 
 
 %%---------------------------------------------------------------------
@@ -338,14 +316,14 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 handle_call({create_name_attribute, Name}, _From, State) ->
 	Extra = [attr_type_avp(name, State)],
-	Reply = do_create_attribute(Name, ?PARENT_NAMES, Extra),
+	Reply = do_create_attribute(Name, ?NREF_NAMES, Extra),
 	{reply, Reply, State};
 
 handle_call({create_literal_attribute, Name, Type}, _From,
 		#state{literal_type_nref = TypeAttr} = State) ->
 	Extra = [#{attribute => TypeAttr, value => Type},
 			 attr_type_avp(literal, State)],
-	Reply = do_create_attribute(Name, ?PARENT_LITERALS, Extra),
+	Reply = do_create_attribute(Name, ?NREF_LITERALS, Extra),
 	{reply, Reply, State};
 
 handle_call({create_relationship_attribute, Name, ReciprocalName, TargetKind},
@@ -358,7 +336,7 @@ handle_call({create_relationship_attribute, Name, ReciprocalName, TargetKind},
 
 handle_call({create_relationship_type, Name}, _From, State) ->
 	Extra = [attr_type_avp(relationship, State)],
-	Reply = do_create_attribute(Name, ?PARENT_RELATIONSHIPS, Extra),
+	Reply = do_create_attribute(Name, ?NREF_RELATIONSHIPS, Extra),
 	{reply, Reply, State};
 
 %%-----------------------------------------------------------------------------
@@ -371,7 +349,7 @@ handle_call(list_attributes, _From, State) ->
 	{reply, do_list_attributes(), State};
 
 handle_call(list_relationship_types, _From, State) ->
-	{reply, do_list_children(?PARENT_RELATIONSHIPS), State};
+	{reply, do_list_children(?NREF_RELATIONSHIPS), State};
 
 handle_call({attribute_type_of, Nref}, _From,
 		#state{attribute_type_nref = AtAttr} = State) ->
@@ -428,11 +406,11 @@ valid_target_kind(_)         -> false.
 %% Throws {error, Reason} on failure.
 %%-----------------------------------------------------------------------------
 ensure_seed(Name) ->
-	case find_attribute_by_name(?PARENT_LITERALS, Name) of
+	case find_attribute_by_name(?NREF_LITERALS, Name) of
 		{ok, Nref} ->
 			Nref;
 		not_found ->
-			case do_create_attribute(Name, ?PARENT_LITERALS, []) of
+			case do_create_attribute(Name, ?NREF_LITERALS, []) of
 				{ok, Nref}       -> Nref;
 				{error, Reason}  -> throw({error, Reason})
 			end
@@ -448,7 +426,7 @@ ensure_seed(Name) ->
 %%-----------------------------------------------------------------------------
 find_attribute_by_name(ParentNref, Name) ->
 	F = fun() ->
-		Children = downward_children_by_arc(ParentNref, ?ATTR_CHILD_ARC,
+		Children = downward_children_by_arc(ParentNref, ?ARC_ATTR_CHILD,
 			taxonomy),
 		lists:search(fun(N) -> node_has_name(N, Name) end, Children)
 	end,
@@ -464,7 +442,7 @@ find_attribute_by_name(ParentNref, Name) ->
 %%-----------------------------------------------------------------------------
 node_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 	lists:any(fun
-		(#{attribute := ?NAME_ATTR_FOR_ATTRIBUTE, value := V}) -> V =:= Name;
+		(#{attribute := ?NAME_ATTR_ATTRIBUTE, value := V}) -> V =:= Name;
 		(_) -> false
 	end, AVPs).
 
@@ -484,7 +462,7 @@ node_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 %%-----------------------------------------------------------------------------
 do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 	Nref = nref_server:get_nref(),
-	NameAVP = #{attribute => ?NAME_ATTR_FOR_ATTRIBUTE, value => Name},
+	NameAVP = #{attribute => ?NAME_ATTR_ATTRIBUTE, value => Name},
 	Node = #node{
 		nref = Nref,
 		kind = attribute,
@@ -496,18 +474,18 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 		id = Id1,
 		kind = taxonomy,
 		source_nref = ParentNref,
-		characterization = ?ATTR_CHILD_ARC,
+		characterization = ?ARC_ATTR_CHILD,
 		target_nref = Nref,
-		reciprocal = ?ATTR_PARENT_ARC,
+		reciprocal = ?ARC_ATTR_PARENT,
 		avps = []
 	},
 	C2P = #relationship{
 		id = Id2,
 		kind = taxonomy,
 		source_nref = Nref,
-		characterization = ?ATTR_PARENT_ARC,
+		characterization = ?ARC_ATTR_PARENT,
 		target_nref = ParentNref,
-		reciprocal = ?ATTR_CHILD_ARC,
+		reciprocal = ?ARC_ATTR_CHILD,
 		avps = []
 	},
 	Txn = fun() ->
@@ -536,58 +514,58 @@ do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
 	RevNref = nref_server:get_nref(),
 	{Id1, Id2} = rel_id_server:get_id_pair(),
 	{Id3, Id4} = rel_id_server:get_id_pair(),
-	FwdAVPs = [#{attribute => ?NAME_ATTR_FOR_ATTRIBUTE, value => FwdName}
+	FwdAVPs = [#{attribute => ?NAME_ATTR_ATTRIBUTE, value => FwdName}
 		| ExtraAVPs],
-	RevAVPs = [#{attribute => ?NAME_ATTR_FOR_ATTRIBUTE, value => RevName}
+	RevAVPs = [#{attribute => ?NAME_ATTR_ATTRIBUTE, value => RevName}
 		| ExtraAVPs],
 	FwdNode = #node{
 		nref = FwdNref,
 		kind = attribute,
-		parents = [?PARENT_RELATIONSHIPS],
+		parents = [?NREF_RELATIONSHIPS],
 		attribute_value_pairs = FwdAVPs
 	},
 	RevNode = #node{
 		nref = RevNref,
 		kind = attribute,
-		parents = [?PARENT_RELATIONSHIPS],
+		parents = [?NREF_RELATIONSHIPS],
 		attribute_value_pairs = RevAVPs
 	},
 	%% Forward node taxonomy arcs.
 	FwdP2C = #relationship{
 		id = Id1,
 		kind = taxonomy,
-		source_nref = ?PARENT_RELATIONSHIPS,
-		characterization = ?ATTR_CHILD_ARC,
+		source_nref = ?NREF_RELATIONSHIPS,
+		characterization = ?ARC_ATTR_CHILD,
 		target_nref = FwdNref,
-		reciprocal = ?ATTR_PARENT_ARC,
+		reciprocal = ?ARC_ATTR_PARENT,
 		avps = []
 	},
 	FwdC2P = #relationship{
 		id = Id2,
 		kind = taxonomy,
 		source_nref = FwdNref,
-		characterization = ?ATTR_PARENT_ARC,
-		target_nref = ?PARENT_RELATIONSHIPS,
-		reciprocal = ?ATTR_CHILD_ARC,
+		characterization = ?ARC_ATTR_PARENT,
+		target_nref = ?NREF_RELATIONSHIPS,
+		reciprocal = ?ARC_ATTR_CHILD,
 		avps = []
 	},
 	%% Reciprocal node taxonomy arcs.
 	RevP2C = #relationship{
 		id = Id3,
 		kind = taxonomy,
-		source_nref = ?PARENT_RELATIONSHIPS,
-		characterization = ?ATTR_CHILD_ARC,
+		source_nref = ?NREF_RELATIONSHIPS,
+		characterization = ?ARC_ATTR_CHILD,
 		target_nref = RevNref,
-		reciprocal = ?ATTR_PARENT_ARC,
+		reciprocal = ?ARC_ATTR_PARENT,
 		avps = []
 	},
 	RevC2P = #relationship{
 		id = Id4,
 		kind = taxonomy,
 		source_nref = RevNref,
-		characterization = ?ATTR_PARENT_ARC,
-		target_nref = ?PARENT_RELATIONSHIPS,
-		reciprocal = ?ATTR_CHILD_ARC,
+		characterization = ?ARC_ATTR_PARENT,
+		target_nref = ?NREF_RELATIONSHIPS,
+		reciprocal = ?ARC_ATTR_CHILD,
 		avps = []
 	},
 	Txn = fun() ->
@@ -635,7 +613,7 @@ do_list_attributes() ->
 %%-----------------------------------------------------------------------------
 do_list_children(ParentNref) ->
 	F = fun() ->
-		downward_children_by_arc(ParentNref, ?ATTR_CHILD_ARC, taxonomy)
+		downward_children_by_arc(ParentNref, ?ARC_ATTR_CHILD, taxonomy)
 	end,
 	case mnesia:transaction(F) of
 		{atomic, Nodes}   -> {ok, Nodes};
@@ -758,9 +736,9 @@ has_attribute_type_avp(AVPs, AtAttrNref) ->
 %% Walks the parents cache to determine which top-level attribute
 %% subtree (6/7/8) the node belongs to.  Must run inside a Mnesia
 %% transaction.  Visited list guards against cycles in malformed data.
-classify_attribute_node(?PARENT_NAMES,         _Visited) -> name;
-classify_attribute_node(?PARENT_LITERALS,      _Visited) -> literal;
-classify_attribute_node(?PARENT_RELATIONSHIPS, _Visited) -> relationship;
+classify_attribute_node(?NREF_NAMES,         _Visited) -> name;
+classify_attribute_node(?NREF_LITERALS,      _Visited) -> literal;
+classify_attribute_node(?NREF_RELATIONSHIPS, _Visited) -> relationship;
 classify_attribute_node(Nref, Visited) ->
 	case lists:member(Nref, Visited) of
 		true ->
@@ -787,7 +765,7 @@ classify_attribute_node(Nref, Visited) ->
 %%-----------------------------------------------------------------------------
 ensure_template_avp_marker(RelAvpAttrNref) ->
 	Txn = fun() ->
-		case mnesia:read(nodes, ?TEMPLATE_AVP_NREF) of
+		case mnesia:read(nodes, ?ARC_TEMPLATE) of
 			[#node{attribute_value_pairs = AVPs} = Node] ->
 				Already = lists:any(fun
 					(#{attribute := A, value := true}) -> A =:= RelAvpAttrNref;
@@ -804,7 +782,7 @@ ensure_template_avp_marker(RelAvpAttrNref) ->
 						ok = mnesia:write(nodes, Updated, write)
 				end;
 			[] ->
-				throw({error, {template_avp_node_missing, ?TEMPLATE_AVP_NREF}})
+				throw({error, {template_avp_node_missing, ?ARC_TEMPLATE}})
 		end
 	end,
 	case mnesia:transaction(Txn) of

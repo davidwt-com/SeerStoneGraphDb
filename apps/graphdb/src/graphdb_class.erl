@@ -47,6 +47,7 @@
 %%---------------------------------------------------------------------
 %% Include files
 %%---------------------------------------------------------------------
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
 
 %%---------------------------------------------------------------------
 %% Macro Functions
@@ -68,22 +69,6 @@
 				 end)).
 
 
-%%---------------------------------------------------------------------
-%% Bootstrap nref constants
-%%---------------------------------------------------------------------
-%% Classes category — top-level organisational anchor for all classes.
--define(CLASSES_CATEGORY, 3).
-
-%% NameAttrNref for class-kind nodes.
--define(NAME_ATTR_FOR_CLASS, 19).
-
-%% Compositional arc labels for class children of class parents.
--define(CLASS_CHILD_ARC,  26).  %% Child/ClassRel  -- parent -> child
--define(CLASS_PARENT_ARC, 25).  %% Parent/ClassRel -- child  -> parent
-
-%% Default template name auto-attached to every newly created class.
-%% Class authors may delete the default template to force explicit
-%% disambiguation on subsequent Connection arcs.
 -define(DEFAULT_TEMPLATE_NAME, "default").
 
 
@@ -423,8 +408,8 @@ do_create_class(Name, ParentClassNref) ->
 			{TaxId1, TaxId2}       = rel_id_server:get_id_pair(),
 			TemplateNref           = nref_server:get_nref(),
 			{TmplCompId1, TmplCompId2} = rel_id_server:get_id_pair(),
-			ClassNameAVP    = #{attribute => ?NAME_ATTR_FOR_CLASS, value => Name},
-			TemplateNameAVP = #{attribute => ?NAME_ATTR_FOR_CLASS,
+			ClassNameAVP    = #{attribute => ?NAME_ATTR_CLASS, value => Name},
+			TemplateNameAVP = #{attribute => ?NAME_ATTR_CLASS,
 				value => ?DEFAULT_TEMPLATE_NAME},
 			ClassNode = #node{
 				nref = ClassNref,
@@ -441,33 +426,33 @@ do_create_class(Name, ParentClassNref) ->
 			TaxP2C = #relationship{
 				id = TaxId1, kind = taxonomy,
 				source_nref = ParentClassNref,
-				characterization = ?CLASS_CHILD_ARC,
+				characterization = ?ARC_CLS_CHILD,
 				target_nref = ClassNref,
-				reciprocal = ?CLASS_PARENT_ARC,
+				reciprocal = ?ARC_CLS_PARENT,
 				avps = []
 			},
 			TaxC2P = #relationship{
 				id = TaxId2, kind = taxonomy,
 				source_nref = ClassNref,
-				characterization = ?CLASS_PARENT_ARC,
+				characterization = ?ARC_CLS_PARENT,
 				target_nref = ParentClassNref,
-				reciprocal = ?CLASS_CHILD_ARC,
+				reciprocal = ?ARC_CLS_CHILD,
 				avps = []
 			},
 			TmplP2C = #relationship{
 				id = TmplCompId1, kind = composition,
 				source_nref = ClassNref,
-				characterization = ?CLASS_CHILD_ARC,
+				characterization = ?ARC_CLS_CHILD,
 				target_nref = TemplateNref,
-				reciprocal = ?CLASS_PARENT_ARC,
+				reciprocal = ?ARC_CLS_PARENT,
 				avps = []
 			},
 			TmplC2P = #relationship{
 				id = TmplCompId2, kind = composition,
 				source_nref = TemplateNref,
-				characterization = ?CLASS_PARENT_ARC,
+				characterization = ?ARC_CLS_PARENT,
 				target_nref = ClassNref,
-				reciprocal = ?CLASS_CHILD_ARC,
+				reciprocal = ?ARC_CLS_CHILD,
 				avps = []
 			},
 			Txn = fun() ->
@@ -522,17 +507,17 @@ do_write_superclass(ClassNref, AdditionalParentNref) ->
 				C2P = #relationship{
 					id = Id1, kind = taxonomy,
 					source_nref = ClassNref,
-					characterization = ?CLASS_PARENT_ARC,
+					characterization = ?ARC_CLS_PARENT,
 					target_nref = AdditionalParentNref,
-					reciprocal = ?CLASS_CHILD_ARC,
+					reciprocal = ?ARC_CLS_CHILD,
 					avps = []
 				},
 				P2C = #relationship{
 					id = Id2, kind = taxonomy,
 					source_nref = AdditionalParentNref,
-					characterization = ?CLASS_CHILD_ARC,
+					characterization = ?ARC_CLS_CHILD,
 					target_nref = ClassNref,
-					reciprocal = ?CLASS_PARENT_ARC,
+					reciprocal = ?ARC_CLS_PARENT,
 					avps = []
 				},
 				Updated = Node#node{
@@ -574,7 +559,7 @@ do_add_template(ClassNref, Name) ->
 do_write_template(ClassNref, Name) ->
 	TemplateNref = nref_server:get_nref(),
 	{Id1, Id2} = rel_id_server:get_id_pair(),
-	NameAVP = #{attribute => ?NAME_ATTR_FOR_CLASS, value => Name},
+	NameAVP = #{attribute => ?NAME_ATTR_CLASS, value => Name},
 	Node = #node{
 		nref = TemplateNref,
 		kind = template,
@@ -584,17 +569,17 @@ do_write_template(ClassNref, Name) ->
 	P2C = #relationship{
 		id = Id1, kind = composition,
 		source_nref = ClassNref,
-		characterization = ?CLASS_CHILD_ARC,
+		characterization = ?ARC_CLS_CHILD,
 		target_nref = TemplateNref,
-		reciprocal = ?CLASS_PARENT_ARC,
+		reciprocal = ?ARC_CLS_PARENT,
 		avps = []
 	},
 	C2P = #relationship{
 		id = Id2, kind = composition,
 		source_nref = TemplateNref,
-		characterization = ?CLASS_PARENT_ARC,
+		characterization = ?ARC_CLS_PARENT,
 		target_nref = ClassNref,
-		reciprocal = ?CLASS_CHILD_ARC,
+		reciprocal = ?ARC_CLS_CHILD,
 		avps = []
 	},
 	Txn = fun() ->
@@ -617,7 +602,7 @@ do_write_template(ClassNref, Name) ->
 %%-----------------------------------------------------------------------------
 do_find_template_by_name(ClassNref, Name) ->
 	F = fun() ->
-		Children = downward_children_by_arc(ClassNref, ?CLASS_CHILD_ARC,
+		Children = downward_children_by_arc(ClassNref, ?ARC_CLS_CHILD,
 			composition),
 		lists:search(fun
 			(#node{kind = template} = N) -> template_has_name(N, Name);
@@ -632,7 +617,7 @@ do_find_template_by_name(ClassNref, Name) ->
 
 template_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 	lists:any(fun
-		(#{attribute := ?NAME_ATTR_FOR_CLASS, value := V}) -> V =:= Name;
+		(#{attribute := ?NAME_ATTR_CLASS, value := V}) -> V =:= Name;
 		(_) -> false
 	end, AVPs).
 
@@ -654,7 +639,7 @@ do_get_template(Nref) ->
 %%-----------------------------------------------------------------------------
 do_templates_for_class(ClassNref) ->
 	F = fun() ->
-		Children = downward_children_by_arc(ClassNref, ?CLASS_CHILD_ARC,
+		Children = downward_children_by_arc(ClassNref, ?ARC_CLS_CHILD,
 			composition),
 		[N || N <- Children, N#node.kind =:= template]
 	end,
@@ -698,7 +683,7 @@ do_class_in_ancestry(CandidateNref, ClassNref) ->
 %% Validates that ParentNref is either the Classes category (nref 3) or
 %% an existing class node.
 %%-----------------------------------------------------------------------------
-do_validate_parent(?CLASSES_CATEGORY) ->
+do_validate_parent(?NREF_CLASSES) ->
 	ok;
 do_validate_parent(Nref) ->
 	case mnesia:dirty_read(nodes, Nref) of
@@ -779,7 +764,7 @@ do_get_class(Nref) ->
 %%-----------------------------------------------------------------------------
 do_subclasses(ClassNref) ->
 	F = fun() ->
-		Children = downward_children_by_arc(ClassNref, ?CLASS_CHILD_ARC,
+		Children = downward_children_by_arc(ClassNref, ?ARC_CLS_CHILD,
 			taxonomy),
 		[N || N <- Children, N#node.kind =:= class]
 	end,
@@ -803,7 +788,7 @@ do_subclasses(ClassNref) ->
 do_ancestors(ClassNref) ->
 	case mnesia:dirty_read(nodes, ClassNref) of
 		[#node{kind = class, parents = Parents}] ->
-			Initial = [P || P <- Parents, P =/= ?CLASSES_CATEGORY],
+			Initial = [P || P <- Parents, P =/= ?NREF_CLASSES],
 			do_walk_ancestors(Initial, sets:from_list(Initial), []);
 		[_] ->
 			{error, not_a_class};
@@ -821,7 +806,7 @@ do_walk_ancestors([Nref | Rest], Visited, Acc) ->
 	case mnesia:dirty_read(nodes, Nref) of
 		[#node{kind = class, parents = Parents} = Node] ->
 			New = [P || P <- Parents,
-				P =/= ?CLASSES_CATEGORY,
+				P =/= ?NREF_CLASSES,
 				not sets:is_element(P, Visited)],
 			NewVisited = lists:foldl(fun sets:add_element/2, Visited, New),
 			do_walk_ancestors(Rest ++ New, NewVisited, [Node | Acc]);
@@ -876,14 +861,14 @@ do_inherited_qcs(ClassNref) ->
 %% collect_qc_avps(Nodes) -> [{integer(), term() | undefined}]
 %%
 %% Collects qualifying-characteristic {AttrNref, Value} pairs from a
-%% list of nodes.  The class name AVP (attribute = ?NAME_ATTR_FOR_CLASS)
+%% list of nodes.  The class name AVP (attribute = ?NAME_ATTR_CLASS)
 %% is excluded — it is not a QC.  Deduplicates by AttrNref in list order
 %% (first occurrence wins).
 %%-----------------------------------------------------------------------------
 collect_qc_avps(Nodes) ->
 	lists:foldl(fun(#node{attribute_value_pairs = AVPs}, Acc) ->
 		lists:foldl(fun
-			(#{attribute := ?NAME_ATTR_FOR_CLASS}, A) ->
+			(#{attribute := ?NAME_ATTR_CLASS}, A) ->
 				A;  % skip class name AVP
 			(#{attribute := Attr, value := V}, A) ->
 				case lists:keymember(Attr, 1, A) of

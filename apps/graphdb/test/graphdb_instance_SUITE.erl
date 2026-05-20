@@ -15,6 +15,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
 
 
 %%---------------------------------------------------------------------
@@ -302,7 +303,7 @@ create_instance_basic(_Config) ->
 	{ok, Node} = graphdb_instance:get_instance(InstNref),
 	?assertEqual(instance, Node#node.kind),
 	?assertEqual([5], Node#node.parents),
-	?assertEqual([#{attribute => 20, value => "Car1"}],
+	?assertEqual([#{attribute => ?NAME_ATTR_INSTANCE, value => "Car1"}],
 		Node#node.attribute_value_pairs).
 
 %%-----------------------------------------------------------------------------
@@ -342,8 +343,8 @@ create_instance_writes_membership_arcs(_Config) ->
 	end),
 	?assert(lists:any(fun(R) ->
 		R#relationship.target_nref =:= ClassNref andalso
-		R#relationship.characterization =:= 29 andalso
-		R#relationship.reciprocal =:= 30
+		R#relationship.characterization =:= ?ARC_INST_TO_CLASS andalso
+		R#relationship.reciprocal =:= ?ARC_CLASS_TO_INST
 	end, InstOut)),
 
 	%% Class -> Instance (char=30, reciprocal=29)
@@ -353,8 +354,8 @@ create_instance_writes_membership_arcs(_Config) ->
 	end),
 	?assert(lists:any(fun(R) ->
 		R#relationship.target_nref =:= InstNref andalso
-		R#relationship.characterization =:= 30 andalso
-		R#relationship.reciprocal =:= 29
+		R#relationship.characterization =:= ?ARC_CLASS_TO_INST andalso
+		R#relationship.reciprocal =:= ?ARC_INST_TO_CLASS
 	end, ClassOut)).
 
 %%-----------------------------------------------------------------------------
@@ -370,8 +371,8 @@ create_instance_writes_compositional_arcs(_Config) ->
 	end),
 	?assert(lists:any(fun(R) ->
 		R#relationship.target_nref =:= InstNref andalso
-		R#relationship.characterization =:= 28 andalso
-		R#relationship.reciprocal =:= 27
+		R#relationship.characterization =:= ?ARC_INST_CHILD andalso
+		R#relationship.reciprocal =:= ?ARC_INST_PARENT
 	end, ParentOut)),
 
 	%% Child (InstNref) -> Parent (5) with char=27
@@ -381,8 +382,8 @@ create_instance_writes_compositional_arcs(_Config) ->
 	end),
 	?assert(lists:any(fun(R) ->
 		R#relationship.target_nref =:= 5 andalso
-		R#relationship.characterization =:= 27 andalso
-		R#relationship.reciprocal =:= 28
+		R#relationship.characterization =:= ?ARC_INST_PARENT andalso
+		R#relationship.reciprocal =:= ?ARC_INST_CHILD
 	end, ChildOut)).
 
 
@@ -456,7 +457,7 @@ add_relationship_stamps_template_avp(_Config) ->
 		R#relationship.characterization =:= Char,
 		R#relationship.target_nref =:= B],
 	?assertEqual(connection, Fwd#relationship.kind),
-	?assert(lists:member(#{attribute => 31, value => DefaultTmpl},
+	?assert(lists:member(#{attribute => ?ARC_TEMPLATE, value => DefaultTmpl},
 		Fwd#relationship.avps)).
 
 %%-----------------------------------------------------------------------------
@@ -477,7 +478,7 @@ add_relationship_explicit_template(_Config) ->
 	[Fwd] = [R || R <- ARels,
 		R#relationship.characterization =:= Char,
 		R#relationship.target_nref =:= B],
-	?assert(lists:member(#{attribute => 31, value => AltTmpl},
+	?assert(lists:member(#{attribute => ?ARC_TEMPLATE, value => AltTmpl},
 		Fwd#relationship.avps)).
 
 %%-----------------------------------------------------------------------------
@@ -612,7 +613,7 @@ add_relationship_stamps_user_avps(_Config) ->
 	[Fwd] = [R || R <- ARels,
 		R#relationship.characterization =:= Char,
 		R#relationship.target_nref =:= B],
-	?assert(lists:member(#{attribute => 31, value => DefaultTmpl},
+	?assert(lists:member(#{attribute => ?ARC_TEMPLATE, value => DefaultTmpl},
 		Fwd#relationship.avps)),
 	?assert(lists:member(UserAVP, Fwd#relationship.avps)).
 
@@ -671,7 +672,7 @@ add_relationship_default_avps_empty(_Config) ->
 	[Fwd] = [R || R <- ARels,
 		R#relationship.characterization =:= Char,
 		R#relationship.target_nref =:= B],
-	?assertEqual([#{attribute => 31, value => DefaultTmpl}],
+	?assertEqual([#{attribute => ?ARC_TEMPLATE, value => DefaultTmpl}],
 		Fwd#relationship.avps).
 
 
@@ -770,7 +771,7 @@ resolve_value_local(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
 	{ok, InstNref} = graphdb_instance:create_instance("T1", ClassNref, 5),
 	%% The name attribute (20) was set by create_instance
-	?assertEqual({ok, "T1"}, graphdb_instance:resolve_value(InstNref, 20)).
+	?assertEqual({ok, "T1"}, graphdb_instance:resolve_value(InstNref, ?NAME_ATTR_INSTANCE)).
 
 %%-----------------------------------------------------------------------------
 %% resolve_value finds a value from the class node's AVPs.
@@ -951,8 +952,8 @@ add_class_membership_writes_arcs(_Config) ->
 	end),
 	?assert(lists:any(fun(R) ->
 		R#relationship.target_nref =:= ClassB andalso
-		R#relationship.characterization =:= 29 andalso
-		R#relationship.reciprocal =:= 30
+		R#relationship.characterization =:= ?ARC_INST_TO_CLASS andalso
+		R#relationship.reciprocal =:= ?ARC_CLASS_TO_INST
 	end, InstOut)),
 
 	%% ClassB -> Instance (char=30, reciprocal=29)
@@ -961,8 +962,8 @@ add_class_membership_writes_arcs(_Config) ->
 	end),
 	?assert(lists:any(fun(R) ->
 		R#relationship.target_nref =:= Inst andalso
-		R#relationship.characterization =:= 30 andalso
-		R#relationship.reciprocal =:= 29
+		R#relationship.characterization =:= ?ARC_CLASS_TO_INST andalso
+		R#relationship.reciprocal =:= ?ARC_INST_TO_CLASS
 	end, ClassOut)).
 
 %%-----------------------------------------------------------------------------
