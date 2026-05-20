@@ -199,6 +199,8 @@ init_per_testcase(TC, Config) when
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
+	%% Start rel_id_server first (needed for relationship ID allocation)
+	{ok, _} = rel_id_server:start_link(),
 	%% Start mgr first (runs bootstrap, sets up tables), then workers
 	{ok, _} = graphdb_mgr:start_link(),
 	{ok, _} = graphdb_attr:start_link(),
@@ -209,6 +211,8 @@ init_per_testcase(_TC, Config) ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
+	%% Start rel_id_server first (needed for relationship ID allocation)
+	{ok, _} = rel_id_server:start_link(),
 	Config1.
 
 setup_isolated_env(Config) ->
@@ -245,6 +249,7 @@ end_per_testcase(TC, Config) ->
 	catch gen_server:stop(graphdb_attr),
 	%% Stop graphdb_mgr if running
 	catch gen_server:stop(graphdb_mgr),
+	catch gen_server:stop(rel_id_server),
 
 	%% Stop applications (ignore errors -- they may not be running)
 	catch application:stop(nref),
@@ -253,6 +258,7 @@ end_per_testcase(TC, Config) ->
 	%% Close any lingering DETS tables
 	catch dets:close(nref_server),
 	catch dets:close(nref_allocator),
+	catch dets:close(rel_id_server),
 
 	%% Restore original cwd
 	OrigCwd = proplists:get_value(orig_cwd, Config),

@@ -170,6 +170,9 @@ init_per_testcase(_TC, Config) ->
 	%% Start nref fresh (DETS files created in TmpDir)
 	{ok, _} = application:ensure_all_started(nref),
 
+	%% Start rel_id_server (needed for relationship ID allocation in bootstrap)
+	{ok, _} = rel_id_server:start_link(),
+
 	[{tmp_dir, TmpDir}, {mnesia_dir, MnesiaDir} | Config].
 
 
@@ -182,12 +185,14 @@ end_per_testcase(TC, Config) ->
 	verify_cache_invariant(TC),
 
 	%% Stop applications (ignore errors — they may not be running)
+	catch gen_server:stop(rel_id_server),
 	catch application:stop(nref),
 	catch mnesia:stop(),
 
 	%% Close any lingering DETS tables
 	catch dets:close(nref_server),
 	catch dets:close(nref_allocator),
+	catch dets:close(rel_id_server),
 
 	%% Restore original cwd
 	OrigCwd = proplists:get_value(orig_cwd, Config),
@@ -365,7 +370,8 @@ load_relationship_structure(_Config) ->
 	?assertEqual([], Arc#relationship.avps).
 
 %%-----------------------------------------------------------------------------
-%% Verify all relationship IDs are >= 100000 (nref_start floor).
+%% Verify all relationship IDs are unique positive integers (from rel_id_server).
+%% rel_id_server is a separate allocator, so IDs start at 1, not 100000.
 %%-----------------------------------------------------------------------------
 load_relationship_ids_above_floor(_Config) ->
 	ok = graphdb_bootstrap:load(),
@@ -373,8 +379,11 @@ load_relationship_ids_above_floor(_Config) ->
 		mnesia:foldl(fun(Rec, Acc) -> [Rec | Acc] end, [], relationships)
 	end),
 	?assertEqual(76, length(AllRels)),
-	BelowFloor = [R || R <- AllRels, R#relationship.id < 100000],
-	?assertEqual([], BelowFloor).
+	%% Verify all IDs are unique and positive
+	IDs = [R#relationship.id || R <- AllRels],
+	?assertEqual(length(IDs), sets:size(sets:from_list(IDs))),
+	AllPositive = lists:all(fun(ID) -> ID > 0 end, IDs),
+	?assertEqual(true, AllPositive).
 
 %%-----------------------------------------------------------------------------
 %% Verify every forward arc has a matching reverse arc (reciprocal pair).
@@ -400,13 +409,13 @@ load_relationship_reciprocal_pairs(_Config) ->
 
 %%-----------------------------------------------------------------------------
 %% Verify the nref floor was set: next nref from nref_server is >= 100000.
-%% 2 symbol-table labels + 38 relationship pairs (76 IDs) = 78 allocations
-%% starting at 100000, so next nref >= 100078.
+%% With separate rel_id_server, only symbol-table labels (2) are allocated
+%% from nref_server, so next nref >= 100002.
 %%-----------------------------------------------------------------------------
 load_nref_floor_set(_Config) ->
 	ok = graphdb_bootstrap:load(),
 	NextNref = nref_server:get_nref(),
-	?assert(NextNref >= 100078).
+	?assert(NextNref >= 100002).
 
 %%-----------------------------------------------------------------------------
 %% Verify load/0 is idempotent: calling it again does not duplicate data.
