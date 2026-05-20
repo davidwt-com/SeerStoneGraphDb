@@ -478,8 +478,9 @@ node_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 %% taxonomy parent/child arc pair, and writes all three rows in a
 %% single Mnesia transaction.
 %%
-%% All nref_server:get_nref/0 calls are issued OUTSIDE the Mnesia
-%% transaction to avoid side-effects on transaction retry.
+%% All nref_server:get_nref/0 (node nrefs) and rel_id_server:get_id/0
+%% (relationship IDs) calls are issued OUTSIDE the Mnesia transaction
+%% to avoid side-effects on transaction retry.
 %%-----------------------------------------------------------------------------
 do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 	Nref = nref_server:get_nref(),
@@ -490,8 +491,8 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 		parents = [ParentNref],
 		attribute_value_pairs = [NameAVP | ExtraAVPs]
 	},
-	Id1 = nref_server:get_nref(),
-	Id2 = nref_server:get_nref(),
+	Id1 = rel_id_server:get_id(),
+	Id2 = rel_id_server:get_id(),
 	P2C = #relationship{
 		id = Id1,
 		kind = taxonomy,
@@ -534,10 +535,10 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
 	FwdNref = nref_server:get_nref(),
 	RevNref = nref_server:get_nref(),
-	Id1 = nref_server:get_nref(),
-	Id2 = nref_server:get_nref(),
-	Id3 = nref_server:get_nref(),
-	Id4 = nref_server:get_nref(),
+	Id1 = rel_id_server:get_id(),
+	Id2 = rel_id_server:get_id(),
+	Id3 = rel_id_server:get_id(),
+	Id4 = rel_id_server:get_id(),
 	FwdAVPs = [#{attribute => ?NAME_ATTR_FOR_ATTRIBUTE, value => FwdName}
 		| ExtraAVPs],
 	RevAVPs = [#{attribute => ?NAME_ATTR_FOR_ATTRIBUTE, value => RevName}
