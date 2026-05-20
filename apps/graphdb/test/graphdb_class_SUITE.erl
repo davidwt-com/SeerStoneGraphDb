@@ -15,6 +15,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
 
 
 %%---------------------------------------------------------------------
@@ -279,7 +280,7 @@ create_class_top_level(_Config) ->
 	{ok, Node} = graphdb_class:get_class(Nref),
 	?assertEqual(class, Node#node.kind),
 	?assertEqual([3], Node#node.parents),
-	?assertEqual([#{attribute => 19, value => "Animal"}],
+	?assertEqual([#{attribute => ?NAME_ATTR_CLASS, value => "Animal"}],
 		Node#node.attribute_value_pairs).
 
 %%-----------------------------------------------------------------------------
@@ -328,8 +329,8 @@ create_class_writes_compositional_arcs(_Config) ->
 	end),
 	?assert(lists:any(fun(R) ->
 		R#relationship.target_nref =:= Nref andalso
-		R#relationship.characterization =:= 26 andalso
-		R#relationship.reciprocal =:= 25
+		R#relationship.characterization =:= ?ARC_CLS_CHILD andalso
+		R#relationship.reciprocal =:= ?ARC_CLS_PARENT
 	end, ParentOut)),
 
 	%% Child (Nref) -> Parent (3) with char=25 should exist
@@ -338,8 +339,8 @@ create_class_writes_compositional_arcs(_Config) ->
 	end),
 	?assert(lists:any(fun(R) ->
 		R#relationship.target_nref =:= 3 andalso
-		R#relationship.characterization =:= 25 andalso
-		R#relationship.reciprocal =:= 26
+		R#relationship.characterization =:= ?ARC_CLS_PARENT andalso
+		R#relationship.reciprocal =:= ?ARC_CLS_CHILD
 	end, ChildOut)).
 
 
@@ -354,7 +355,7 @@ create_class_auto_creates_default_template(_Config) ->
 	{ok, TemplateNode} = graphdb_class:get_template(TemplateNref),
 	?assertEqual(template, TemplateNode#node.kind),
 	?assertEqual([ClassNref], TemplateNode#node.parents),
-	?assert(lists:member(#{attribute => 19, value => "default"},
+	?assert(lists:member(#{attribute => ?NAME_ATTR_CLASS, value => "default"},
 		TemplateNode#node.attribute_value_pairs)).
 
 
@@ -372,7 +373,7 @@ add_template_basic(_Config) ->
 	{ok, Node} = graphdb_class:get_template(TmplNref),
 	?assertEqual(template, Node#node.kind),
 	?assertEqual([ClassNref], Node#node.parents),
-	?assert(lists:member(#{attribute => 19, value => "biological"},
+	?assert(lists:member(#{attribute => ?NAME_ATTR_CLASS, value => "biological"},
 		Node#node.attribute_value_pairs)).
 
 %%-----------------------------------------------------------------------------
@@ -424,7 +425,7 @@ templates_for_class_lists_all(_Config) ->
 	{ok, _} = graphdb_class:add_template(ClassNref, "social"),
 	{ok, Templates} = graphdb_class:templates_for_class(ClassNref),
 	Names = [V || #node{attribute_value_pairs = AVPs} <- Templates,
-		#{attribute := 19, value := V} <- AVPs],
+		#{attribute := ?NAME_ATTR_CLASS, value := V} <- AVPs],
 	?assertEqual(lists:sort(["default", "biological", "social"]),
 		lists:sort(Names)).
 
@@ -436,7 +437,7 @@ default_template_returns_default(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
 	{ok, TmplNref} = graphdb_class:default_template(ClassNref),
 	{ok, Node} = graphdb_class:get_template(TmplNref),
-	?assert(lists:member(#{attribute => 19, value => "default"},
+	?assert(lists:member(#{attribute => ?NAME_ATTR_CLASS, value => "default"},
 		Node#node.attribute_value_pairs)).
 
 %%-----------------------------------------------------------------------------
@@ -494,9 +495,9 @@ add_qc_basic(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, ClassNref} = graphdb_class:create_class("Color", 3),
 	%% Use bootstrap attribute nref 18 (Name/attribute) as a QC for testing
-	ok = graphdb_class:add_qualifying_characteristic(ClassNref, 18),
+	ok = graphdb_class:add_qualifying_characteristic(ClassNref, ?NAME_ATTR_ATTRIBUTE),
 	{ok, Node} = graphdb_class:get_class(ClassNref),
-	?assert(lists:member(#{attribute => 18, value => undefined},
+	?assert(lists:member(#{attribute => ?NAME_ATTR_ATTRIBUTE, value => undefined},
 		Node#node.attribute_value_pairs)).
 
 %%-----------------------------------------------------------------------------
@@ -505,12 +506,12 @@ add_qc_basic(_Config) ->
 add_qc_idempotent(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, ClassNref} = graphdb_class:create_class("Size", 3),
-	ok = graphdb_class:add_qualifying_characteristic(ClassNref, 18),
-	ok = graphdb_class:add_qualifying_characteristic(ClassNref, 18),
+	ok = graphdb_class:add_qualifying_characteristic(ClassNref, ?NAME_ATTR_ATTRIBUTE),
+	ok = graphdb_class:add_qualifying_characteristic(ClassNref, ?NAME_ATTR_ATTRIBUTE),
 	{ok, Node} = graphdb_class:get_class(ClassNref),
 	QcCount = length([1 || #{attribute := A} <-
 		Node#node.attribute_value_pairs,
-		A =:= 18]),
+		A =:= ?NAME_ATTR_ATTRIBUTE]),
 	?assertEqual(1, QcCount).
 
 %%-----------------------------------------------------------------------------
@@ -520,7 +521,7 @@ add_qc_rejects_non_class(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	%% Nref 6 is an attribute node
 	?assertMatch({error, {not_a_class, _}},
-		graphdb_class:add_qualifying_characteristic(6, 18)).
+		graphdb_class:add_qualifying_characteristic(?NREF_NAMES, ?NAME_ATTR_ATTRIBUTE)).
 
 %%-----------------------------------------------------------------------------
 %% add_qualifying_characteristic rejects non-attribute nrefs.
@@ -646,8 +647,8 @@ add_superclass_writes_taxonomy_arcs(_Config) ->
 	end),
 	?assert(lists:any(fun(R) ->
 		R#relationship.target_nref =:= B andalso
-		R#relationship.characterization =:= 25 andalso
-		R#relationship.reciprocal =:= 26 andalso
+		R#relationship.characterization =:= ?ARC_CLS_PARENT andalso
+		R#relationship.reciprocal =:= ?ARC_CLS_CHILD andalso
 		R#relationship.kind =:= taxonomy
 	end, ChildOut)),
 
@@ -657,8 +658,8 @@ add_superclass_writes_taxonomy_arcs(_Config) ->
 	end),
 	?assert(lists:any(fun(R) ->
 		R#relationship.target_nref =:= Child andalso
-		R#relationship.characterization =:= 26 andalso
-		R#relationship.reciprocal =:= 25 andalso
+		R#relationship.characterization =:= ?ARC_CLS_CHILD andalso
+		R#relationship.reciprocal =:= ?ARC_CLS_PARENT andalso
 		R#relationship.kind =:= taxonomy
 	end, BOut)).
 
@@ -747,23 +748,23 @@ ancestors_dedupes_diamond_inheritance(_Config) ->
 inherited_qcs_multi_parent(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, A} = graphdb_class:create_class("A", 3),
-	ok = graphdb_class:add_qualifying_characteristic(A, 17),
+	ok = graphdb_class:add_qualifying_characteristic(A, ?NAME_ATTR_CATEGORY),
 	{ok, B} = graphdb_class:create_class("B", 3),
-	ok = graphdb_class:add_qualifying_characteristic(B, 18),
+	ok = graphdb_class:add_qualifying_characteristic(B, ?NAME_ATTR_ATTRIBUTE),
 	{ok, C} = graphdb_class:create_class("C", A),
 	ok = graphdb_class:add_superclass(C, B),
-	ok = graphdb_class:add_qualifying_characteristic(C, 20),
+	ok = graphdb_class:add_qualifying_characteristic(C, ?NAME_ATTR_INSTANCE),
 	{ok, QcPairs} = graphdb_class:inherited_qcs(C),
 	%% Local (20), then nearest parents A (17), B (18) — all value=>undefined.
-	?assert(lists:member({20, undefined}, QcPairs)),
-	?assert(lists:member({17, undefined}, QcPairs)),
-	?assert(lists:member({18, undefined}, QcPairs)),
+	?assert(lists:member({?NAME_ATTR_INSTANCE, undefined}, QcPairs)),
+	?assert(lists:member({?NAME_ATTR_CATEGORY, undefined}, QcPairs)),
+	?assert(lists:member({?NAME_ATTR_ATTRIBUTE, undefined}, QcPairs)),
 	%% Order: C's local QC before ancestors; BFS visits A before B (A is the
 	%% creation parent, B added via add_superclass), so 17 appears before 18.
 	Attrs = [A2 || {A2, _} <- QcPairs],
-	?assert(lists_index_of(20, Attrs) < lists_index_of(17, Attrs)),
-	?assert(lists_index_of(20, Attrs) < lists_index_of(18, Attrs)),
-	?assert(lists_index_of(17, Attrs) < lists_index_of(18, Attrs)).
+	?assert(lists_index_of(?NAME_ATTR_INSTANCE, Attrs) < lists_index_of(?NAME_ATTR_CATEGORY, Attrs)),
+	?assert(lists_index_of(?NAME_ATTR_INSTANCE, Attrs) < lists_index_of(?NAME_ATTR_ATTRIBUTE, Attrs)),
+	?assert(lists_index_of(?NAME_ATTR_CATEGORY, Attrs) < lists_index_of(?NAME_ATTR_ATTRIBUTE, Attrs)).
 
 %%-----------------------------------------------------------------------------
 %% class_in_ancestry finds a parent added via add_superclass.
@@ -789,13 +790,13 @@ class_in_ancestry_via_added_parent(_Config) ->
 inherited_qcs_local_only(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, ClassNref} = graphdb_class:create_class("Color", 3),
-	ok = graphdb_class:add_qualifying_characteristic(ClassNref, 17),
-	ok = graphdb_class:add_qualifying_characteristic(ClassNref, 18),
+	ok = graphdb_class:add_qualifying_characteristic(ClassNref, ?NAME_ATTR_CATEGORY),
+	ok = graphdb_class:add_qualifying_characteristic(ClassNref, ?NAME_ATTR_ATTRIBUTE),
 	{ok, QcPairs} = graphdb_class:inherited_qcs(ClassNref),
 	%% Class has name AVP (attr=19, value="Color") plus two QC AVPs.
 	%% inherited_qcs filters out the name AVP; only QC attrs 17 and 18 appear.
-	?assert(lists:member({17, undefined}, QcPairs)),
-	?assert(lists:member({18, undefined}, QcPairs)),
+	?assert(lists:member({?NAME_ATTR_CATEGORY, undefined}, QcPairs)),
+	?assert(lists:member({?NAME_ATTR_ATTRIBUTE, undefined}, QcPairs)),
 	?assertNot(lists:keymember(19, 1, QcPairs)).
 
 %%-----------------------------------------------------------------------------
@@ -804,21 +805,21 @@ inherited_qcs_local_only(_Config) ->
 inherited_qcs_from_ancestors(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, Animal} = graphdb_class:create_class("Animal", 3),
-	ok = graphdb_class:add_qualifying_characteristic(Animal, 17),
+	ok = graphdb_class:add_qualifying_characteristic(Animal, ?NAME_ATTR_CATEGORY),
 	{ok, Mammal} = graphdb_class:create_class("Mammal", Animal),
-	ok = graphdb_class:add_qualifying_characteristic(Mammal, 18),
+	ok = graphdb_class:add_qualifying_characteristic(Mammal, ?NAME_ATTR_ATTRIBUTE),
 	{ok, Whale} = graphdb_class:create_class("Whale", Mammal),
-	ok = graphdb_class:add_qualifying_characteristic(Whale, 20),
+	ok = graphdb_class:add_qualifying_characteristic(Whale, ?NAME_ATTR_INSTANCE),
 	{ok, QcPairs} = graphdb_class:inherited_qcs(Whale),
 	%% QC attrs 20 (local), 18 (from Mammal), 17 (from Animal) must appear.
 	%% Dedup: each appears exactly once; local entry comes first.
-	?assert(lists:member({20, undefined}, QcPairs)),
-	?assert(lists:member({18, undefined}, QcPairs)),
-	?assert(lists:member({17, undefined}, QcPairs)),
+	?assert(lists:member({?NAME_ATTR_INSTANCE, undefined}, QcPairs)),
+	?assert(lists:member({?NAME_ATTR_ATTRIBUTE, undefined}, QcPairs)),
+	?assert(lists:member({?NAME_ATTR_CATEGORY, undefined}, QcPairs)),
 	%% 20 must appear before 18, and 18 must appear before 17.
 	Attrs = [A || {A, _} <- QcPairs],
-	?assert(lists_index_of(20, Attrs) < lists_index_of(18, Attrs)),
-	?assert(lists_index_of(18, Attrs) < lists_index_of(17, Attrs)).
+	?assert(lists_index_of(?NAME_ATTR_INSTANCE, Attrs) < lists_index_of(?NAME_ATTR_ATTRIBUTE, Attrs)),
+	?assert(lists_index_of(?NAME_ATTR_ATTRIBUTE, Attrs) < lists_index_of(?NAME_ATTR_CATEGORY, Attrs)).
 
 %%-----------------------------------------------------------------------------
 %% inherited_qcs deduplicates: if a child has the same QC as an ancestor,
@@ -827,19 +828,19 @@ inherited_qcs_from_ancestors(_Config) ->
 inherited_qcs_deduplicates(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, Parent} = graphdb_class:create_class("Parent", 3),
-	ok = graphdb_class:add_qualifying_characteristic(Parent, 17),
-	ok = graphdb_class:add_qualifying_characteristic(Parent, 18),
+	ok = graphdb_class:add_qualifying_characteristic(Parent, ?NAME_ATTR_CATEGORY),
+	ok = graphdb_class:add_qualifying_characteristic(Parent, ?NAME_ATTR_ATTRIBUTE),
 	{ok, Child} = graphdb_class:create_class("Child", Parent),
-	ok = graphdb_class:add_qualifying_characteristic(Child, 18),
-	ok = graphdb_class:add_qualifying_characteristic(Child, 20),
+	ok = graphdb_class:add_qualifying_characteristic(Child, ?NAME_ATTR_ATTRIBUTE),
+	ok = graphdb_class:add_qualifying_characteristic(Child, ?NAME_ATTR_INSTANCE),
 	{ok, QcPairs} = graphdb_class:inherited_qcs(Child),
 	%% 18 appears only once (from Child, not duplicated from Parent).
-	Count18 = length([1 || {A, _} <- QcPairs, A =:= 18]),
+	Count18 = length([1 || {A, _} <- QcPairs, A =:= ?NAME_ATTR_ATTRIBUTE]),
 	?assertEqual(1, Count18),
 	%% 17 (from Parent only) and 20 (from Child only) also present.
-	?assert(lists:member({17, undefined}, QcPairs)),
-	?assert(lists:member({18, undefined}, QcPairs)),
-	?assert(lists:member({20, undefined}, QcPairs)).
+	?assert(lists:member({?NAME_ATTR_CATEGORY, undefined}, QcPairs)),
+	?assert(lists:member({?NAME_ATTR_ATTRIBUTE, undefined}, QcPairs)),
+	?assert(lists:member({?NAME_ATTR_INSTANCE, undefined}, QcPairs)).
 
 
 %%=============================================================================

@@ -15,6 +15,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
 
 
 %%---------------------------------------------------------------------
@@ -267,7 +268,7 @@ load_root_node_correct(_Config) ->
 	?assertEqual(1, Root#node.nref),
 	?assertEqual(category, Root#node.kind),
 	?assertEqual([], Root#node.parents),
-	?assertEqual([#{attribute => 17, value => "Root"}],
+	?assertEqual([#{attribute => ?NAME_ATTR_CATEGORY, value => "Root"}],
 		Root#node.attribute_value_pairs).
 
 %%-----------------------------------------------------------------------------
@@ -276,12 +277,12 @@ load_root_node_correct(_Config) ->
 load_attribute_node_correct(_Config) ->
 	ok = graphdb_bootstrap:load(),
 	{atomic, [Node]} = mnesia:transaction(fun() ->
-		mnesia:read(nodes, 18)
+		mnesia:read(nodes, ?NAME_ATTR_ATTRIBUTE)
 	end),
 	?assertEqual(18, Node#node.nref),
 	?assertEqual(attribute, Node#node.kind),
 	?assertEqual([10], Node#node.parents),    %% parent: Attribute Name Attributes
-	?assertEqual([#{attribute => 18, value => "Name"}],
+	?assertEqual([#{attribute => ?NAME_ATTR_ATTRIBUTE, value => "Name"}],
 		Node#node.attribute_value_pairs).
 
 %%-----------------------------------------------------------------------------
@@ -292,12 +293,12 @@ load_attribute_node_correct(_Config) ->
 load_template_avp_node_correct(_Config) ->
 	ok = graphdb_bootstrap:load(),
 	{atomic, [Node]} = mnesia:transaction(fun() ->
-		mnesia:read(nodes, 31)
+		mnesia:read(nodes, ?ARC_TEMPLATE)
 	end),
-	?assertEqual(31, Node#node.nref),
+	?assertEqual(?ARC_TEMPLATE, Node#node.nref),
 	?assertEqual(attribute, Node#node.kind),
 	?assertEqual([16], Node#node.parents),    %% Instance Relationships subtree
-	?assertEqual([#{attribute => 18, value => "Template"}],
+	?assertEqual([#{attribute => ?NAME_ATTR_ATTRIBUTE, value => "Template"}],
 		Node#node.attribute_value_pairs).
 
 %%-----------------------------------------------------------------------------
@@ -306,10 +307,10 @@ load_template_avp_node_correct(_Config) ->
 load_language_subcategories(_Config) ->
 	ok = graphdb_bootstrap:load(),
 	Expected = [
-		{32, "Human Languages"},
-		{33, "Formal Languages"},
-		{34, "Diagram Languages"},
-		{35, "Renderers"}
+		{?NREF_HUMAN_LANGS,  "Human Languages"},
+		{?NREF_FORMAL_LANGS, "Formal Languages"},
+		{?NREF_DIAGRAM_LANGS,"Diagram Languages"},
+		{?NREF_RENDERERS,    "Renderers"}
 	],
 	lists:foreach(fun({Nref, Name}) ->
 		{atomic, [Node]} = mnesia:transaction(fun() ->
@@ -318,7 +319,7 @@ load_language_subcategories(_Config) ->
 		?assertEqual(Nref,     Node#node.nref),
 		?assertEqual(category, Node#node.kind),
 		?assertEqual([4],      Node#node.parents),
-		?assertEqual([#{attribute => 17, value => Name}],
+		?assertEqual([#{attribute => ?NAME_ATTR_CATEGORY, value => Name}],
 			Node#node.attribute_value_pairs)
 	end, Expected),
 	%% Languages (nref 4) has exactly these four children via char=22 (Child/CatRel)
@@ -328,8 +329,8 @@ load_language_subcategories(_Config) ->
 	ChildNrefs = lists:sort([A#relationship.target_nref ||
 		A <- ChildArcs,
 		A#relationship.kind =:= composition,
-		A#relationship.characterization =:= 22]),
-	?assertEqual([32, 33, 34, 35], ChildNrefs).
+		A#relationship.characterization =:= ?ARC_CAT_CHILD]),
+	?assertEqual([?NREF_HUMAN_LANGS, ?NREF_FORMAL_LANGS, ?NREF_DIAGRAM_LANGS, ?NREF_RENDERERS], ChildNrefs).
 
 %%-----------------------------------------------------------------------------
 %% Verify Root's children via the compositional arcs (char=22, kind=composition).
@@ -342,7 +343,7 @@ load_category_children(_Config) ->
 	ChildNrefs = lists:sort([A#relationship.target_nref ||
 		A <- Arcs,
 		A#relationship.kind =:= composition,
-		A#relationship.characterization =:= 22]),
+		A#relationship.characterization =:= ?ARC_CAT_CHILD]),
 	%% Root's children: Attributes(2), Classes(3), Languages(4), Projects(5)
 	?assertEqual([2, 3, 4, 5], ChildNrefs),
 	%% Each child node is a category and lists Root in its parents cache
@@ -362,11 +363,11 @@ load_relationship_structure(_Config) ->
 		mnesia:index_read(relationships, 1, #relationship.source_nref)
 	end),
 	ChildArcs = [R || R <- Fwd,
-		R#relationship.characterization =:= 22,
+		R#relationship.characterization =:= ?ARC_CAT_CHILD,
 		R#relationship.target_nref =:= 2],
 	?assertEqual(1, length(ChildArcs)),
 	[Arc] = ChildArcs,
-	?assertEqual(21, Arc#relationship.reciprocal),
+	?assertEqual(?ARC_CAT_PARENT, Arc#relationship.reciprocal),
 	?assertEqual([], Arc#relationship.avps).
 
 %%-----------------------------------------------------------------------------
@@ -440,9 +441,9 @@ load_idempotent(_Config) ->
 load_english_instance(_Config) ->
 	ok = graphdb_bootstrap:load(),
 	{atomic, [Eng]} = mnesia:transaction(fun() ->
-		mnesia:read(nodes, 10000)
+		mnesia:read(nodes, ?NREF_ENGLISH)
 	end),
-	?assertEqual(10000, Eng#node.nref),
+	?assertEqual(?NREF_ENGLISH, Eng#node.nref),
 	?assertEqual(instance, Eng#node.kind),
 	%% Find lang_code attribute nref by name (do not hardcode the runtime nref)
 	LangCodeNref = find_attribute_nref_by_name("lang_code"),
@@ -468,18 +469,18 @@ load_english_class_membership(_Config) ->
 	LangHumanNref = find_class_nref_by_name("Human Language"),
 	%% English's classes cache must contain LangHuman nref
 	{atomic, [Eng]} = mnesia:transaction(fun() ->
-		mnesia:read(nodes, 10000)
+		mnesia:read(nodes, ?NREF_ENGLISH)
 	end),
 	?assert(lists:member(LangHumanNref, Eng#node.classes)),
 	%% English's compositional parent is Human Languages (nref 32)
-	?assertEqual([32], Eng#node.parents),
+	?assertEqual([?NREF_HUMAN_LANGS], Eng#node.parents),
 	%% Instantiation arc English -> Human Language exists
 	{atomic, MemberArcs} = mnesia:transaction(fun() ->
-		mnesia:index_read(relationships, 10000, #relationship.source_nref)
+		mnesia:index_read(relationships, ?NREF_ENGLISH, #relationship.source_nref)
 	end),
 	ClassArcs = [A || A <- MemberArcs,
 		A#relationship.kind =:= instantiation,
-		A#relationship.characterization =:= 29,
+		A#relationship.characterization =:= ?ARC_INST_TO_CLASS,
 		A#relationship.target_nref =:= LangHumanNref],
 	?assertEqual(1, length(ClassArcs)).
 
@@ -610,7 +611,7 @@ find_attribute_nref_by_name(Name) ->
 	{atomic, Matches} = mnesia:transaction(fun() ->
 		mnesia:foldl(fun(N, Acc) ->
 			case N#node.kind =:= attribute andalso
-			     lists:member(#{attribute => 18, value => Name},
+			     lists:member(#{attribute => ?NAME_ATTR_ATTRIBUTE, value => Name},
 			                  N#node.attribute_value_pairs) of
 				true  -> [N#node.nref | Acc];
 				false -> Acc
@@ -633,7 +634,7 @@ find_class_nref_by_name(Name) ->
 	{atomic, Matches} = mnesia:transaction(fun() ->
 		mnesia:foldl(fun(N, Acc) ->
 			case N#node.kind =:= class andalso
-			     lists:member(#{attribute => 19, value => Name},
+			     lists:member(#{attribute => ?NAME_ATTR_CLASS, value => Name},
 			                  N#node.attribute_value_pairs) of
 				true  -> [N#node.nref | Acc];
 				false -> Acc

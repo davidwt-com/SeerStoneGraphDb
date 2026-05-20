@@ -834,6 +834,21 @@ in `dictionary_imp:delete/2` (wrong ETS key type). 14 CT tests added (7 per serv
 
 ---
 
+### Task 8. Scaffold nref constants → shared `graphdb_nrefs.hrl` header — **RESOLVED** (2026-05-20)
+
+`apps/graphdb/include/graphdb_nrefs.hrl` introduced with 36 named macros covering
+scaffold nrefs 1–35 (`NREF_*`, `NAME_ATTR_*`, `ARC_*`) and the permanent English
+instance nref 10000 (`NREF_ENGLISH`). All inline `-define` blocks removed from five
+source files (`graphdb_attr`, `graphdb_class`, `graphdb_instance`, `graphdb_language`,
+`graphdb_mgr`); all raw integers 17–35 and 10000 replaced with macros in seven test
+files. Companion `graphdb_nrefs.erl` exports `scaffold_spec/0` and `verify/0`; verify
+is called at the end of `graphdb_bootstrap:do_load/0` as a fatal congruency check.
+`graphdb_bootstrap` module is deleted+purged from the code server in `graphdb_mgr:init/1`
+after successful load. 2 CT tests in `graphdb_nrefs_SUITE`. 320 tests (217 CT +
+103 EUnit), all green, zero warnings.
+
+---
+
 ### E2. Non-normal OTP start types
 
 **Evidence:** `seerstone:start/2` and `nref:start/2` both hit `?NYI`

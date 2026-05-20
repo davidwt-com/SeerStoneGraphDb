@@ -15,6 +15,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
 
 -record(node, {
     nref,
@@ -301,10 +302,10 @@ set_labels_writes_avp(_Config) ->
     {ok, #{lang_code := LCAttr}} = graphdb_language:seeded_nrefs(),
     %% Write a German label for English nref 10000
     DeAVP = #{attribute => LCAttr, value => "Englisch"},
-    ok = graphdb_language:set_labels(10000, de, [DeAVP]),
+    ok = graphdb_language:set_labels(?NREF_ENGLISH, de, [DeAVP]),
     %% Read it back directly from the Mnesia table
     [#language_node{avps = AVPs}] =
-        mnesia:dirty_read(language_de, 10000),
+        mnesia:dirty_read(language_de, ?NREF_ENGLISH),
     {value, #{value := "Englisch"}} =
         lists:search(fun(#{attribute := A}) -> A =:= LCAttr end, AVPs).
 
@@ -315,17 +316,17 @@ set_labels_merges_avps(_Config) ->
         graphdb_language:seeded_nrefs(),
     AVP1 = #{attribute => LCAttr, value => "Englisch"},
     AVP2 = #{attribute => BLAttr, value => test_sentinel},
-    ok = graphdb_language:set_labels(10000, de, [AVP1]),
-    ok = graphdb_language:set_labels(10000, de, [AVP2]),
+    ok = graphdb_language:set_labels(?NREF_ENGLISH, de, [AVP1]),
+    ok = graphdb_language:set_labels(?NREF_ENGLISH, de, [AVP2]),
     %% Both AVPs present after two writes
     [#language_node{avps = AVPs}] =
-        mnesia:dirty_read(language_de, 10000),
+        mnesia:dirty_read(language_de, ?NREF_ENGLISH),
     2 = length(AVPs).
 
 set_labels_unregistered_code_error(_Config) ->
     {ok, _} = graphdb_language:start_link(),
     {error, unregistered_language} =
-        graphdb_language:set_labels(10000, xx, []).
+        graphdb_language:set_labels(?NREF_ENGLISH, xx, []).
 
 
 %%=====================================================================
@@ -338,45 +339,45 @@ avp(A, V) -> #{attribute => A, value => V}.
 resolve_label_from_environment_fallback(_Config) ->
     {ok, _} = graphdb_language:start_link(),
     %% Chain [en] → en sentinel → read terminal node directly
-    %% English nref 10000, instance name AVP attr = 20, value = "English"
+    %% English nref ?NREF_ENGLISH, instance name AVP attr = 20, value = "English"
     {ok, "English"} =
-        graphdb_language:resolve_label(10000, 20, [en], environment).
+        graphdb_language:resolve_label(?NREF_ENGLISH, ?NAME_ATTR_INSTANCE, [en], environment).
 
 resolve_label_from_overlay(_Config) ->
     {ok, _} = graphdb_language:start_link(),
     {ok, _} = graphdb_language:register_language(de, "German"),
     {ok, #{lang_code := LCAttr}} = graphdb_language:seeded_nrefs(),
-    ok = graphdb_language:set_labels(10000, de, [avp(LCAttr, "Englisch")]),
+    ok = graphdb_language:set_labels(?NREF_ENGLISH, de, [avp(LCAttr, "Englisch")]),
     {ok, "Englisch"} =
-        graphdb_language:resolve_label(10000, LCAttr, [de], environment).
+        graphdb_language:resolve_label(?NREF_ENGLISH, LCAttr, [de], environment).
 
 resolve_label_chain_priority(_Config) ->
     {ok, _} = graphdb_language:start_link(),
     {ok, _} = graphdb_language:register_language(de, "German"),
     {ok, _} = graphdb_language:register_language(fr, "French"),
     {ok, #{lang_code := LCAttr}} = graphdb_language:seeded_nrefs(),
-    ok = graphdb_language:set_labels(10000, de, [avp(LCAttr, "Englisch")]),
-    ok = graphdb_language:set_labels(10000, fr, [avp(LCAttr, "Anglais")]),
+    ok = graphdb_language:set_labels(?NREF_ENGLISH, de, [avp(LCAttr, "Englisch")]),
+    ok = graphdb_language:set_labels(?NREF_ENGLISH, fr, [avp(LCAttr, "Anglais")]),
     %% de appears first — de wins
     {ok, "Englisch"} =
-        graphdb_language:resolve_label(10000, LCAttr, [de, fr], environment).
+        graphdb_language:resolve_label(?NREF_ENGLISH, LCAttr, [de, fr], environment).
 
 resolve_label_en_sentinel(_Config) ->
     {ok, _} = graphdb_language:start_link(),
     %% Write a wrong value into language_en — sentinel must bypass it
-    WrongRec = #language_node{nref = 10000, avps = [avp(20, "WRONG")]},
+    WrongRec = #language_node{nref = ?NREF_ENGLISH, avps = [avp(?NAME_ATTR_INSTANCE,"WRONG")]},
     ok = mnesia:dirty_write(language_en, WrongRec),
     %% en sentinel skips language_en and reads environment node directly
     {ok, "English"} =
-        graphdb_language:resolve_label(10000, 20, [en], environment).
+        graphdb_language:resolve_label(?NREF_ENGLISH, ?NAME_ATTR_INSTANCE, [en], environment).
 
 resolve_label_dialect_hit(_Config) ->
     {ok, _} = graphdb_language:start_link(),
     %% en is already bootstrapped at nref 10000; no need to register it
     {ok, _} = graphdb_language:register_dialect(en_gb, "British English", en),
-    ok = graphdb_language:set_labels(10000, en_gb, [avp(20, "English (UK)")]),
+    ok = graphdb_language:set_labels(?NREF_ENGLISH, en_gb, [avp(?NAME_ATTR_INSTANCE,"English (UK)")]),
     {ok, "English (UK)"} =
-        graphdb_language:resolve_label(10000, 20, [en_gb, en], environment).
+        graphdb_language:resolve_label(?NREF_ENGLISH, ?NAME_ATTR_INSTANCE, [en_gb, en], environment).
 
 resolve_label_dialect_fallback(_Config) ->
     %% [en_gb, en, fr]: en_gb miss → en sentinel → environment (fr skipped)
@@ -384,16 +385,16 @@ resolve_label_dialect_fallback(_Config) ->
     %% en is already bootstrapped at nref 10000; no need to register it
     {ok, _} = graphdb_language:register_dialect(en_gb, "British English", en),
     {ok, _} = graphdb_language:register_language(fr, "French"),
-    ok = graphdb_language:set_labels(10000, fr, [avp(20, "Anglais")]),
+    ok = graphdb_language:set_labels(?NREF_ENGLISH, fr, [avp(?NAME_ATTR_INSTANCE,"Anglais")]),
     %% en_gb has no overlay for nref 10000 → fall through; en → sentinel → env node
     {ok, "English"} =
-        graphdb_language:resolve_label(10000, 20, [en_gb, en, fr], environment).
+        graphdb_language:resolve_label(?NREF_ENGLISH, ?NAME_ATTR_INSTANCE, [en_gb, en, fr], environment).
 
 resolve_label_not_found(_Config) ->
     {ok, _} = graphdb_language:start_link(),
     %% AttrNref 99999 does not exist on nref 10000
     not_found =
-        graphdb_language:resolve_label(10000, 99999, [en], environment).
+        graphdb_language:resolve_label(?NREF_ENGLISH, 99999, [en], environment).
 
 
 %%=====================================================================
@@ -428,7 +429,7 @@ project_language_avp_roundtrip(_Config) ->
     %% Stamp the project_language AVP onto nref 10000 (reuse for simplicity)
     F = fun() ->
         [#node{attribute_value_pairs = AVPs} = N] =
-            mnesia:read(nodes, 10000),
+            mnesia:read(nodes, ?NREF_ENGLISH),
         Updated = N#node{
             attribute_value_pairs =
                 [#{attribute => PLAttr, value => DeNref} | AVPs]
@@ -436,12 +437,12 @@ project_language_avp_roundtrip(_Config) ->
         mnesia:write(nodes, Updated, write)
     end,
     {atomic, ok} = mnesia:transaction(F),
-    {ok, de} = graphdb_language:project_language(10000).
+    {ok, de} = graphdb_language:project_language(?NREF_ENGLISH).
 
 project_language_not_found(_Config) ->
     {ok, _} = graphdb_language:start_link(),
     %% Nref 10000 has no project_language AVP yet
-    not_found = graphdb_language:project_language(10000).
+    not_found = graphdb_language:project_language(?NREF_ENGLISH).
 
 
 %%=====================================================================
@@ -453,7 +454,7 @@ translation_hook_called_after_registration(_Config) ->
     Self = self(),
     Hook = fun(Nref, AVPs) -> Self ! {hook_fired, Nref, AVPs} end,
     ok = graphdb_language:register_translation_hook(Hook),
-    graphdb_language:fire_translation_hooks(99, [#{attribute => 20, value => "Test"}]),
+    graphdb_language:fire_translation_hooks(99, [#{attribute => ?NAME_ATTR_INSTANCE, value => "Test"}]),
     receive
         {hook_fired, 99, _AVPs} -> ok
     after 1000 ->

@@ -50,6 +50,7 @@
 %%---------------------------------------------------------------------
 %% Include files
 %%---------------------------------------------------------------------
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
 
 %%---------------------------------------------------------------------
 %% Macro Functions
@@ -69,26 +70,6 @@
 					io:format("*** UEM ~p:~p ~p ~p~n",[?MODULE, F, ?LINE, X]),
 					exit(uem)
 				 end)).
-
-
-%%---------------------------------------------------------------------
-%% Bootstrap nref constants
-%%---------------------------------------------------------------------
-%% NameAttrNref for instance-kind nodes.
--define(NAME_ATTR_FOR_INSTANCE, 20).
-
-%% Compositional arc labels for instance children of instance parents.
--define(INST_CHILD_ARC,  28).  %% Child/InstRel  -- parent -> child
--define(INST_PARENT_ARC, 27).  %% Parent/InstRel -- child  -> parent
-
-%% Instance-to-class membership arc labels.
--define(CLASS_MEMBERSHIP_ARC,    29).  %% instance -> class
--define(INSTANCE_MEMBERSHIP_ARC, 30).  %% class -> instance
-
-%% Bootstrap-seeded `Template` relationship-AVP marker attribute (nref 31).
-%% Required on every Connection arc; its value is the nref of the template
-%% node defining the semantic context for the connection.
--define(TEMPLATE_AVP_NREF, 31).
 
 
 %%---------------------------------------------------------------------
@@ -456,7 +437,7 @@ do_write_instance(Name, ClassNref, ParentNref) ->
 	Nref = nref_server:get_nref(),
 	{MembId1, MembId2} = rel_id_server:get_id_pair(),
 	{CompId1, CompId2} = rel_id_server:get_id_pair(),
-	NameAVP = #{attribute => ?NAME_ATTR_FOR_INSTANCE, value => Name},
+	NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
 	Node = #node{
 		nref = Nref,
 		kind = instance,
@@ -469,9 +450,9 @@ do_write_instance(Name, ClassNref, ParentNref) ->
 		id = MembId1,
 		kind = instantiation,
 		source_nref = Nref,
-		characterization = ?CLASS_MEMBERSHIP_ARC,
+		characterization = ?ARC_INST_TO_CLASS,
 		target_nref = ClassNref,
-		reciprocal = ?INSTANCE_MEMBERSHIP_ARC,
+		reciprocal = ?ARC_CLASS_TO_INST,
 		avps = []
 	},
 	%% Class -> Instance (char=30, reciprocal=29)
@@ -479,9 +460,9 @@ do_write_instance(Name, ClassNref, ParentNref) ->
 		id = MembId2,
 		kind = instantiation,
 		source_nref = ClassNref,
-		characterization = ?INSTANCE_MEMBERSHIP_ARC,
+		characterization = ?ARC_CLASS_TO_INST,
 		target_nref = Nref,
-		reciprocal = ?CLASS_MEMBERSHIP_ARC,
+		reciprocal = ?ARC_INST_TO_CLASS,
 		avps = []
 	},
 	%% Parent -> Child (char=28, reciprocal=27)
@@ -489,9 +470,9 @@ do_write_instance(Name, ClassNref, ParentNref) ->
 		id = CompId1,
 		kind = composition,
 		source_nref = ParentNref,
-		characterization = ?INST_CHILD_ARC,
+		characterization = ?ARC_INST_CHILD,
 		target_nref = Nref,
-		reciprocal = ?INST_PARENT_ARC,
+		reciprocal = ?ARC_INST_PARENT,
 		avps = []
 	},
 	%% Child -> Parent (char=27, reciprocal=28)
@@ -499,9 +480,9 @@ do_write_instance(Name, ClassNref, ParentNref) ->
 		id = CompId2,
 		kind = composition,
 		source_nref = Nref,
-		characterization = ?INST_PARENT_ARC,
+		characterization = ?ARC_INST_PARENT,
 		target_nref = ParentNref,
-		reciprocal = ?INST_CHILD_ARC,
+		reciprocal = ?ARC_INST_CHILD,
 		avps = []
 	},
 	Txn = fun() ->
@@ -701,7 +682,7 @@ validate_template_scope(TemplateNref, SourceClass, TargetClass) ->
 write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref, {FwdAVPs, RevAVPs}) ->
 	{Id1, Id2} = rel_id_server:get_id_pair(),
-	TemplateAVP = #{attribute => ?TEMPLATE_AVP_NREF, value => TemplateNref},
+	TemplateAVP = #{attribute => ?ARC_TEMPLATE, value => TemplateNref},
 	Fwd = #relationship{
 		id = Id1, kind = connection,
 		source_nref = SourceNref,
@@ -760,17 +741,17 @@ do_write_class_membership(InstanceNref, ClassNref) ->
 				I2C = #relationship{
 					id = Id1, kind = instantiation,
 					source_nref = InstanceNref,
-					characterization = ?CLASS_MEMBERSHIP_ARC,
+					characterization = ?ARC_INST_TO_CLASS,
 					target_nref = ClassNref,
-					reciprocal = ?INSTANCE_MEMBERSHIP_ARC,
+					reciprocal = ?ARC_CLASS_TO_INST,
 					avps = []
 				},
 				C2I = #relationship{
 					id = Id2, kind = instantiation,
 					source_nref = ClassNref,
-					characterization = ?INSTANCE_MEMBERSHIP_ARC,
+					characterization = ?ARC_CLASS_TO_INST,
 					target_nref = InstanceNref,
-					reciprocal = ?CLASS_MEMBERSHIP_ARC,
+					reciprocal = ?ARC_INST_TO_CLASS,
 					avps = []
 				},
 				Updated = Node#node{classes = Classes ++ [ClassNref]},
@@ -811,7 +792,7 @@ do_class_of(InstanceNref) ->
 			#relationship.source_nref),
 		lists:search(
 			fun(R) ->
-				R#relationship.characterization =:= ?CLASS_MEMBERSHIP_ARC
+				R#relationship.characterization =:= ?ARC_INST_TO_CLASS
 			end, Rels)
 	end,
 	case mnesia:transaction(F) of
@@ -841,7 +822,7 @@ do_get_instance(Nref) ->
 %%-----------------------------------------------------------------------------
 do_children(Nref) ->
 	F = fun() ->
-		Children = downward_children_by_arc(Nref, ?INST_CHILD_ARC,
+		Children = downward_children_by_arc(Nref, ?ARC_INST_CHILD,
 			composition),
 		[N || N <- Children, N#node.kind =:= instance]
 	end,

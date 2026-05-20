@@ -15,6 +15,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
 
 
 %%---------------------------------------------------------------------
@@ -290,7 +291,7 @@ template_avp_marker_stamped(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, #{relationship_avp := RaNref}} = graphdb_attr:seeded_nrefs(),
 	{atomic, [Node]} = mnesia:transaction(fun() ->
-		mnesia:read(nodes, 31)
+		mnesia:read(nodes, ?ARC_TEMPLATE)
 	end),
 	AVPs = Node#node.attribute_value_pairs,
 	?assert(lists:member(#{attribute => RaNref, value => true}, AVPs)).
@@ -302,13 +303,13 @@ template_avp_marker_stamped(_Config) ->
 template_avp_marker_idempotent(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{atomic, [Before]} = mnesia:transaction(fun() ->
-		mnesia:read(nodes, 31)
+		mnesia:read(nodes, ?ARC_TEMPLATE)
 	end),
 	BeforeAVPs = Before#node.attribute_value_pairs,
 	ok = gen_server:stop(graphdb_attr),
 	{ok, _} = graphdb_attr:start_link(),
 	{atomic, [After]} = mnesia:transaction(fun() ->
-		mnesia:read(nodes, 31)
+		mnesia:read(nodes, ?ARC_TEMPLATE)
 	end),
 	?assertEqual(BeforeAVPs, After#node.attribute_value_pairs).
 
@@ -326,7 +327,7 @@ create_name_attribute_basic(_Config) ->
 	{ok, Node} = graphdb_attr:get_attribute(Nref),
 	?assertEqual(attribute, Node#node.kind),
 	?assertEqual([6], Node#node.parents),
-	?assert(lists:member(#{attribute => 18, value => "TestName"},
+	?assert(lists:member(#{attribute => ?NAME_ATTR_ATTRIBUTE, value => "TestName"},
 		Node#node.attribute_value_pairs)).
 
 %%-----------------------------------------------------------------------------
@@ -340,7 +341,7 @@ create_literal_attribute_stores_type(_Config) ->
 	{ok, Node} = graphdb_attr:get_attribute(Nref),
 	?assertEqual([7], Node#node.parents),
 	AVPs = Node#node.attribute_value_pairs,
-	?assert(lists:member(#{attribute => 18, value => "Weight"}, AVPs)),
+	?assert(lists:member(#{attribute => ?NAME_ATTR_ATTRIBUTE, value => "Weight"}, AVPs)),
 	?assert(lists:member(#{attribute => Lt, value => kilogram}, AVPs)).
 
 %%-----------------------------------------------------------------------------
@@ -359,9 +360,9 @@ create_relationship_attribute_pair(_Config) ->
 	{ok, Rev} = graphdb_attr:get_attribute(RevNref),
 	?assertEqual([8], Fwd#node.parents),
 	?assertEqual([8], Rev#node.parents),
-	?assert(lists:member(#{attribute => 18, value => "Makes"},
+	?assert(lists:member(#{attribute => ?NAME_ATTR_ATTRIBUTE, value => "Makes"},
 		Fwd#node.attribute_value_pairs)),
-	?assert(lists:member(#{attribute => 18, value => "MadeBy"},
+	?assert(lists:member(#{attribute => ?NAME_ATTR_ATTRIBUTE, value => "MadeBy"},
 		Rev#node.attribute_value_pairs)),
 	?assert(lists:member(#{attribute => Tk, value => class},
 		Fwd#node.attribute_value_pairs)),
@@ -393,10 +394,10 @@ create_relationship_attribute_pair_atomic(_Config) ->
 	end),
 	FwdInbound = [R || R <- Out,
 		R#relationship.target_nref =:= FwdNref,
-		R#relationship.characterization =:= 24],
+		R#relationship.characterization =:= ?ARC_ATTR_CHILD],
 	RevInbound = [R || R <- Out,
 		R#relationship.target_nref =:= RevNref,
-		R#relationship.characterization =:= 24],
+		R#relationship.characterization =:= ?ARC_ATTR_CHILD],
 	?assertEqual(1, length(FwdInbound)),
 	?assertEqual(1, length(RevInbound)),
 	?assertEqual(taxonomy, (hd(FwdInbound))#relationship.kind).
@@ -418,7 +419,7 @@ create_relationship_type_basic(_Config) ->
 	{ok, Nref} = graphdb_attr:create_relationship_type("Ownership"),
 	{ok, Node} = graphdb_attr:get_attribute(Nref),
 	?assertEqual([8], Node#node.parents),
-	?assert(lists:member(#{attribute => 18, value => "Ownership"},
+	?assert(lists:member(#{attribute => ?NAME_ATTR_ATTRIBUTE, value => "Ownership"},
 		Node#node.attribute_value_pairs)).
 
 %%-----------------------------------------------------------------------------
@@ -439,8 +440,8 @@ new_attribute_writes_taxonomy_arcs(_Config) ->
 	end),
 	?assert(lists:any(fun(R) ->
 		R#relationship.target_nref =:= Nref andalso
-		R#relationship.characterization =:= 24 andalso
-		R#relationship.reciprocal =:= 23
+		R#relationship.characterization =:= ?ARC_ATTR_CHILD andalso
+		R#relationship.reciprocal =:= ?ARC_ATTR_PARENT
 	end, ParentOut)),
 
 	%% Child (Nref) -> Parent (6) with char=23 should exist
@@ -449,8 +450,8 @@ new_attribute_writes_taxonomy_arcs(_Config) ->
 	end),
 	?assert(lists:any(fun(R) ->
 		R#relationship.target_nref =:= 6 andalso
-		R#relationship.characterization =:= 23 andalso
-		R#relationship.reciprocal =:= 24
+		R#relationship.characterization =:= ?ARC_ATTR_PARENT andalso
+		R#relationship.reciprocal =:= ?ARC_ATTR_CHILD
 	end, ChildOut)).
 
 
@@ -612,8 +613,8 @@ attribute_type_of_returns_kind(_Config) ->
 	%% Bootstrap-derived: 17 (Name, under Names subtree) and 21 (Parent
 	%% category arc label, under Relationships subtree) and 7 (Literals
 	%% itself).
-	?assertEqual({ok, name},         graphdb_attr:attribute_type_of(17)),
-	?assertEqual({ok, relationship}, graphdb_attr:attribute_type_of(21)),
+	?assertEqual({ok, name},         graphdb_attr:attribute_type_of(?NAME_ATTR_CATEGORY)),
+	?assertEqual({ok, relationship}, graphdb_attr:attribute_type_of(?ARC_CAT_PARENT)),
 	?assertEqual({ok, literal},      graphdb_attr:attribute_type_of(7)).
 
 %%-----------------------------------------------------------------------------
@@ -640,7 +641,10 @@ attribute_type_of_non_attribute(_Config) ->
 bootstrap_attributes_retro_stamped(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	%% Names subtree -- 6, 9-12, 17-20 should be `name`.
-	NamesGroup = [6, 9, 10, 11, 12, 17, 18, 19, 20],
+	NamesGroup = [?NREF_NAMES, ?NREF_CAT_NAME_ATTRS, ?NREF_ATTR_NAME_ATTRS,
+	              ?NREF_CLS_NAME_ATTRS, ?NREF_INST_NAME_ATTRS,
+	              ?NAME_ATTR_CATEGORY, ?NAME_ATTR_ATTRIBUTE, ?NAME_ATTR_CLASS,
+	              ?NAME_ATTR_INSTANCE],
 	lists:foreach(fun(N) ->
 		?assertEqual({ok, name}, graphdb_attr:attribute_type_of(N))
 	end, NamesGroup),
@@ -649,7 +653,13 @@ bootstrap_attributes_retro_stamped(_Config) ->
 	?assertEqual({ok, literal}, graphdb_attr:attribute_type_of(7)),
 
 	%% Relationships subtree -- 8, 13-16, 21-31 should be `relationship`.
-	RelGroup = [8, 13, 14, 15, 16, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+	RelGroup = [?NREF_RELATIONSHIPS, ?NREF_CAT_REL_ATTRS, ?NREF_ATTR_REL_ATTRS,
+	            ?NREF_CLS_REL_ATTRS, ?NREF_INST_REL_ATTRS,
+	            ?ARC_CAT_PARENT, ?ARC_CAT_CHILD,
+	            ?ARC_ATTR_PARENT, ?ARC_ATTR_CHILD,
+	            ?ARC_CLS_PARENT, ?ARC_CLS_CHILD,
+	            ?ARC_INST_PARENT, ?ARC_INST_CHILD,
+	            ?ARC_INST_TO_CLASS, ?ARC_CLASS_TO_INST, ?ARC_TEMPLATE],
 	lists:foreach(fun(N) ->
 		?assertEqual({ok, relationship}, graphdb_attr:attribute_type_of(N))
 	end, RelGroup).
@@ -662,13 +672,13 @@ bootstrap_attributes_retro_stamped(_Config) ->
 retro_stamp_idempotent_on_restart(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{atomic, [Before6]}  = mnesia:transaction(fun() -> mnesia:read(nodes, 6) end),
-	{atomic, [Before24]} = mnesia:transaction(fun() -> mnesia:read(nodes, 24) end),
+	{atomic, [Before24]} = mnesia:transaction(fun() -> mnesia:read(nodes, ?ARC_ATTR_CHILD) end),
 
 	ok = gen_server:stop(graphdb_attr),
 	{ok, _} = graphdb_attr:start_link(),
 
 	{atomic, [After6]}  = mnesia:transaction(fun() -> mnesia:read(nodes, 6) end),
-	{atomic, [After24]} = mnesia:transaction(fun() -> mnesia:read(nodes, 24) end),
+	{atomic, [After24]} = mnesia:transaction(fun() -> mnesia:read(nodes, ?ARC_ATTR_CHILD) end),
 	?assertEqual(Before6#node.attribute_value_pairs,
 		After6#node.attribute_value_pairs),
 	?assertEqual(Before24#node.attribute_value_pairs,
