@@ -874,7 +874,7 @@ is never called. Revisit if phased startup is desired.
 
 ---
 
-### E5. Replace `included_applications` with peer-app dependencies
+### E5. Replace `included_applications` with peer-app dependencies — **RESOLVED** (2026-05-21)
 
 **Evidence:** `apps/database/src/database.app.src` declares
 `included_applications: [graphdb, dictionary]`. This is Dallas's 2008

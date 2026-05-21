@@ -17,7 +17,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 | Component           | State                                                                                                                                       |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Build               | Compiles clean — zero warnings (Erlang/OTP, the Open Telecom Platform, version 27 / rebar3 3.24)                                            |
+| Build               | Compiles clean — zero warnings (Erlang/OTP, the Open Telecom Platform, version 28 / rebar3 3.27)                                            |
 | `nref` subsystem    | Fully implemented; backed by DETS (Disk-based Erlang Term Storage); `set_floor/1` API                                                       |
 | `dictionary_imp`    | Implemented; not yet wired to `dictionary_server` / `term_server`                                                                           |
 | `graphdb_bootstrap` | Implemented — Mnesia schema, table creation, scaffold loader                                                                                |
@@ -209,37 +209,44 @@ sources). API: `graphdb_instance:add_relationship/4,5`.
 
 ## 5. Supervision Tree
 
-The four OTP applications are peer apps started by `application_master`
-in dependency order from `seerstone.app.src`'s `applications:` list:
-`nref` first, then `database`, then `seerstone`.
+Five OTP applications started by `application_master` in dependency order.
+`graphdb` declares `mnesia` and `nref` as dependencies; `database` declares
+`graphdb` and `dictionary`; `seerstone` declares `nref` and `database`.
 
 ```
 nref (application — started first)
   └── nref_sup
-        ├── nref_allocator                 — DETS-backed counter
-        └── nref_server                    — public nref API; calls allocator
+        ├── nref_allocator       — DETS-backed block allocator
+        └── nref_server          — public nref API; calls allocator
 
-database (application — started after nref)
-  └── database_sup
-        ├── graphdb_sup     (graphdb is an included_application of database)
-        │     ├── graphdb_mgr       — primary coordinator, bootstrap startup
-        │     ├── graphdb_attr      — attribute library
-        │     ├── graphdb_class     — taxonomic hierarchy
-        │     ├── graphdb_instance  — compositional hierarchy + inheritance
-        │     ├── graphdb_rules     — rule storage/enforcement (stub)
-        │     └── graphdb_language  — query language (stub)
-        └── dictionary_sup  (dictionary is an included_application of database)
-              ├── dictionary_server — (stub, not wired to dictionary_imp)
-              └── term_server       — (stub, not wired to dictionary_imp)
+graphdb (application — started after mnesia + nref)
+  └── graphdb_sup
+        ├── rel_id_server        — arc row ID allocator (separate from nref space)
+        ├── graphdb_mgr          — primary coordinator; bootstrap startup
+        ├── graphdb_attr         — attribute library
+        ├── graphdb_class        — taxonomic hierarchy
+        ├── graphdb_instance     — compositional hierarchy + inheritance
+        ├── graphdb_rules        — rule storage/enforcement (stub)
+        └── graphdb_language     — multilingual label overlay + query language
+
+dictionary (application — started alongside graphdb)
+  └── dictionary_sup
+        ├── dictionary_server    — ETS-backed key-value store
+        └── term_server          — ETS-backed term store
+
+database (application — started after graphdb + dictionary)
+  └── database_sup               — empty supervisor; attachment point for future
+                                   database-level services
 
 seerstone (application — top-level; started last)
-  └── seerstone_sup       — empty supervisor; placeholder for future
-                            seerstone-specific workers
+  └── seerstone_sup              — empty supervisor; placeholder for future
+                                   seerstone-specific workers
 ```
 
-`graphdb` and `dictionary` are `included_applications` of `database` — the
-2008 OTP idiom Dallas adopted. Modernizing them to peer-app status is
-tracked as `TASKS.md` E5.
+`graphdb` and `dictionary` are independent peer applications (E5).
+`database_sup` is intentionally empty — it serves as an attachment point for
+any future database-level coordination services without reintroducing the
+`included_applications` coupling.
 
 Worker boundaries: each `graphdb_*` worker owns the schema/contract it
 maintains. `graphdb_mgr` is the public entry point and routes to the
