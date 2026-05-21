@@ -858,19 +858,21 @@ deployment is planned.
 
 ---
 
-### E3. `code_change/3` — hot code upgrades
+### E3. `code_change/3` — hot code upgrades — **DEFERRED**
 
-**Evidence:** NYI in all gen_server modules: `nref_allocator`,
-`nref_server`, all six `graphdb_*` workers.
-
-**Fix:** implement when first hot-upgrade is planned.
+NYI in all gen_server modules: `nref_allocator`, `nref_server`, all six
+`graphdb_*` workers. Implement when the first hot-upgrade deployment is
+planned. Premature until there is a versioned release to upgrade in place.
 
 ---
 
-### E4. `start_phases` / `start_phase/3`
+### E4. `start_phases` / `start_phase/3` — **DEFERRED**
 
-None of the `.app.src` files define `start_phases`, so `start_phase/3`
-is never called. Revisit if phased startup is desired.
+No `.app.src` file defines `start_phases`, so `start_phase/3` is never
+called. Revisit when an externally-visible entry point (API server, socket
+listener) is added to `seerstone` that must not accept connections until
+the full graphdb stack is bootstrapped — at that point phased startup
+becomes necessary to close the window between port-open and data-ready.
 
 ---
 
