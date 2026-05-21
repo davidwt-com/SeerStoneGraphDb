@@ -849,12 +849,12 @@ after successful load. 2 CT tests in `graphdb_nrefs_SUITE`. 320 tests (217 CT +
 
 ---
 
-### E2. Non-normal OTP start types
+### E2. Non-normal OTP start types — **RESOLVED** (2026-05-21)
 
-**Evidence:** `seerstone:start/2` and `nref:start/2` both hit `?NYI`
-for `{takeover, Node}` and `{failover, Node}` start types.
-
-**Fix:** implement when distributed deployment is on the roadmap.
+`seerstone:start/2` and `nref:start/2` now delegate `{takeover, Node}` and
+`{failover, Node}` to the normal start path rather than hitting `?NYI`.
+Full distributed takeover/failover semantics deferred until a distributed
+deployment is planned.
 
 ---
 
