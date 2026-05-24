@@ -76,7 +76,12 @@
     q4_resolves_inherited_attributes/1,
     q4_outgoing_and_incoming_connections/1,
     q4_compositional_ancestors/1,
-    q4_instance_not_found/1
+    q4_instance_not_found/1,
+    %% Q5 — list_instances_of
+    q5_lists_direct_instances/1,
+    q5_recursive_includes_subclass_instances/1,
+    q5_non_recursive_excludes_subclasses/1,
+    q5_class_with_no_instances/1
 ]).
 
 suite() ->
@@ -85,7 +90,7 @@ suite() ->
 all() ->
     [{group, skeleton}, {group, q1_get_node}, {group, q1b_get_arcs},
      {group, q2_describe_attribute}, {group, q3_describe_class},
-     {group, q4_describe_instance}].
+     {group, q4_describe_instance}, {group, q5_list_instances_of}].
 
 groups() ->
     [{skeleton, [], [
@@ -131,6 +136,12 @@ groups() ->
         q4_outgoing_and_incoming_connections,
         q4_compositional_ancestors,
         q4_instance_not_found
+     ]},
+     {q5_list_instances_of, [], [
+        q5_lists_direct_instances,
+        q5_recursive_includes_subclass_instances,
+        q5_non_recursive_excludes_subclasses,
+        q5_class_with_no_instances
      ]}].
 
 
@@ -575,3 +586,41 @@ q4_instance_not_found(_Config) ->
     ?assertMatch({error, {nref_not_found, 9999999}},
                  graphdb_query:execute_query(
                      #q_describe{nref = 9999999, labels = default})).
+
+%%---------------------------------------------------------------------
+%% Q5 — list_instances_of
+%%---------------------------------------------------------------------
+q5_lists_direct_instances(_Config) ->
+    {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+    {ok, Tau} = graphdb_instance:create_instance(
+                    "Taurus", Veh, ?NREF_PROJECTS),
+    {ok, Acc} = graphdb_instance:create_instance(
+                    "Accord", Veh, ?NREF_PROJECTS),
+    {ok, Insts} = graphdb_query:execute_query(
+        #q_instances_of{class = Veh, recursive = false}),
+    ?assert(lists:member(Tau, Insts)),
+    ?assert(lists:member(Acc, Insts)).
+
+q5_recursive_includes_subclass_instances(_Config) ->
+    {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+    {ok, Car} = graphdb_class:create_class("Car",     Veh),
+    {ok, Tau} = graphdb_instance:create_instance(
+                    "Taurus", Car, ?NREF_PROJECTS),
+    {ok, Insts} = graphdb_query:execute_query(
+        #q_instances_of{class = Veh, recursive = true}),
+    ?assert(lists:member(Tau, Insts)).
+
+q5_non_recursive_excludes_subclasses(_Config) ->
+    {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+    {ok, Car} = graphdb_class:create_class("Car",     Veh),
+    {ok, Tau} = graphdb_instance:create_instance(
+                    "Taurus", Car, ?NREF_PROJECTS),
+    {ok, Insts} = graphdb_query:execute_query(
+        #q_instances_of{class = Veh, recursive = false}),
+    ?assertNot(lists:member(Tau, Insts)).
+
+q5_class_with_no_instances(_Config) ->
+    {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+    ?assertMatch({ok, []},
+                 graphdb_query:execute_query(
+                     #q_instances_of{class = Veh, recursive = true})).

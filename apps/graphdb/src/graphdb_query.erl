@@ -12,9 +12,9 @@
 %%              F3 sequencing: session API (new_session/0, refresh/1)
 %%              is real. Q1 (#q_get_node{}), Q1b (#q_get_arcs{}), Q2
 %%              (#q_describe{} for kind=attribute), Q3 (#q_describe{}
-%%              for kind=class), and Q4 (#q_describe{} for
-%%              kind=instance) are implemented; Q5-Q6 return
-%%              {error, not_implemented} until Tasks 8-9.
+%%              for kind=class), Q4 (#q_describe{} for kind=instance),
+%%              and Q5 (#q_instances_of{}) are implemented; Q6 returns
+%%              {error, not_implemented} until Task 9.
 %%
 %% Design source: f3-graphdb-query-design.md at project root.
 %%---------------------------------------------------------------------
@@ -32,6 +32,8 @@
 %% Q3 (#q_describe{} for kind=class) implemented (F3 Task 6).
 %% Rev A.5 Date: May 2026 Author: David W. Thomas
 %% Q4 (#q_describe{} for kind=instance) implemented (F3 Task 7).
+%% Rev A.6 Date: May 2026 Author: David W. Thomas
+%% Q5 (#q_instances_of{}) implemented (F3 Task 8).
 %%---------------------------------------------------------------------
 -module(graphdb_query).
 -behaviour(gen_server).
@@ -217,6 +219,20 @@ dispatch(#q_describe{nref = N, labels = Lang}, Session) ->
         {#node{kind = Kind}, Session1} ->
             {{error, {unsupported_kind, Kind}}, Session1}
     end;
+dispatch(#q_instances_of{class = C, recursive = Recursive}, Session) ->
+    Classes = case Recursive of
+        true  -> [C | all_subclasses(C)];
+        false -> [C]
+    end,
+    {Instances, Session1} = lists:foldl(
+        fun(Cl, {Acc, S}) ->
+            {Arcs, S1} = session_read_arcs(S, Cl, outgoing,
+                                           [instantiation]),
+            Members = [A#relationship.target_nref || A <- Arcs,
+                A#relationship.characterization =:= ?ARC_CLASS_TO_INST],
+            {Members ++ Acc, S1}
+        end, {[], Session}, Classes),
+    {{ok, lists:usort(Instances)}, Session1};
 dispatch(_Query, Session) ->
     {{error, not_implemented}, Session}.
 
@@ -552,6 +568,17 @@ name_attr_for_node(Nref) ->
         [#node{kind = instance}]  -> ?NAME_ATTR_INSTANCE;
         _                         -> ?NAME_ATTR_CATEGORY
     end.
+
+%%---------------------------------------------------------------------
+%% all_subclasses(ClassNref) -> [integer()]
+%%
+%% Transitive closure of graphdb_class:subclasses/1 (which returns
+%% direct children only).  Does NOT include ClassNref itself.
+%%---------------------------------------------------------------------
+all_subclasses(C) ->
+    {ok, Direct} = graphdb_class:subclasses(C),
+    DirectNrefs = [N#node.nref || N <- Direct],
+    DirectNrefs ++ lists:flatmap(fun all_subclasses/1, DirectNrefs).
 
 %%---------------------------------------------------------------------
 %% node_to_map(Node) -> map()
