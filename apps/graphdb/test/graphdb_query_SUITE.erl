@@ -186,8 +186,7 @@ refresh_bumps_snapshot(_Config) ->
     ?assertEqual(#{}, maps:get(cache, S2)).
 
 unimplemented_query_returns_error(_Config) ->
-    %% Any unhandled query shape should yield {error, not_implemented}
-    %% — Q5 is not landed yet (Task 8), use it as a placeholder.
-    Q = #q_instances_of{class = ?NREF_CLASSES, recursive = false},
+    %% A query shape the dispatcher will never recognise — exercises the
+    %% catch-all {error, not_implemented} path, durable across F3 tasks.
     ?assertEqual({error, not_implemented},
-                 graphdb_query:execute_query(Q)).
+                 graphdb_query:execute_query({unknown_query_shape, foo})).

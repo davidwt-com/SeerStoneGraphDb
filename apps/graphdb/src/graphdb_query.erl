@@ -190,7 +190,9 @@ drop_session({ok, R, _S})            -> {ok, R};
 drop_session({partial, R, C, _S})    -> {partial, R, C};
 drop_session(Other)                  -> Other.
 
-%% attach_session — for /2 calls, add the session to the reply tail.
+%% attach_session — ensure the reply ends with the post-dispatch session.
+%% Handles both 2-shape replies (append session) and 3-shape replies
+%% (replace whatever dispatch threaded through).
 attach_session({error, _} = E, _S)    -> E;
 attach_session({ok, R}, S)            -> {ok, R, S};
 attach_session({partial, R, C}, S)    -> {partial, R, C, S};
