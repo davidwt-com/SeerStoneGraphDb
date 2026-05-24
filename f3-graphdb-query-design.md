@@ -3,10 +3,17 @@ Copyright (c) 2026 David W. Thomas
 SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
-# F3 — graphdb_language Query Language Design
+# F3 — graphdb_query Query Language Design
 
 **Status:** Draft — design spec for the query layer. Not a plan. Not
 surface syntax. Not a task list.
+
+> **Module-name note.** The query language lives in a new module
+> `graphdb_query`, not `graphdb_language`. The latter is occupied by
+> the M6 multilingual overlay layer (label resolution, language
+> registration, translation hooks). Earlier task drafts referred to
+> `graphdb_language` as the query module — that slot was reclaimed
+> by M6 and the query layer needed a new home.
 
 This document fixes the **architectural contract** the query language
 will grow into. The query language is open-ended — there is no
@@ -38,7 +45,7 @@ walking skeleton; Q1b is its sibling primitive that opens the
 +---------------------------------------------+
 |  Planner (AST -> executor steps)            |  <- single-pass; no optimizer
 +---------------------------------------------+
-|  Executor (graphdb_language gen_server)     |  <- the work happens here
+|  Executor (graphdb_query gen_server)        |  <- the work happens here
 +---------------------------------------------+
 |  graphdb_attr / class / instance / mgr      |  <- existing primitives
 |  + Mnesia indexes on source/target_nref     |
@@ -448,7 +455,7 @@ These are the decisions that get hard to change later. Don't drift.
 5. **Executor: gen_server, synchronous calls.** No async streaming
    yet; results fit in memory at this stage.
 6. **Inheritance lives in `graphdb_instance`, not
-   `graphdb_language`.** Executor calls existing `resolve_value/2`.
+   `graphdb_query`.** Executor calls existing `resolve_value/2`.
    Never duplicate the 4-priority logic.
 7. **`find_path` is always bounded.** No unbounded traversal at the
    API. Caller must supply a depth limit. Default = 10.
@@ -628,7 +635,7 @@ These are the decisions that get hard to change later.
 5. **Executor: gen_server, synchronous calls.** No async streaming
    yet; results fit in memory at this stage.
 6. **Inheritance lives in `graphdb_instance`, not
-   `graphdb_language`.** Executor calls existing `resolve_value/2`.
+   `graphdb_query`.** Executor calls existing `resolve_value/2`.
    Never duplicate the 4-priority logic.
 7. **`find_path` is always bounded.** No unbounded traversal at the
    API. Caller must supply a depth limit. Default = 10.
@@ -638,7 +645,7 @@ These are the decisions that get hard to change later.
    client pattern demands.
 9. **Mnesia access only via `session_read_*` helpers.** The cache
    layer *is* the executor's database interface. Direct
-   `mnesia:dirty_*` calls in `graphdb_language` are a code smell.
+   `mnesia:dirty_*` calls in `graphdb_query` are a code smell.
 10. **Sessions are snapshots, not live views.** Once opened, a
     session's cache is not invalidated by concurrent writes.
     `refresh/1` is the sole invalidation mechanism; event-driven

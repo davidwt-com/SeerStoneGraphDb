@@ -21,7 +21,8 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_attr.erl`      | Attribute library gen_server (stub)                         |
 | `graphdb_class.erl`     | Taxonomic hierarchy gen_server (stub)                       |
 | `graphdb_instance.erl`  | Instance/compositional hierarchy gen_server (stub)          |
-| `graphdb_language.erl`  | Query language gen_server (stub)                            |
+| `graphdb_language.erl`  | M6 multilingual overlay layer (implemented)                 |
+| `graphdb_query.erl`     | F3 query language gen_server (planned)                      |
 
 `apps/graphdb/priv/bootstrap.terms` — Erlang Terms file fully written; contains 35 nodes
 (nrefs 1–35, BFS) and 34 hierarchy relationship pairs (8 composition + 26 taxonomy). Loaded at first ontology startup.
@@ -249,11 +250,26 @@ Stores and enforces graph rules; enables pattern recognition.
 
 - `create_rule/2`, `check_rule/2`, `suggest_relationships/1`
 
-### `graphdb_language` — Query Language
+### `graphdb_language` — Multilingual Overlay Layer (M6)
 
-Parses and executes graph queries.
+Manages multilingual labels: language registration, dialect chains,
+per-language Mnesia overlay tables, label resolution, and async
+translation hooks.
 
-- `parse_query/1`, `execute_query/1`, `find_path/3`
+- `register_language/2`, `register_dialect/3`,
+  `lookup_language_nref/1`
+- `set_labels/3`, `resolve_label/4`, `make_chain/1`
+- `project_language/1`, `register_translation_hook/1`,
+  `unregister_translation_hook/1`, `fire_translation_hooks/2`
+
+### `graphdb_query` — Query Language (planned, F3)
+
+Parses and executes graph queries. Lives in `graphdb_query.erl`
+(not yet created). Design at `f3-graphdb-query-design.md` at project
+root.
+
+- `parse_query/1`, `execute_query/1`, `execute_query/2`,
+  `new_session/0`, `refresh/1`, `resume/2`
 
 ### `graphdb_mgr` — Primary Coordinator
 
