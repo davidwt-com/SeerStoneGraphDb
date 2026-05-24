@@ -58,7 +58,8 @@
     q1b_both_directions/1,
     q1b_kind_filter_taxonomy_only/1,
     q1b_nref_with_no_arcs/1,
-    q1b_cache_uses_dir_kind_key/1
+    q1b_cache_uses_dir_kind_key/1,
+    q1b_cache_hit_skips_mnesia/1
 ]).
 
 suite() ->
@@ -89,7 +90,8 @@ groups() ->
         q1b_both_directions,
         q1b_kind_filter_taxonomy_only,
         q1b_nref_with_no_arcs,
-        q1b_cache_uses_dir_kind_key
+        q1b_cache_uses_dir_kind_key,
+        q1b_cache_hit_skips_mnesia
      ]}].
 
 
@@ -364,3 +366,17 @@ q1b_cache_uses_dir_kind_key(_Config) ->
     Cache = maps:get(cache, S1),
     Key = {arcs, ?NREF_ROOT, outgoing, all},
     ?assert(maps:is_key(Key, Cache)).
+
+q1b_cache_hit_skips_mnesia(_Config) ->
+    %% First read populates the cache under {arcs, N, Dir, Kinds}.
+    S0 = graphdb_query:new_session(),
+    {ok, Arcs1, S1} = graphdb_query:execute_query(
+        #q_get_arcs{nref = ?NREF_ROOT, direction = outgoing,
+                    arc_kinds = all}, S0),
+    %% Stop Mnesia. A subsequent uncached query would now fail.
+    stopped = mnesia:stop(),
+    %% Second read under the same session must come from the cache.
+    {ok, Arcs2, _S2} = graphdb_query:execute_query(
+        #q_get_arcs{nref = ?NREF_ROOT, direction = outgoing,
+                    arc_kinds = all}, S1),
+    ?assertEqual(Arcs1, Arcs2).
