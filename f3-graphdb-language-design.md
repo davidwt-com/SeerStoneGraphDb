@@ -467,7 +467,9 @@ will physically visit A, B, C along the way. Dropping A, B, C and
 re-reading them on the next related query is wasteful. The cache
 should be filled by traversal as a *side effect* — whatever the
 executor touches becomes available to the next query in the same
-conversation.
+conversation. The cache is internal to the executor; returned
+results, once handed to the caller, are immutable and out of scope
+for this freshness model (see §8.4).
 
 **Danglers as resumable continuations.** A bounded query (max-depth
 path, capped instance set) stops at a frontier. That frontier is
@@ -478,10 +480,13 @@ restating the original query.
 ### 8.2 API Shape — Pinned Now
 
 ```erlang
--opaque session()      :: #{cache => #{integer() => term()}, ...}.
+-opaque session()      :: #{snapshot_at => erlang:timestamp(),
+                            cache       => #{integer() => term()},
+                            ...}.
 -opaque continuation() :: #cont{...}.
 
 -spec new_session() -> session().
+-spec refresh(session()) -> session().
 
 -spec execute_query(query()) ->
     {ok, result()} |
@@ -495,7 +500,8 @@ restating the original query.
 
 -spec resume(continuation(), session()) ->
     {ok, result(), session()} |
-    {partial, result(), continuation(), session()}.
+    {partial, result(), continuation(), session()} |
+    {error, snapshot_expired}.
 ```
 
 The `/1` variant is ephemeral (no session reuse). The `/2` variant
@@ -519,14 +525,59 @@ including incidental hops never requested by the caller. The
 executor cannot bypass this layer because the layer *is* the
 executor's Mnesia interface.
 
-### 8.4 Minimal First Implementation
+### 8.4 Freshness Model — Snapshot Semantics
+
+A session is a coherent view of the graph as of the moment it was
+opened (or last refreshed). The cache, once populated, is not
+invalidated by mutations to the underlying tables. This is a
+deliberate trade-off — not an oversight.
+
+**Why snapshot, not invalidation:**
+
+- Conversations are short-lived and form coherent inquiries.
+  Internally inconsistent answers across `Q3 → Q5 → Q4` would be
+  worse than uniformly-snapshot answers.
+- Continuations require a fixed graph view. A `#continuation{}`
+  paused at frontier F is meaningless if F's nodes have been
+  reparented or deleted in the meantime. Snapshot semantics make
+  resume well-defined.
+- No version stamps on records, no event bus, no subscriber
+  registry — the cost of "always fresh" is high and not justified
+  at this stage.
+
+**Returned results vs. internal cache.** Once a query returns a
+`result()` to the caller, it is immutable and owned by the caller —
+re-querying is the only path to fresher data. The freshness model
+only governs the internal `session.cache` filled by read-through.
+
+**The escape hatch.** Callers that know they have made a write — or
+that simply want to drop a stale view — call:
+
+```erlang
+refresh(Session) -> Session1.
+```
+
+This drops the cache and bumps `snapshot_at`. Continuations issued
+against the previous snapshot are invalidated; resuming one against a
+refreshed session returns `{error, snapshot_expired}` so callers
+re-query rather than silently mix snapshots.
+
+**Deferred:** event-driven invalidation. If multi-agent concurrent
+editing or long-lived monitoring sessions become real use cases, push
+invalidation re-enters scope. The snapshot model plus the refresh
+escape hatch keeps the door open without prejudging that design.
+
+### 8.5 Minimal First Implementation
 
 The walking skeleton (Q1) ships with the full API surface but
 minimal behaviour:
 
-- `new_session/0` returns an empty session map.
+- `new_session/0` returns an empty session map with
+  `snapshot_at => os:timestamp()`.
 - `session_read_*` always misses and reads Mnesia. Cache is populated
   but no query yet exercises a second read against it.
+- `refresh/1` is exported and works (drops cache, bumps
+  `snapshot_at`), but no query yet depends on it.
 - `execute_query/1` always returns `{ok, _}` — never `{partial, _,
   _}` — because Q1 is not bounded.
 - `resume/2` is exported but no continuation type yet exists to call
@@ -536,21 +587,22 @@ Cost: ~30 lines beyond a no-session implementation. The cache map and
 read-through helpers are the only real additions. Everything else is
 spec / signatures.
 
-### 8.5 What Build-Out Adds Later
+### 8.6 What Build-Out Adds Later
 
 When a real client pattern needs it:
 
 - Q6 returns `{partial, EdgesSoFar, #cont_path{visited, frontier,
   remaining_depth, ...}}` when it hits its depth bound.
 - `resume(Cont, Session)` continues a `#cont_path{}` from where it
-  stopped.
+  stopped, checking that the continuation's snapshot matches the
+  session's current snapshot.
 - Session may grow to carry: open continuations from prior queries;
-  logical begin-time for staleness reasoning; a watermark for
-  invalidation if mutations land mid-conversation.
+  a generation counter to detect continuation/refresh mismatches;
+  subscription handles if event-driven invalidation is later added.
 - A session may eventually become a gen_server-owned process if
   contention demands it (value-passing now keeps the door open).
 
-### 8.6 Why Pinning the Shape Now is Cheap
+### 8.7 Why Pinning the Shape Now is Cheap
 
 | Cost now                                 | Cost if deferred                                |
 | ---------------------------------------- | ----------------------------------------------- |
@@ -587,6 +639,12 @@ These are the decisions that get hard to change later.
 9. **Mnesia access only via `session_read_*` helpers.** The cache
    layer *is* the executor's database interface. Direct
    `mnesia:dirty_*` calls in `graphdb_language` are a code smell.
+10. **Sessions are snapshots, not live views.** Once opened, a
+    session's cache is not invalidated by concurrent writes.
+    `refresh/1` is the sole invalidation mechanism; event-driven
+    invalidation is deferred. Returned results are immutable once
+    handed to the caller — freshness past the return is the caller's
+    concern, not the executor's.
 
 ## 10. Out of Scope (Deferred)
 
@@ -601,8 +659,10 @@ These are the decisions that get hard to change later.
 - Materialized views, query caching (beyond session-scoped read cache)
 - Concurrent or streaming result delivery
 - Mutation queries (write side) — the query language is read-only
-- Cache invalidation under concurrent mutation — sessions are
-  short-lived conversation context; staleness deferred
+- Event-driven cache invalidation under concurrent mutation.
+  Sessions are snapshots (§8.4); `refresh/1` is the only invalidation
+  path. Push invalidation becomes worth designing if multi-agent
+  concurrent editing or long-lived monitoring sessions appear.
 
 ## 11. Open Questions
 
