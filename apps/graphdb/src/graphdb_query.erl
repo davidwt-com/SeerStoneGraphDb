@@ -10,9 +10,10 @@
 %%              read-through cache.
 %%
 %%              F3 sequencing: session API (new_session/0, refresh/1)
-%%              is real. Q1 (#q_get_node{}), Q1b (#q_get_arcs{}), and
-%%              Q2 (#q_describe{} for kind=attribute) are implemented;
-%%              Q3-Q6 return {error, not_implemented} until Tasks 6-9.
+%%              is real. Q1 (#q_get_node{}), Q1b (#q_get_arcs{}), Q2
+%%              (#q_describe{} for kind=attribute), and Q3
+%%              (#q_describe{} for kind=class) are implemented; Q4-Q6
+%%              return {error, not_implemented} until Tasks 7-9.
 %%
 %% Design source: f3-graphdb-query-design.md at project root.
 %%---------------------------------------------------------------------
@@ -26,6 +27,8 @@
 %% Q1b (#q_get_arcs{}) implemented (F3 Task 4).
 %% Rev A.3 Date: May 2026 Author: David W. Thomas
 %% Q2 (#q_describe{} for kind=attribute) implemented (F3 Task 5).
+%% Rev A.4 Date: May 2026 Author: David W. Thomas
+%% Q3 (#q_describe{} for kind=class) implemented (F3 Task 6).
 %%---------------------------------------------------------------------
 -module(graphdb_query).
 -behaviour(gen_server).
@@ -204,6 +207,8 @@ dispatch(#q_describe{nref = N, labels = Lang}, Session) ->
             {{error, {nref_not_found, N}}, Session1};
         {#node{kind = attribute} = Node, Session1} ->
             describe_attribute(Node, Lang, Session1);
+        {#node{kind = class} = Node, Session1} ->
+            describe_class(Node, Lang, Session1);
         {#node{kind = Kind}, Session1} ->
             {{error, {unsupported_kind, Kind}}, Session1}
     end;
@@ -326,6 +331,39 @@ describe_attribute(#node{nref = N, parents = Parents,
                avps           => AVPs,
                labels         => Labels},
     {{ok, Result}, Session2}.
+
+%%---------------------------------------------------------------------
+%% describe_class(Node, LangSpec, Session)
+%%     -> {{ok, ResultMap}, Session1}
+%%
+%% Q3: superclasses come from the parents cache; ancestors come from
+%% graphdb_class:ancestors/1 (multi-parent DAG walk); subclasses come
+%% from graphdb_class:subclasses/1.  QCs are returned as the flat
+%% [{AttrNref, Value}] list produced by graphdb_class:inherited_qcs/1
+%% — the own/inherited+origin split is a deferred enhancement.
+%%---------------------------------------------------------------------
+describe_class(#node{nref = N, parents = Parents,
+                     attribute_value_pairs = AVPs}, LangSpec,
+               Session) ->
+    Superclasses = Parents,
+    {ok, AncestorNodes} = graphdb_class:ancestors(N),
+    {ok, SubclassNodes} = graphdb_class:subclasses(N),
+    {ok, QCs}           = graphdb_class:inherited_qcs(N),
+    Ancestors  = [Nd#node.nref || Nd <- AncestorNodes],
+    Subclasses = [Nd#node.nref || Nd <- SubclassNodes],
+    QCAttrs    = [A || {A, _Value} <- QCs],
+    AllNrefs = lists:usort([N] ++ Superclasses ++ Ancestors
+                           ++ Subclasses ++ QCAttrs),
+    {Labels, Session1} = resolve_labels(AllNrefs, LangSpec, Session),
+    Result = #{nref                       => N,
+               kind                       => class,
+               superclasses               => Superclasses,
+               ancestors                  => Ancestors,
+               subclasses                 => Subclasses,
+               qualifying_characteristics => QCs,
+               avps                       => AVPs,
+               labels                     => Labels},
+    {{ok, Result}, Session1}.
 
 %%---------------------------------------------------------------------
 %% attribute_type_marker(Session) -> integer() | undefined

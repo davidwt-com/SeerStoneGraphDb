@@ -65,7 +65,12 @@
     q2_includes_parent_and_taxonomy/1,
     q2_includes_labels_default_english/1,
     q2_not_found_returns_error/1,
-    q2_rejects_non_attribute_nref/1
+    q2_rejects_non_attribute_nref/1,
+    %% Q3 — describe_class
+    q3_describes_class_with_superclasses/1,
+    q3_lists_subclasses/1,
+    q3_includes_qcs_flat_list/1,
+    q3_class_not_found/1
 ]).
 
 suite() ->
@@ -73,7 +78,7 @@ suite() ->
 
 all() ->
     [{group, skeleton}, {group, q1_get_node}, {group, q1b_get_arcs},
-     {group, q2_describe_attribute}].
+     {group, q2_describe_attribute}, {group, q3_describe_class}].
 
 groups() ->
     [{skeleton, [], [
@@ -106,6 +111,12 @@ groups() ->
         q2_includes_labels_default_english,
         q2_not_found_returns_error,
         q2_rejects_non_attribute_nref
+     ]},
+     {q3_describe_class, [], [
+        q3_describes_class_with_superclasses,
+        q3_lists_subclasses,
+        q3_includes_qcs_flat_list,
+        q3_class_not_found
      ]}].
 
 
@@ -436,3 +447,48 @@ q2_rejects_non_attribute_nref(_Config) ->
     {error, {unsupported_kind, category}} =
         graphdb_query:execute_query(
             #q_describe{nref = ?NREF_ROOT, labels = default}).
+
+%%---------------------------------------------------------------------
+%% Q3 — describe_class
+%%---------------------------------------------------------------------
+q3_describes_class_with_superclasses(_Config) ->
+    %% Build: Classes <- Vehicle <- Car
+    {ok, Vehicle} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+    {ok, Car}     = graphdb_class:create_class("Car", Vehicle),
+    {ok, R} = graphdb_query:execute_query(
+        #q_describe{nref = Car, labels = default}),
+    ?assertEqual(Car,       maps:get(nref, R)),
+    ?assertEqual(class,     maps:get(kind, R)),
+    ?assertEqual([Vehicle], maps:get(superclasses, R)),
+    ?assert(lists:member(Vehicle, maps:get(ancestors, R))).
+
+q3_lists_subclasses(_Config) ->
+    {ok, Vehicle} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+    {ok, Car}     = graphdb_class:create_class("Car",   Vehicle),
+    {ok, Truck}   = graphdb_class:create_class("Truck", Vehicle),
+    {ok, R} = graphdb_query:execute_query(
+        #q_describe{nref = Vehicle, labels = default}),
+    Subs = maps:get(subclasses, R),
+    ?assert(lists:member(Car,   Subs)),
+    ?assert(lists:member(Truck, Subs)).
+
+q3_includes_qcs_flat_list(_Config) ->
+    {ok, Vehicle} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+    {ok, Car}     = graphdb_class:create_class("Car",   Vehicle),
+    {ok, WeightA} = graphdb_attr:create_literal_attribute("weight", number),
+    {ok, ColorA}  = graphdb_attr:create_literal_attribute("color",  string),
+    ok = graphdb_class:add_qualifying_characteristic(Vehicle, WeightA),
+    ok = graphdb_class:add_qualifying_characteristic(Car, ColorA),
+    {ok, R} = graphdb_query:execute_query(
+        #q_describe{nref = Car, labels = default}),
+    QCs = maps:get(qualifying_characteristics, R),
+    %% Flat [{AttrNref, Value}] list; both Color (own) and Weight
+    %% (inherited from Vehicle) appear, each with Value=undefined
+    %% because no binding was set.
+    ?assert(lists:member({ColorA,  undefined}, QCs)),
+    ?assert(lists:member({WeightA, undefined}, QCs)).
+
+q3_class_not_found(_Config) ->
+    ?assertMatch({error, {nref_not_found, 9999999}},
+                 graphdb_query:execute_query(
+                     #q_describe{nref = 9999999, labels = default})).
