@@ -230,7 +230,8 @@ init([]) ->
 	{ok, ChSpec4} = childspec(graphdb_class),
 	{ok, ChSpec5} = childspec(graphdb_instance),
 	{ok, ChSpec6} = childspec(graphdb_language),
-	{ok, {SupFlags, [ChSpec0, ChSpec1, ChSpec2, ChSpec3, ChSpec4, ChSpec5, ChSpec6]}};
+	{ok, ChSpec7} = childspec(graphdb_query),
+	{ok, {SupFlags, [ChSpec0, ChSpec1, ChSpec2, ChSpec3, ChSpec4, ChSpec5, ChSpec6, ChSpec7]}};
 init(State) -> 
 	?NYI({init, {State}}),
 	ignore.
