@@ -560,7 +560,10 @@ bind_qc_value_undeclared_qc(_Config) ->
 	{ok, AttrN} = graphdb_attr:create_literal_attribute("weight", number),
 	%% Did NOT call add_qualifying_characteristic
 	?assertEqual({error, qc_not_declared},
-		graphdb_class:bind_qc_value(Veh, AttrN, 3500)).
+		graphdb_class:bind_qc_value(Veh, AttrN, 3500)),
+	%% Defense-in-depth: ensure the transaction abort rolled back
+	%% the write — no spurious QC was added to the class node.
+	?assertMatch({ok, []}, graphdb_class:inherited_qcs(Veh)).
 
 %%-----------------------------------------------------------------------------
 %% bind_qc_value called twice for the same QC replaces the prior value.

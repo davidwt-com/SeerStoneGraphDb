@@ -906,8 +906,13 @@ do_resolve_value(InstNref, AttrNref) ->
 									{ok, V, {compositional, AncNref}};
 								not_found ->
 									%% Priority 4: Directly connected nodes
-									resolve_from_connected(
-										InstNref, AttrNref);
+									case resolve_from_connected(
+										InstNref, AttrNref) of
+										{ok, V, ConnNref} ->
+											{ok, V, {connected, ConnNref}};
+										not_found ->
+											not_found
+									end;
 								{error, _} = Err ->
 									Err
 							end;
@@ -1056,13 +1061,14 @@ downward_children_by_arc(ParentNref, ChildArc, RelKind) ->
 
 %%-----------------------------------------------------------------------------
 %% resolve_from_connected(InstNref, AttrNref) ->
-%%     {ok, Value, {connected, NodeNref}} | not_found
+%%     {ok, Value, NodeNref} | not_found
 %%
 %% Checks all directly connected nodes (one level deep).  Only
 %% kind=connection arcs are considered; instantiation (membership) and
 %% composition (parent/child) arcs are excluded — those targets are
-%% already covered by Priorities 2 and 3.  When a match is found, the
-%% Source tag carries the nref of the connected node that held the AVP.
+%% already covered by Priorities 2 and 3.  Returns the nref of the
+%% connected node that held the AVP; the caller wraps it as
+%% {connected, NodeNref} for the Source tag.
 %%-----------------------------------------------------------------------------
 resolve_from_connected(InstNref, AttrNref) ->
 	F = fun() ->
@@ -1082,7 +1088,7 @@ resolve_from_connected(InstNref, AttrNref) ->
 
 %%-----------------------------------------------------------------------------
 %% search_targets(Nrefs, AttrNref) ->
-%%     {ok, Value, {connected, NodeNref}} | not_found
+%%     {ok, Value, NodeNref} | not_found
 %%
 %% Checks each target node's AVPs for the attribute.  Returns the
 %% first match together with the nref of the node that held the value.
@@ -1093,7 +1099,7 @@ search_targets([Nref | Rest], AttrNref) ->
 	case mnesia:dirty_read(nodes, Nref) of
 		[#node{attribute_value_pairs = AVPs}] ->
 			case find_avp_value(AVPs, AttrNref) of
-				{ok, V}   -> {ok, V, {connected, Nref}};
+				{ok, V}   -> {ok, V, Nref};
 				not_found -> search_targets(Rest, AttrNref)
 			end;
 		_ ->

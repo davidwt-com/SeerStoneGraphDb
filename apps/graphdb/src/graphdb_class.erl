@@ -805,9 +805,9 @@ do_bind_qc_value(ClassNref, AttrNref, Value) ->
 %% place.  Caller has already verified that AttrNref is present in AVPs.
 %%-----------------------------------------------------------------------------
 update_qc_value(AVPs, AttrNref, Value) ->
-	[case maps:get(attribute, A, undefined) of
-		AttrNref -> A#{value => Value};
-		_        -> A
+	[case A of
+		#{attribute := AttrNref} -> A#{value => Value};
+		_                        -> A
 	 end || A <- AVPs].
 
 
