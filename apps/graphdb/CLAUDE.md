@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 ## Purpose
 
-`graphdb` is the core **graph database** OTP application within the SeerStone system. It is supervised by `database_sup` and itself manages graph data through `graphdb_sup` and six worker gen_servers. The data model is the knowledge graph described in `the-knowledge-network.md` (US patents 5,379,366; 5,594,837; 5,878,406 — Noyes).
+`graphdb` is the core **graph database** OTP application within the SeerStone system. It is a peer OTP application started by `application_master` after `mnesia` and `nref`, and manages graph data through `graphdb_sup` and six worker gen_servers. The data model is the knowledge graph described in `the-knowledge-network.md` (US patents 5,379,366; 5,594,837; 5,878,406 — Noyes).
 
 ## Files
 
@@ -28,13 +28,17 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 ## Application Lifecycle
 
-`graphdb` is started by calling `application:start(graphdb)` or indirectly via the `database` application supervisor. The call chain is:
+`graphdb` is started by `application_master` as a peer application, after
+`mnesia` and `nref` are running. The call chain is:
 
 ```
-database_sup -> graphdb_sup:start_link(StartArgs) -> graphdb_sup:init/1
+application_master
+  -> graphdb:start(normal, [])
+    -> graphdb_sup:start_link/0
+      -> graphdb_sup:init/1
 ```
 
-`graphdb:start/2` delegates immediately to `graphdb_sup:start_link/1`.
+`graphdb:start/2` delegates immediately to `graphdb_sup:start_link/0`.
 
 ## Supervisor (`graphdb_sup`)
 

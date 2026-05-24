@@ -849,32 +849,34 @@ after successful load. 2 CT tests in `graphdb_nrefs_SUITE`. 320 tests (217 CT +
 
 ---
 
-### E2. Non-normal OTP start types
+### E2. Non-normal OTP start types — **RESOLVED** (2026-05-21)
 
-**Evidence:** `seerstone:start/2` and `nref:start/2` both hit `?NYI`
-for `{takeover, Node}` and `{failover, Node}` start types.
-
-**Fix:** implement when distributed deployment is on the roadmap.
-
----
-
-### E3. `code_change/3` — hot code upgrades
-
-**Evidence:** NYI in all gen_server modules: `nref_allocator`,
-`nref_server`, all six `graphdb_*` workers.
-
-**Fix:** implement when first hot-upgrade is planned.
+`seerstone:start/2` and `nref:start/2` now delegate `{takeover, Node}` and
+`{failover, Node}` to the normal start path rather than hitting `?NYI`.
+Full distributed takeover/failover semantics deferred until a distributed
+deployment is planned.
 
 ---
 
-### E4. `start_phases` / `start_phase/3`
+### E3. `code_change/3` — hot code upgrades — **DEFERRED**
 
-None of the `.app.src` files define `start_phases`, so `start_phase/3`
-is never called. Revisit if phased startup is desired.
+NYI in all gen_server modules: `nref_allocator`, `nref_server`, all six
+`graphdb_*` workers. Implement when the first hot-upgrade deployment is
+planned. Premature until there is a versioned release to upgrade in place.
 
 ---
 
-### E5. Replace `included_applications` with peer-app dependencies
+### E4. `start_phases` / `start_phase/3` — **DEFERRED**
+
+No `.app.src` file defines `start_phases`, so `start_phase/3` is never
+called. Revisit when an externally-visible entry point (API server, socket
+listener) is added to `seerstone` that must not accept connections until
+the full graphdb stack is bootstrapped — at that point phased startup
+becomes necessary to close the window between port-open and data-ready.
+
+---
+
+### E5. Replace `included_applications` with peer-app dependencies — **RESOLVED** (2026-05-21)
 
 **Evidence:** `apps/database/src/database.app.src` declares
 `included_applications: [graphdb, dictionary]`. This is Dallas's 2008

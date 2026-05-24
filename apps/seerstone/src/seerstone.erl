@@ -145,9 +145,8 @@ start(normal, []) ->
 		{error, Reason} ->	
 			{error, Reason}
     end;
-start(Type, StartArgs) ->
-	?NYI({start, {Type, StartArgs}}),
-	ok.
+start(_Type, StartArgs) ->
+	start(normal, StartArgs).
 
 
 %%--------------------------------------------------------------------- 

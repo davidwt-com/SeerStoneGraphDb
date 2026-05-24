@@ -7,14 +7,14 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 ## Purpose
 
-`database` is the **umbrella OTP application** that groups the `graphdb` and `dictionary` applications under a single supervisor (`database_sup`). It is a direct child of the top-level `seerstone_sup`.
+`database` is the **coordination OTP application** that declares `graphdb` and `dictionary` as peer-application dependencies. It starts after both and provides an empty `database_sup` as an attachment point for future database-level services.
 
 ## Files
 
 | File               | Description                                                     |
 | ------------------ | --------------------------------------------------------------- |
 | `database.erl`     | OTP `application` behaviour callback module                     |
-| `database_sup.erl` | OTP `supervisor` — supervises graphdb and dictionary subsystems |
+| `database_sup.erl` | OTP `supervisor` — empty; attachment point for future database-level services |
 
 ## Application Lifecycle
 

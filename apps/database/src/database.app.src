@@ -3,8 +3,7 @@
   {vsn, "0.1.0"},
   {registered, []},
   {mod, {database, []}},
-  {applications, [kernel, stdlib]},
-  {included_applications, [graphdb, dictionary]},
+  {applications, [kernel, stdlib, graphdb, dictionary]},
   {env, []},
   {modules, []}
  ]}.

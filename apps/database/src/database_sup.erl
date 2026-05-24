@@ -37,10 +37,6 @@
 %%-modified_by('dallas.noyes@gmail.com').
 
 
-%%--------------------------------------------------------------------- 
-%% Include files
-%%--------------------------------------------------------------------- 
--import(lists, [map/2]).
 
 
 %%
@@ -213,35 +209,12 @@ start_link() ->
 %%    * Internally, the supervisor also keeps track of the pid Child of 
 %%		the child process, or undefined if no pid exists.
 %%--------------------------------------------------------------------- 
-init([]) -> 
-%% Start Supervisors (eg. SUP1, SUP2,....)
-	%% Set Supervisory Flags:
- 		Restart_Strategy = one_for_one, %% one_for_all | one_for_one | rest_for_one | simple_one_for_one
-  		MaxR = 5, 						%% maximum number of restarts
-		MaxT = 5000, 					%% restart period,
-	SupFlags = {Restart_Strategy, MaxR, MaxT}, 
-	{ok, ChSpec1} = childspec(dictionary_sup), %% edit childspec for each child specification.
-	{ok, ChSpec2} = childspec(graphdb_sup), %% edit childspec for each child specification.
-	{ok, {SupFlags, [ChSpec1, ChSpec2]}};
-init(State) -> 
+init([]) ->
+	SupFlags = #{strategy => one_for_one, intensity => 5, period => 5},
+	{ok, {SupFlags, []}};
+init(State) ->
 	?NYI({init, {State}}),
 	ignore.
-
-%% make a copy one this fun() for each child process.
-%% Increment number and add to init/1.
-%% NOTE USE EITHER SUPERVISORS OR WORKERS BUT NOT BOTH!
-childspec(Sup_Name) ->
-%% This is a template for a supervisor
-	%% Define SUP1 child_spec
-		Id = Sup_Name, %Id = term()
-		StartFunc = {Id,start_link,[]}, %% module-function-arguments tuple used as apply(M, F, A).
-		Restart = permanent, 	%% Restart = permanent | transient | temporary
-		Shutdown = infinity, 	%% Shutdown = brutal_kill | int()>=0 | infinity
-		Type = supervisor, 		%% Type = worker | supervisor
-		Module = Id,			%% name of the callback module
-		Modules = [Module], 	%% Modules = [Module] | dynamic
-	ChildSpec = {Id,StartFunc,Restart,Shutdown,Type,Modules},
-	{ok, ChildSpec}.
 
 
 

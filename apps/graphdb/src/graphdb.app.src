@@ -3,7 +3,7 @@
   {vsn, "0.1.0"},
   {registered, []},
   {mod, {graphdb, []}},
-  {applications, [kernel, stdlib]},
+  {applications, [kernel, stdlib, mnesia, nref]},
   {env, []},
   {modules, []}
  ]}.
