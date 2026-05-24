@@ -50,7 +50,8 @@
     q1_returns_attribute_node/1,
     q1_not_found_returns_error/1,
     q1_session_form_returns_session/1,
-    q1_cache_populates_on_read/1
+    q1_cache_populates_on_read/1,
+    q1_cache_hit_skips_mnesia/1
 ]).
 
 suite() ->
@@ -72,7 +73,8 @@ groups() ->
         q1_returns_attribute_node,
         q1_not_found_returns_error,
         q1_session_form_returns_session,
-        q1_cache_populates_on_read
+        q1_cache_populates_on_read,
+        q1_cache_hit_skips_mnesia
      ]}].
 
 
@@ -247,3 +249,15 @@ q1_cache_populates_on_read(_Config) ->
         #q_get_node{nref = ?NREF_ROOT}, S0),
     Cache = maps:get(cache, S1),
     ?assert(maps:is_key({node, ?NREF_ROOT}, Cache)).
+
+q1_cache_hit_skips_mnesia(_Config) ->
+    %% First read populates the cache.
+    S0 = graphdb_query:new_session(),
+    {ok, Node1, S1} = graphdb_query:execute_query(
+        #q_get_node{nref = ?NREF_ROOT}, S0),
+    %% Stop Mnesia. A subsequent uncached query would now fail.
+    stopped = mnesia:stop(),
+    %% Second read under the same session must come from the cache.
+    {ok, Node2, _S2} = graphdb_query:execute_query(
+        #q_get_node{nref = ?NREF_ROOT}, S1),
+    ?assertEqual(Node1, Node2).

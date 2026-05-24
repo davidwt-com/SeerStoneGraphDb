@@ -9,10 +9,9 @@
 %%              maintains snapshot-semantics sessions with a
 %%              read-through cache.
 %%
-%%              This module is the F3 skeleton: the session API
-%%              (new_session/0, refresh/1) is real; the execute paths
-%%              all return {error, not_implemented} until Tasks 3-9
-%%              fill them in.
+%%              F3 sequencing: session API (new_session/0, refresh/1)
+%%              is real. Q1 (#q_get_node{}) is implemented; Q1b/Q2-Q6
+%%              return {error, not_implemented} until Tasks 4-9.
 %%
 %% Design source: f3-graphdb-query-design.md at project root.
 %%---------------------------------------------------------------------
@@ -20,6 +19,8 @@
 %%---------------------------------------------------------------------
 %% Rev A Date: May 2026 Author: David W. Thomas
 %% Initial skeleton implementation (F3 Task 2).
+%% Rev A.1 Date: May 2026 Author: David W. Thomas
+%% Q1 (#q_get_node{}) implemented (F3 Task 3).
 %%---------------------------------------------------------------------
 -module(graphdb_query).
 -behaviour(gen_server).
@@ -195,9 +196,13 @@ dispatch(_Query, Session) ->
 %%---------------------------------------------------------------------
 %% session_read_node(Session, Nref) -> {Node | not_found, Session1}
 %%
-%% Read-through cache: cache hit returns immediately; miss reads
-%% Mnesia and populates the cache before returning. The cache key
-%% is {node, Nref}.
+%% Read-through cache: a hit returns immediately; a miss reads Mnesia
+%% and (if the node exists) populates the cache before returning. Misses
+%% that hit Mnesia and find nothing are NOT cached — caching a negative
+%% result would require threading the session on error replies, which
+%% the current /2 API does not do.
+%%
+%% Cache key shape: {node, Nref}.
 %%---------------------------------------------------------------------
 session_read_node(#{cache := Cache} = Session, Nref) ->
     case maps:get({node, Nref}, Cache, miss) of
@@ -207,11 +212,8 @@ session_read_node(#{cache := Cache} = Session, Nref) ->
                     Cache1 = Cache#{{node, Nref} => Node},
                     {Node, Session#{cache := Cache1}};
                 [] ->
-                    Cache1 = Cache#{{node, Nref} => not_found},
-                    {not_found, Session#{cache := Cache1}}
+                    {not_found, Session}
             end;
-        not_found ->
-            {not_found, Session};
         Node ->
             {Node, Session}
     end.
