@@ -59,14 +59,21 @@
     q1b_kind_filter_taxonomy_only/1,
     q1b_nref_with_no_arcs/1,
     q1b_cache_uses_dir_kind_key/1,
-    q1b_cache_hit_skips_mnesia/1
+    q1b_cache_hit_skips_mnesia/1,
+    %% Q2 — describe_attribute
+    q2_describes_name_attribute/1,
+    q2_includes_parent_and_taxonomy/1,
+    q2_includes_labels_default_english/1,
+    q2_not_found_returns_error/1,
+    q2_rejects_non_attribute_nref/1
 ]).
 
 suite() ->
     [{timetrap, {seconds, 30}}].
 
 all() ->
-    [{group, skeleton}, {group, q1_get_node}, {group, q1b_get_arcs}].
+    [{group, skeleton}, {group, q1_get_node}, {group, q1b_get_arcs},
+     {group, q2_describe_attribute}].
 
 groups() ->
     [{skeleton, [], [
@@ -92,6 +99,13 @@ groups() ->
         q1b_nref_with_no_arcs,
         q1b_cache_uses_dir_kind_key,
         q1b_cache_hit_skips_mnesia
+     ]},
+     {q2_describe_attribute, [], [
+        q2_describes_name_attribute,
+        q2_includes_parent_and_taxonomy,
+        q2_includes_labels_default_english,
+        q2_not_found_returns_error,
+        q2_rejects_non_attribute_nref
      ]}].
 
 
@@ -380,3 +394,45 @@ q1b_cache_hit_skips_mnesia(_Config) ->
         #q_get_arcs{nref = ?NREF_ROOT, direction = outgoing,
                     arc_kinds = all}, S1),
     ?assertEqual(Arcs1, Arcs2).
+
+
+%%=====================================================================
+%% Q2 — describe_attribute tests
+%%=====================================================================
+
+q2_describes_name_attribute(_Config) ->
+    %% NREF_NAMES (6) is an attribute node, child of NREF_ATTRIBUTES.
+    {ok, R} = graphdb_query:execute_query(
+        #q_describe{nref = ?NREF_NAMES, labels = default}),
+    ?assertEqual(?NREF_NAMES, maps:get(nref, R)),
+    ?assertEqual(attribute,   maps:get(kind, R)),
+    ?assertEqual(?NREF_ATTRIBUTES, maps:get(parent, R)).
+
+q2_includes_parent_and_taxonomy(_Config) ->
+    {ok, R} = graphdb_query:execute_query(
+        #q_describe{nref = ?NREF_NAMES, labels = default}),
+    Children = maps:get(children, R),
+    ?assert(is_list(Children)),
+    %% Names has children 9, 10, 11, 12 (NameAttr subcategories)
+    ?assert(lists:member(?NREF_CAT_NAME_ATTRS, Children)),
+    ?assert(lists:member(?NREF_INST_NAME_ATTRS, Children)).
+
+q2_includes_labels_default_english(_Config) ->
+    {ok, R} = graphdb_query:execute_query(
+        #q_describe{nref = ?NREF_NAMES, labels = default}),
+    Labels = maps:get(labels, R),
+    ?assert(is_map(Labels)),
+    ?assert(maps:is_key(?NREF_NAMES, Labels)),
+    ?assert(is_list(maps:get(?NREF_NAMES, Labels))).
+
+q2_not_found_returns_error(_Config) ->
+    ?assertMatch({error, {nref_not_found, 9999999}},
+                 graphdb_query:execute_query(
+                     #q_describe{nref = 9999999, labels = default})).
+
+q2_rejects_non_attribute_nref(_Config) ->
+    %% NREF_ROOT is a category — Q2 path is for attributes only.
+    %% Categories take the category branch (no describe yet).
+    {error, {unsupported_kind, category}} =
+        graphdb_query:execute_query(
+            #q_describe{nref = ?NREF_ROOT, labels = default}).
