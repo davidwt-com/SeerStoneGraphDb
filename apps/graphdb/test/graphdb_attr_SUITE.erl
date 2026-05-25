@@ -66,6 +66,7 @@
 	%% Creators
 	create_name_attribute_basic/1,
 	create_literal_attribute_stores_type/1,
+	create_literal_attribute_under_custom_parent/1,
 	create_relationship_attribute_pair/1,
 	create_relationship_attribute_pair_atomic/1,
 	create_relationship_attribute_rejects_bad_kind/1,
@@ -114,6 +115,7 @@ groups() ->
 		{creators, [], [
 			create_name_attribute_basic,
 			create_literal_attribute_stores_type,
+			create_literal_attribute_under_custom_parent,
 			create_relationship_attribute_pair,
 			create_relationship_attribute_pair_atomic,
 			create_relationship_attribute_rejects_bad_kind,
@@ -453,6 +455,21 @@ new_attribute_writes_taxonomy_arcs(_Config) ->
 		R#relationship.characterization =:= ?ARC_ATTR_PARENT andalso
 		R#relationship.reciprocal =:= ?ARC_ATTR_CHILD
 	end, ChildOut)).
+
+
+%%-----------------------------------------------------------------------------
+%% create_literal_attribute/3 with an explicit parent nref places the new
+%% node under that parent rather than defaulting to the Literals subtree.
+%%-----------------------------------------------------------------------------
+create_literal_attribute_under_custom_parent(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	%% Create a sub-group under Literals (7), then a literal attr under it.
+	{ok, SubgroupNref} = graphdb_attr:create_literal_attribute(
+		"test_subgroup", group, ?NREF_LITERALS),
+	{ok, ChildNref} = graphdb_attr:create_literal_attribute(
+		"test_child", integer, SubgroupNref),
+	{ok, Child} = graphdb_attr:get_attribute(ChildNref),
+	?assertEqual([SubgroupNref], Child#node.parents).
 
 
 %%=============================================================================

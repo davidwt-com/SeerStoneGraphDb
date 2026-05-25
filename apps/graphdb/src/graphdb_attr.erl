@@ -119,6 +119,7 @@
 		%% Creators
 		create_name_attribute/1,
 		create_literal_attribute/2,
+		create_literal_attribute/3,
 		create_relationship_attribute/3,
 		create_relationship_type/1,
 		%% Lookups
@@ -176,11 +177,23 @@ create_name_attribute(Name) ->
 %% create_literal_attribute(Name, Type) -> {ok, Nref} | {error, term()}
 %%
 %% Creates a new literal attribute node under the `Literals` subtree
-%% (nref 7).  The Type argument is stored as an AVP keyed by the
-%% seeded `literal_type` attribute.
+%% (nref 7).  Equivalent to create_literal_attribute(Name, Type, ?NREF_LITERALS).
 %%-----------------------------------------------------------------------------
 create_literal_attribute(Name, Type) ->
-	gen_server:call(?MODULE, {create_literal_attribute, Name, Type}).
+	create_literal_attribute(Name, Type, ?NREF_LITERALS).
+
+%%-----------------------------------------------------------------------------
+%% create_literal_attribute(Name, Type, ParentNref) -> {ok, Nref} | {error, term()}
+%%
+%% Creates a new literal attribute node under ParentNref.  ParentNref
+%% must be an attribute-kind node within the Literals subtree (or
+%% ?NREF_LITERALS itself); the caller is responsible for that
+%% invariant.  The Type argument is stored as an AVP keyed by the
+%% seeded `literal_type` attribute.
+%%-----------------------------------------------------------------------------
+create_literal_attribute(Name, Type, ParentNref) ->
+	gen_server:call(?MODULE,
+		{create_literal_attribute, Name, Type, ParentNref}).
 
 
 %%-----------------------------------------------------------------------------
@@ -319,11 +332,11 @@ handle_call({create_name_attribute, Name}, _From, State) ->
 	Reply = do_create_attribute(Name, ?NREF_NAMES, Extra),
 	{reply, Reply, State};
 
-handle_call({create_literal_attribute, Name, Type}, _From,
+handle_call({create_literal_attribute, Name, Type, ParentNref}, _From,
 		#state{literal_type_nref = TypeAttr} = State) ->
 	Extra = [#{attribute => TypeAttr, value => Type},
 			 attr_type_avp(literal, State)],
-	Reply = do_create_attribute(Name, ?NREF_LITERALS, Extra),
+	Reply = do_create_attribute(Name, ParentNref, Extra),
 	{reply, Reply, State};
 
 handle_call({create_relationship_attribute, Name, ReciprocalName, TargetKind},
