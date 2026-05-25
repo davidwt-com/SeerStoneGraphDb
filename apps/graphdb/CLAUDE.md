@@ -222,11 +222,12 @@ Maintains all named attribute concepts used as arc labels. All attribute nodes l
 the ontology `nodes` Mnesia table with `kind = attribute`.
 
 - `create_name_attribute/1` (name)
-- `create_literal_attribute/2` (name, type)
+- `create_literal_attribute/2` (name, type) — defaults parent to nref 7 (Literals)
+- `create_literal_attribute/3` (name, type, parent_nref) — explicit parent for sub-group seeding
 - `create_relationship_attribute/3` (name, reciprocal_name, target_kind) — `target_kind :: category | attribute | class | instance` is mandatory; stored as an AVP on the arc label node and used by the query engine to route target lookups to the correct database
 - `create_relationship_type/1`
 - `get_attribute/1`, `list_attributes/0`, `list_relationship_types/0`
-- At bootstrap: seeds the `target_kind` literal attribute into the `Literals` subtree (nref 7) and the `relationship_avp` flag attribute
+- At bootstrap: seeds the `Attribute Literals` sub-group under the `Literals` subtree (nref 7), then seeds `literal_type`, `target_kind`, `relationship_avp`, and `attribute_type` literal attributes as children of that sub-group. Also stamps the `relationship_avp` marker AVP on the bootstrap Template node and retro-stamps `attribute_type` AVPs across the Attributes subtree.
 
 ### `graphdb_class` — Taxonomic Hierarchy
 
@@ -261,6 +262,11 @@ translation hooks.
 - `set_labels/3`, `resolve_label/4`, `make_chain/1`
 - `project_language/1`, `register_translation_hook/1`,
   `unregister_translation_hook/1`, `fire_translation_hooks/2`
+- At bootstrap: seeds the `Language Literals` sub-group under the
+  `Literals` subtree (nref 7), then seeds `base_language` and
+  `project_language` literal attributes as children of that sub-group.
+  English concept node (nref 10000) seeded under Human Languages
+  (nref 32).
 
 ### `graphdb_query` — Query Language (F3)
 
