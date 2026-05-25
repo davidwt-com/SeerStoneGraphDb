@@ -243,19 +243,22 @@ verify_cache_invariant(TC) ->
 %%-----------------------------------------------------------------------------
 seeds_created_on_first_start(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
-	{ok, #{literal_type := Lt, target_kind := Tk, relationship_avp := Ra,
-			attribute_type := At}} = graphdb_attr:seeded_nrefs(),
+	{ok, #{attribute_literals_group := AttrLitNref,
+	       literal_type             := Lt,
+	       target_kind              := Tk,
+	       relationship_avp         := Ra,
+	       attribute_type           := At}} = graphdb_attr:seeded_nrefs(),
 	?assert(is_integer(Lt)),
 	?assert(is_integer(Tk)),
 	?assert(is_integer(Ra)),
 	?assert(is_integer(At)),
 	%% All four are distinct
 	?assertEqual(4, length(lists:usort([Lt, Tk, Ra, At]))),
-	%% Each is an attribute node whose parent is the Literals subtree (7)
+	%% Each is an attribute node whose parent is the Attribute Literals sub-group
 	lists:foreach(fun(N) ->
 		{ok, Node} = graphdb_attr:get_attribute(N),
 		?assertEqual(attribute, Node#node.kind),
-		?assertEqual([7], Node#node.parents)
+		?assertEqual([AttrLitNref], Node#node.parents)
 	end, [Lt, Tk, Ra, At]).
 
 %%-----------------------------------------------------------------------------
@@ -548,8 +551,9 @@ get_attribute_rejects_non_attribute(_Config) ->
 list_attributes_includes_bootstrap_and_runtime(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, Before} = graphdb_attr:list_attributes(),
-	%% Bootstrap has 27 attribute nodes (nrefs 6-31 = 26, plus lang_code); seeding adds 4
-	?assertEqual(27 + 4, length(Before)),
+	%% Bootstrap has 27 attribute nodes (nrefs 6-31 = 26, plus lang_code);
+	%% seeding adds the Attribute Literals sub-group + 4 literal attrs = 5
+	?assertEqual(27 + 5, length(Before)),
 
 	{ok, _} = graphdb_attr:create_name_attribute("One"),
 	{ok, _} = graphdb_attr:create_name_attribute("Two"),
