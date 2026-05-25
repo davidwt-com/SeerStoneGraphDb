@@ -22,7 +22,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_class.erl`     | Taxonomic hierarchy gen_server (stub)                       |
 | `graphdb_instance.erl`  | Instance/compositional hierarchy gen_server (stub)          |
 | `graphdb_language.erl`  | M6 multilingual overlay layer (implemented)                 |
-| `graphdb_query.erl`     | F3 query language gen_server (planned)                      |
+| `graphdb_query.erl`     | F3 query language gen_server (implemented)                  |
 
 `apps/graphdb/priv/bootstrap.terms` — Erlang Terms file fully written; contains 35 nodes
 (nrefs 1–35, BFS) and 34 hierarchy relationship pairs (8 composition + 26 taxonomy). Loaded at first ontology startup.
@@ -262,14 +262,24 @@ translation hooks.
 - `project_language/1`, `register_translation_hook/1`,
   `unregister_translation_hook/1`, `fire_translation_hooks/2`
 
-### `graphdb_query` — Query Language (planned, F3)
+### `graphdb_query` — Query Language (F3)
 
-Parses and executes graph queries. Lives in `graphdb_query.erl`
-(not yet created). Design at `f3-graphdb-query-design.md` at project
-root.
+Parses and executes graph queries. Public API:
 
-- `parse_query/1`, `execute_query/1`, `execute_query/2`,
-  `new_session/0`, `refresh/1`, `resume/2`
+- `parse_query/1` — identity until a text DSL lands
+- `new_session/0`, `refresh/1` — snapshot-semantics session lifecycle
+- `execute_query/1`, `execute_query/2` — ephemeral and session-threaded
+- `resume/2` — continue a `#cont_path{}` (returns
+  `{error, snapshot_expired}` if the session has been refreshed since)
+- `find_path/3` — convenience wrapper for `#q_find_path{}`
+
+Queries are represented as records defined in
+`apps/graphdb/include/graphdb_query.hrl`. Every Mnesia read goes
+through `session_read_node/2` or `session_read_arcs/4`; direct
+`mnesia:dirty_*` calls outside those helpers are a code smell.
+
+See `f3-graphdb-query-design.md` at project root for the architectural
+contract.
 
 ### `graphdb_mgr` — Primary Coordinator
 
@@ -290,14 +300,15 @@ The following callbacks in `graphdb.erl` return `ok` (no-op stubs correct for cu
 - `stop/1` — post-shutdown cleanup
 - `config_change/3` — runtime config change notification
 
-All six worker modules (`graphdb_mgr`, `graphdb_rules`, `graphdb_attr`, `graphdb_class`,
-`graphdb_instance`, `graphdb_language`) are empty gen_server stubs.
-`graphdb_bootstrap.erl` is fully implemented (Task 1 — done).
+`graphdb_rules` is the only remaining empty gen_server stub.
+`graphdb_bootstrap`, `graphdb_mgr`, `graphdb_attr`, `graphdb_class`,
+`graphdb_instance`, `graphdb_language` (M6), and `graphdb_query` (F3)
+are all fully implemented.
 
 ## Key Design Notes
 
 - `graphdb_sup:start_link/0` takes no args, matching every supervisor in the umbrella. `graphdb_sup` is started by `database_sup`'s childspec via the zero-arg `{graphdb_sup, start_link, []}` form, not by `graphdb:start/2`.
-- `graphdb_bootstrap`, `graphdb_mgr` (startup + read API), `graphdb_attr`, `graphdb_class`, and `graphdb_instance` are implemented. Remaining work is in `TASKS.md` at the project root.
+- `graphdb_bootstrap`, `graphdb_mgr` (startup + read API), `graphdb_attr`, `graphdb_class`, `graphdb_instance`, `graphdb_language`, and `graphdb_query` are implemented. Remaining work is in `TASKS.md` at the project root.
 - Consult `the-knowledge-network.md` for the full model spec before implementing
 
 ## Compile

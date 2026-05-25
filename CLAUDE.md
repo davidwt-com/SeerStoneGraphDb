@@ -65,7 +65,8 @@ database (application — started after nref)
         │     ├── graphdb_attr      (gen_server — implemented: seeds + create/lookup API)
         │     ├── graphdb_class     (gen_server — implemented: taxonomic hierarchy, QC inheritance)
         │     ├── graphdb_instance  (gen_server — implemented: compositional hierarchy, inheritance)
-        │     └── graphdb_language  (gen_server — stub, implementation pending)
+        │     ├── graphdb_language  (gen_server — implemented: M6 multilingual overlay)
+        │     └── graphdb_query     (gen_server — implemented: F3 query language)
         └── dictionary_sup (supervisor — dictionary is included_application)
               ├── dictionary_server (gen_server — stub, not yet wired to dictionary_imp)
               └── term_server       (gen_server — stub, not yet wired to dictionary_imp)
@@ -259,14 +260,15 @@ A logical bidirectional edge is two `relationship` rows written atomically (one 
 | `graphdb_class`    | Manages the taxonomic hierarchy: class nodes, qualifying characteristics, inheritance                                                                                                                                                                                   |
 | `graphdb_instance` | Creates and retrieves instance nodes; manages compositional hierarchy                                                                                                                                                                                                   |
 | `graphdb_rules`    | Stores and enforces graph rules (pattern recognition, relationship constraints)                                                                                                                                                                                         |
-| `graphdb_language` | Parses and executes graph queries against the node network                                                                                                                                                                                                              |
-| `graphdb_mgr`      | Primary coordinator: routes operations across the other five workers                                                                                                                                                                                                    |
+| `graphdb_language` | M6 multilingual overlay layer (label registration, dialect chains, per-language Mnesia overlay tables)                                                                                                                                                                  |
+| `graphdb_query`    | F3 query language: parses and executes graph queries (Q1-Q6) against the node network                                                                                                                                                                                   |
+| `graphdb_mgr`      | Primary coordinator: routes operations across the other six workers                                                                                                                                                                                                     |
 
 ## Known Incomplete Areas (NYI)
 
 These are outstanding items — all previously known bugs have been fixed.
 
-- **graphdb worker modules** — `graphdb_language` is a gen_server stub (TASKS.md F3); `graphdb_rules` is a stub (TASKS.md F4)
+- **graphdb worker modules** — `graphdb_rules` is the only remaining gen_server stub (TASKS.md F4)
 - **`graphdb_mgr` write operations** — `create_attribute/3`, `create_class/2`, `create_instance/3`, `add_relationship/4`, `delete_node/1`, `update_node_avps/2` return `{error, not_implemented}` pending L4 routing work
 - **`dictionary_server` and `term_server`** — stubs not yet wired to `dictionary_imp` (TASKS.md Task 7)
 - **`seerstone:start/2` and `nref:start/2`**, **`code_change/3`** — deferred (TASKS.md E2, E3)
