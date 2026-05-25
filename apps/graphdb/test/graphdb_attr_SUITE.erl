@@ -63,6 +63,8 @@
 	seeded_nrefs_are_above_floor/1,
 	template_avp_marker_stamped/1,
 	template_avp_marker_idempotent/1,
+	seeds_attribute_literals_subgroup/1,
+	reparents_attr_literal_seeds_under_subgroup/1,
 	%% Creators
 	create_name_attribute_basic/1,
 	create_literal_attribute_stores_type/1,
@@ -110,7 +112,9 @@ groups() ->
 			seeds_idempotent_on_restart,
 			seeded_nrefs_are_above_floor,
 			template_avp_marker_stamped,
-			template_avp_marker_idempotent
+			template_avp_marker_idempotent,
+			seeds_attribute_literals_subgroup,
+			reparents_attr_literal_seeds_under_subgroup
 		]},
 		{creators, [], [
 			create_name_attribute_basic,
@@ -314,6 +318,41 @@ template_avp_marker_idempotent(_Config) ->
 		mnesia:read(nodes, ?ARC_TEMPLATE)
 	end),
 	?assertEqual(BeforeAVPs, After#node.attribute_value_pairs).
+
+
+%%-----------------------------------------------------------------------------
+%% The Attribute Literals sub-group node must exist after init and have
+%% nref >= 100000 (runtime tier), kind=attribute, and its parent must be
+%% the Literals subtree (nref 7).
+%%-----------------------------------------------------------------------------
+seeds_attribute_literals_subgroup(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{attribute_literals_group := AttrLitNref}} =
+		graphdb_attr:seeded_nrefs(),
+	?assert(is_integer(AttrLitNref)),
+	?assert(AttrLitNref >= 100000),
+	{ok, Node} = graphdb_attr:get_attribute(AttrLitNref),
+	?assertEqual(attribute, Node#node.kind),
+	?assertEqual([?NREF_LITERALS], Node#node.parents).
+
+%%-----------------------------------------------------------------------------
+%% After Task 2, literal_type, target_kind, relationship_avp, and
+%% attribute_type must all report the Attribute Literals sub-group as
+%% their direct parent (not nref 7 directly).
+%%-----------------------------------------------------------------------------
+reparents_attr_literal_seeds_under_subgroup(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{attribute_literals_group := AttrLitNref,
+	       literal_type             := Lt,
+	       target_kind              := Tk,
+	       relationship_avp         := Ra,
+	       attribute_type           := At}} = graphdb_attr:seeded_nrefs(),
+	lists:foreach(
+		fun(Nref) ->
+			{ok, Node} = graphdb_attr:get_attribute(Nref),
+			?assertEqual([AttrLitNref], Node#node.parents)
+		end,
+		[Lt, Tk, Ra, At]).
 
 
 %%=============================================================================
