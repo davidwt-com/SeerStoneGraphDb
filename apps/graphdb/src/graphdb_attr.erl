@@ -101,10 +101,11 @@
 }).
 
 -record(state, {
-	literal_type_nref,		%% integer() -- seeded literal attribute
-	target_kind_nref,		%% integer() -- seeded literal attribute
-	relationship_avp_nref,	%% integer() -- seeded literal attribute
-	attribute_type_nref		%% integer() -- seeded literal attribute (M8)
+	attribute_literals_group_nref,	%% integer() -- Attribute Literals sub-group
+	literal_type_nref,				%% integer() -- seeded literal attribute
+	target_kind_nref,				%% integer() -- seeded literal attribute
+	relationship_avp_nref,			%% integer() -- seeded literal attribute
+	attribute_type_nref				%% integer() -- seeded literal attribute (M8)
 }).
 
 
@@ -119,6 +120,7 @@
 		%% Creators
 		create_name_attribute/1,
 		create_literal_attribute/2,
+		create_literal_attribute/3,
 		create_relationship_attribute/3,
 		create_relationship_type/1,
 		%% Lookups
@@ -127,7 +129,9 @@
 		list_relationship_types/0,
 		attribute_type_of/1,
 		%% Seeded nref accessors
-		seeded_nrefs/0
+		seeded_nrefs/0,
+		%% Cross-worker stamping
+		retro_stamp_attribute_types/0
 		]).
 
 %%---------------------------------------------------------------------
@@ -176,11 +180,23 @@ create_name_attribute(Name) ->
 %% create_literal_attribute(Name, Type) -> {ok, Nref} | {error, term()}
 %%
 %% Creates a new literal attribute node under the `Literals` subtree
-%% (nref 7).  The Type argument is stored as an AVP keyed by the
-%% seeded `literal_type` attribute.
+%% (nref 7).  Equivalent to create_literal_attribute(Name, Type, ?NREF_LITERALS).
 %%-----------------------------------------------------------------------------
 create_literal_attribute(Name, Type) ->
-	gen_server:call(?MODULE, {create_literal_attribute, Name, Type}).
+	create_literal_attribute(Name, Type, ?NREF_LITERALS).
+
+%%-----------------------------------------------------------------------------
+%% create_literal_attribute(Name, Type, ParentNref) -> {ok, Nref} | {error, term()}
+%%
+%% Creates a new literal attribute node under ParentNref.  ParentNref
+%% must be an attribute-kind node within the Literals subtree (or
+%% ?NREF_LITERALS itself); the caller is responsible for that
+%% invariant.  The Type argument is stored as an AVP keyed by the
+%% seeded `literal_type` attribute.
+%%-----------------------------------------------------------------------------
+create_literal_attribute(Name, Type, ParentNref) ->
+	gen_server:call(?MODULE,
+		{create_literal_attribute, Name, Type, ParentNref}).
 
 
 %%-----------------------------------------------------------------------------
@@ -263,16 +279,31 @@ attribute_type_of(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% seeded_nrefs() -> {ok, #{literal_type      => integer(),
-%%                          target_kind       => integer(),
-%%                          relationship_avp  => integer(),
-%%                          attribute_type    => integer()}}
+%% seeded_nrefs() -> {ok, #{attribute_literals_group => integer(),
+%%                          literal_type             => integer(),
+%%                          target_kind              => integer(),
+%%                          relationship_avp         => integer(),
+%%                          attribute_type           => integer()}}
 %%
-%% Returns the nrefs of the four seeded runtime literal attributes.
-%% Primarily intended for other graphdb workers and integration tests.
+%% Returns the nrefs of the Attribute Literals sub-group and the four
+%% seeded runtime literal attributes.  Primarily intended for other
+%% graphdb workers and integration tests.
 %%-----------------------------------------------------------------------------
 seeded_nrefs() ->
 	gen_server:call(?MODULE, seeded_nrefs).
+
+
+%%-----------------------------------------------------------------------------
+%% retro_stamp_attribute_types() -> ok | {error, term()}
+%%
+%% Re-runs `retro_stamp_bootstrap_attribute_types/1` against the
+%% currently-cached `attribute_type` literal-attribute nref.  Other
+%% workers (graphdb_language, future graphdb_rules) call this after
+%% their own `init/1` seeds attribute-kind nodes so the new nodes
+%% receive the `attribute_type` AVP.
+%%-----------------------------------------------------------------------------
+retro_stamp_attribute_types() ->
+	gen_server:call(?MODULE, retro_stamp_attribute_types).
 
 
 %%=============================================================================
@@ -289,19 +320,22 @@ seeded_nrefs() ->
 %%-----------------------------------------------------------------------------
 init([]) ->
 	try
+		AttrLitNref = ensure_seed("Attribute Literals", ?NREF_LITERALS),
 		State = #state{
-			literal_type_nref     = ensure_seed("literal_type"),
-			target_kind_nref      = ensure_seed("target_kind"),
-			relationship_avp_nref = ensure_seed("relationship_avp"),
-			attribute_type_nref   = ensure_seed("attribute_type")
+			attribute_literals_group_nref = AttrLitNref,
+			literal_type_nref     = ensure_seed("literal_type", AttrLitNref),
+			target_kind_nref      = ensure_seed("target_kind", AttrLitNref),
+			relationship_avp_nref = ensure_seed("relationship_avp", AttrLitNref),
+			attribute_type_nref   = ensure_seed("attribute_type", AttrLitNref)
 		},
 		ok = ensure_template_avp_marker(State#state.relationship_avp_nref),
 		ok = retro_stamp_bootstrap_attribute_types(
 			State#state.attribute_type_nref),
-		logger:info("graphdb_attr: started (literal_type=~p, target_kind=~p, "
-			"relationship_avp=~p, attribute_type=~p)",
-			[State#state.literal_type_nref, State#state.target_kind_nref,
-			 State#state.relationship_avp_nref,
+		logger:info("graphdb_attr: started (attribute_literals_group=~p, "
+			"literal_type=~p, target_kind=~p, relationship_avp=~p, "
+			"attribute_type=~p)",
+			[AttrLitNref, State#state.literal_type_nref,
+			 State#state.target_kind_nref, State#state.relationship_avp_nref,
 			 State#state.attribute_type_nref]),
 		{ok, State}
 	catch
@@ -319,11 +353,11 @@ handle_call({create_name_attribute, Name}, _From, State) ->
 	Reply = do_create_attribute(Name, ?NREF_NAMES, Extra),
 	{reply, Reply, State};
 
-handle_call({create_literal_attribute, Name, Type}, _From,
+handle_call({create_literal_attribute, Name, Type, ParentNref}, _From,
 		#state{literal_type_nref = TypeAttr} = State) ->
 	Extra = [#{attribute => TypeAttr, value => Type},
 			 attr_type_avp(literal, State)],
-	Reply = do_create_attribute(Name, ?NREF_LITERALS, Extra),
+	Reply = do_create_attribute(Name, ParentNref, Extra),
 	{reply, Reply, State};
 
 handle_call({create_relationship_attribute, Name, ReciprocalName, TargetKind},
@@ -357,12 +391,18 @@ handle_call({attribute_type_of, Nref}, _From,
 
 handle_call(seeded_nrefs, _From, State) ->
 	Reply = {ok, #{
+		attribute_literals_group => State#state.attribute_literals_group_nref,
 		literal_type     => State#state.literal_type_nref,
 		target_kind      => State#state.target_kind_nref,
 		relationship_avp => State#state.relationship_avp_nref,
 		attribute_type   => State#state.attribute_type_nref
 	}},
 	{reply, Reply, State};
+
+handle_call(retro_stamp_attribute_types, _From,
+		#state{attribute_type_nref = AtAttr} = State) ->
+	ok = retro_stamp_bootstrap_attribute_types(AtAttr),
+	{reply, ok, State};
 
 handle_call(Request, From, State) ->
 	?UEM(handle_call, {Request, From, State}),
@@ -399,18 +439,19 @@ valid_target_kind(_)         -> false.
 
 
 %%-----------------------------------------------------------------------------
-%% ensure_seed(Name) -> Nref
+%% ensure_seed(Name, ParentNref) -> Nref
 %%
-%% Looks up an existing literal attribute by name under the Literals
-%% subtree; if not found, creates it (node + taxonomy arc pair).
-%% Throws {error, Reason} on failure.
+%% Looks up an existing attribute by name under ParentNref; if not
+%% found, creates it (node + taxonomy arc pair).  Throws {error, Reason}
+%% on failure.  Caller chooses the parent -- typically a sub-group node
+%% under Literals (7) or the Literals root itself.
 %%-----------------------------------------------------------------------------
-ensure_seed(Name) ->
-	case find_attribute_by_name(?NREF_LITERALS, Name) of
+ensure_seed(Name, ParentNref) ->
+	case find_attribute_by_name(ParentNref, Name) of
 		{ok, Nref} ->
 			Nref;
 		not_found ->
-			case do_create_attribute(Name, ?NREF_LITERALS, []) of
+			case do_create_attribute(Name, ParentNref, []) of
 				{ok, Nref}       -> Nref;
 				{error, Reason}  -> throw({error, Reason})
 			end

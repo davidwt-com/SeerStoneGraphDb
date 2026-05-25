@@ -87,13 +87,14 @@
 }).
 
 -record(state, {
-    lang_code_nref,           %% attr nref for lang_code (bootstrap-labeled, found by name)
-    lang_human_nref,          %% class nref for Human Language (bootstrap-labeled, found by name)
-    base_language_nref,       %% literal attr nref seeded at init
-    project_language_nref,    %% literal attr nref seeded at init
-    hooks         = [],       %% [fun()] registered translation hooks
-    lang_code_map = #{},      %% Code :: atom() => Nref :: integer()
-    dialect_map   = #{}       %% Code :: atom() => BaseCode :: atom()
+    lang_code_nref,                %% attr nref for lang_code (bootstrap-labeled, found by name)
+    lang_human_nref,               %% class nref for Human Language (bootstrap-labeled, found by name)
+    language_literals_group_nref,  %% Language Literals sub-group nref (seeded at init)
+    base_language_nref,            %% literal attr nref seeded at init
+    project_language_nref,         %% literal attr nref seeded at init
+    hooks         = [],            %% [fun()] registered translation hooks
+    lang_code_map = #{},           %% Code :: atom() => Nref :: integer()
+    dialect_map   = #{}            %% Code :: atom() => BaseCode :: atom()
 }).
 
 
@@ -220,23 +221,26 @@ init([]) ->
     try
         LangCodeNref         = find_literal_by_name("lang_code"),
         LangHumanNref        = find_class_by_name(?NREF_CLASSES, "Human Language"),
-        BaseLangNref         = ensure_literal_seed("base_language"),
-        ProjectLangNref      = ensure_literal_seed("project_language"),
+        LangLitNref          = ensure_literal_seed("Language Literals", ?NREF_LITERALS),
+        BaseLangNref         = ensure_literal_seed("base_language",     LangLitNref),
+        ProjectLangNref      = ensure_literal_seed("project_language",  LangLitNref),
         ok = ensure_overlay_table(language_en),
         {LangCodeMap, DialectMap} =
             build_lang_maps(LangCodeNref, BaseLangNref, LangHumanNref),
+        ok = graphdb_attr:retro_stamp_attribute_types(),
         logger:info("graphdb_language: started "
-            "(lang_code=~p, lang_human=~p, base_language=~p, "
-            "project_language=~p, registered=~p)",
-            [LangCodeNref, LangHumanNref, BaseLangNref, ProjectLangNref,
-             maps:size(LangCodeMap)]),
+            "(lang_code=~p, lang_human=~p, language_literals_group=~p, "
+            "base_language=~p, project_language=~p, registered=~p)",
+            [LangCodeNref, LangHumanNref, LangLitNref, BaseLangNref,
+             ProjectLangNref, maps:size(LangCodeMap)]),
         {ok, #state{
-            lang_code_nref        = LangCodeNref,
-            lang_human_nref       = LangHumanNref,
-            base_language_nref    = BaseLangNref,
-            project_language_nref = ProjectLangNref,
-            lang_code_map         = LangCodeMap,
-            dialect_map           = DialectMap
+            lang_code_nref                = LangCodeNref,
+            lang_human_nref               = LangHumanNref,
+            language_literals_group_nref  = LangLitNref,
+            base_language_nref            = BaseLangNref,
+            project_language_nref         = ProjectLangNref,
+            lang_code_map                 = LangCodeMap,
+            dialect_map                   = DialectMap
         }}
     catch
         throw:{error, Reason} ->
@@ -249,13 +253,17 @@ init([]) ->
     end.
 
 handle_call(seeded_nrefs, _From,
-        #state{lang_code_nref        = LC,
-               base_language_nref    = BL,
-               project_language_nref = PL} = State) ->
-    {reply, {ok, #{lang_code          => LC,
-                   base_language      => BL,
-                   project_language   => PL,
-                   env_language_code  => ?ENV_LANGUAGE_CODE}}, State};
+        #state{lang_code_nref               = LC,
+               lang_human_nref              = LH,
+               language_literals_group_nref = LL,
+               base_language_nref           = BL,
+               project_language_nref        = PL} = State) ->
+    {reply, {ok, #{lang_code               => LC,
+                   lang_human              => LH,
+                   language_literals_group => LL,
+                   base_language           => BL,
+                   project_language        => PL,
+                   env_language_code       => ?ENV_LANGUAGE_CODE}}, State};
 handle_call({register_language, Code, _Name}, _From,
         #state{lang_code_map = CM} = State)
         when is_map_key(Code, CM) ->
@@ -392,13 +400,15 @@ find_class_by_name(ParentNref, Name) ->
 
 
 %%---------------------------------------------------------------------
-%% ensure_literal_seed(Name) -> Nref
+%% ensure_literal_seed(Name, ParentNref) -> Nref
 %%
-%% Same pattern as graphdb_attr:ensure_seed/1 — looks up a literal
-%% attribute by name under Literals (7); creates it if absent.
+%% Same pattern as graphdb_attr:ensure_seed/2 — looks up an
+%% attribute by name under ParentNref; creates a literal-kind
+%% attribute node if absent.  Caller chooses the parent — typically
+%% the Language Literals sub-group or Literals (7) itself.
 %%---------------------------------------------------------------------
-ensure_literal_seed(Name) ->
-	case graphdb_attr:find_attribute_by_name(?NREF_LITERALS, Name) of
+ensure_literal_seed(Name, ParentNref) ->
+	case graphdb_attr:find_attribute_by_name(ParentNref, Name) of
 		{ok, Nref} ->
 			Nref;
 		not_found ->
@@ -407,14 +417,14 @@ ensure_literal_seed(Name) ->
 			Node = #node{
 				nref = Nref,
 				kind = attribute,
-				parents = [?NREF_LITERALS],
+				parents = [ParentNref],
 				attribute_value_pairs = [NameAVP]
 			},
 			{Id1, Id2} = rel_id_server:get_id_pair(),
 			P2C = #relationship{
 				id             = Id1,
 				kind           = taxonomy,
-				source_nref    = ?NREF_LITERALS,
+				source_nref    = ParentNref,
 				characterization = ?ARC_ATTR_CHILD,
 				target_nref    = Nref,
 				reciprocal     = ?ARC_ATTR_PARENT,
@@ -425,7 +435,7 @@ ensure_literal_seed(Name) ->
 				kind           = taxonomy,
 				source_nref    = Nref,
 				characterization = ?ARC_ATTR_PARENT,
-				target_nref    = ?NREF_LITERALS,
+				target_nref    = ParentNref,
 				reciprocal     = ?ARC_ATTR_CHILD,
 				avps           = []
 			},

@@ -63,9 +63,12 @@
 	seeded_nrefs_are_above_floor/1,
 	template_avp_marker_stamped/1,
 	template_avp_marker_idempotent/1,
+	seeds_attribute_literals_subgroup/1,
+	attr_literal_seeds_parented_under_subgroup/1,
 	%% Creators
 	create_name_attribute_basic/1,
 	create_literal_attribute_stores_type/1,
+	create_literal_attribute_under_custom_parent/1,
 	create_relationship_attribute_pair/1,
 	create_relationship_attribute_pair_atomic/1,
 	create_relationship_attribute_rejects_bad_kind/1,
@@ -109,11 +112,14 @@ groups() ->
 			seeds_idempotent_on_restart,
 			seeded_nrefs_are_above_floor,
 			template_avp_marker_stamped,
-			template_avp_marker_idempotent
+			template_avp_marker_idempotent,
+			seeds_attribute_literals_subgroup,
+			attr_literal_seeds_parented_under_subgroup
 		]},
 		{creators, [], [
 			create_name_attribute_basic,
 			create_literal_attribute_stores_type,
+			create_literal_attribute_under_custom_parent,
 			create_relationship_attribute_pair,
 			create_relationship_attribute_pair_atomic,
 			create_relationship_attribute_rejects_bad_kind,
@@ -237,19 +243,22 @@ verify_cache_invariant(TC) ->
 %%-----------------------------------------------------------------------------
 seeds_created_on_first_start(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
-	{ok, #{literal_type := Lt, target_kind := Tk, relationship_avp := Ra,
-			attribute_type := At}} = graphdb_attr:seeded_nrefs(),
+	{ok, #{attribute_literals_group := AttrLitNref,
+	       literal_type             := Lt,
+	       target_kind              := Tk,
+	       relationship_avp         := Ra,
+	       attribute_type           := At}} = graphdb_attr:seeded_nrefs(),
 	?assert(is_integer(Lt)),
 	?assert(is_integer(Tk)),
 	?assert(is_integer(Ra)),
 	?assert(is_integer(At)),
 	%% All four are distinct
 	?assertEqual(4, length(lists:usort([Lt, Tk, Ra, At]))),
-	%% Each is an attribute node whose parent is the Literals subtree (7)
+	%% Each is an attribute node whose parent is the Attribute Literals sub-group
 	lists:foreach(fun(N) ->
 		{ok, Node} = graphdb_attr:get_attribute(N),
 		?assertEqual(attribute, Node#node.kind),
-		?assertEqual([7], Node#node.parents)
+		?assertEqual([AttrLitNref], Node#node.parents)
 	end, [Lt, Tk, Ra, At]).
 
 %%-----------------------------------------------------------------------------
@@ -312,6 +321,41 @@ template_avp_marker_idempotent(_Config) ->
 		mnesia:read(nodes, ?ARC_TEMPLATE)
 	end),
 	?assertEqual(BeforeAVPs, After#node.attribute_value_pairs).
+
+
+%%-----------------------------------------------------------------------------
+%% The Attribute Literals sub-group node must exist after init and have
+%% nref >= 100000 (runtime tier), kind=attribute, and its parent must be
+%% the Literals subtree (nref 7).
+%%-----------------------------------------------------------------------------
+seeds_attribute_literals_subgroup(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{attribute_literals_group := AttrLitNref}} =
+		graphdb_attr:seeded_nrefs(),
+	?assert(is_integer(AttrLitNref)),
+	?assert(AttrLitNref >= 100000),
+	{ok, Node} = graphdb_attr:get_attribute(AttrLitNref),
+	?assertEqual(attribute, Node#node.kind),
+	?assertEqual([?NREF_LITERALS], Node#node.parents).
+
+%%-----------------------------------------------------------------------------
+%% After Task 2, literal_type, target_kind, relationship_avp, and
+%% attribute_type must all report the Attribute Literals sub-group as
+%% their direct parent (not nref 7 directly).
+%%-----------------------------------------------------------------------------
+attr_literal_seeds_parented_under_subgroup(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{attribute_literals_group := AttrLitNref,
+	       literal_type             := Lt,
+	       target_kind              := Tk,
+	       relationship_avp         := Ra,
+	       attribute_type           := At}} = graphdb_attr:seeded_nrefs(),
+	lists:foreach(
+		fun(Nref) ->
+			{ok, Node} = graphdb_attr:get_attribute(Nref),
+			?assertEqual([AttrLitNref], Node#node.parents)
+		end,
+		[Lt, Tk, Ra, At]).
 
 
 %%=============================================================================
@@ -455,6 +499,21 @@ new_attribute_writes_taxonomy_arcs(_Config) ->
 	end, ChildOut)).
 
 
+%%-----------------------------------------------------------------------------
+%% create_literal_attribute/3 with an explicit parent nref places the new
+%% node under that parent rather than defaulting to the Literals subtree.
+%%-----------------------------------------------------------------------------
+create_literal_attribute_under_custom_parent(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	%% Create a sub-group under Literals (7), then a literal attr under it.
+	{ok, SubgroupNref} = graphdb_attr:create_literal_attribute(
+		"test_subgroup", group, ?NREF_LITERALS),
+	{ok, ChildNref} = graphdb_attr:create_literal_attribute(
+		"test_child", integer, SubgroupNref),
+	{ok, Child} = graphdb_attr:get_attribute(ChildNref),
+	?assertEqual([SubgroupNref], Child#node.parents).
+
+
 %%=============================================================================
 %% Lookup Tests
 %%=============================================================================
@@ -492,8 +551,9 @@ get_attribute_rejects_non_attribute(_Config) ->
 list_attributes_includes_bootstrap_and_runtime(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, Before} = graphdb_attr:list_attributes(),
-	%% Bootstrap has 27 attribute nodes (nrefs 6-31 = 26, plus lang_code); seeding adds 4
-	?assertEqual(27 + 4, length(Before)),
+	%% Bootstrap has 27 attribute nodes (nrefs 6-31 = 26, plus lang_code);
+	%% seeding adds the Attribute Literals sub-group + 4 literal attrs = 5
+	?assertEqual(27 + 5, length(Before)),
 
 	{ok, _} = graphdb_attr:create_name_attribute("One"),
 	{ok, _} = graphdb_attr:create_name_attribute("Two"),

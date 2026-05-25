@@ -805,6 +805,26 @@ updated (nref floor now `>= 100002`; relationship IDs now start at 1). 4 CT test
 
 ---
 
+### L7. Literals subtree restructuring — **RESOLVED** (2026-05-25)
+
+Literals subtree (nref 7) partitioned by owning subsystem so each
+worker seeds its literal attributes under a dedicated sub-group:
+
+- `Attribute Literals` — seeded by `graphdb_attr:init/1` (contains
+  `literal_type`, `target_kind`, `relationship_avp`, `attribute_type`)
+- `Language Literals` — seeded by `graphdb_language:init/1` (contains
+  `base_language`, `project_language`)
+- `Rule Literals` — seeded by `graphdb_rules:init/1` once F4 Phase A
+  lands
+
+`graphdb_attr:create_literal_attribute/3` arity added so callers can
+specify a parent nref. `/2` retained as a delegating shim defaulting
+to nref 7.
+
+Clean-slate seeding; no runtime migration code.
+
+---
+
 ### Task 7. Wire `dictionary_server` and `term_server` to `dictionary_imp` — **RESOLVED** (2026-05-19)
 
 Both gen_servers delegate to `dictionary_imp` via `start_dictionary/stop_dictionary`
