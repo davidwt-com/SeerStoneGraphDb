@@ -26,13 +26,14 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_class`     | Implemented — taxonomic hierarchy with multi-parent inheritance (BFS — breadth-first search — over a DAG, a directed acyclic graph; H3)     |
 | `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance with multi-class membership (H4) and ambiguity-detecting class resolver (H5) |
 | `graphdb_rules`     | Stub                                                                                                                                        |
-| `graphdb_language`  | Stub                                                                                                                                        |
-| Tests               | 228 passing (164 Common Test + 64 EUnit)                                                                                                    |
+| `graphdb_language`  | Implemented — M6 multilingual overlay layer (label resolution, dialect chains, per-language Mnesia overlay tables)                          |
+| `graphdb_query`     | Implemented — F3 query language (Q1-Q6) with snapshot-semantics sessions and continuation-based bounded BFS                                 |
+| Tests               | 370 passing (267 Common Test + 103 EUnit)                                                                                                   |
 
 The kernel is functional under multi-inheritance, multi-class-
 membership, and per-class template semantics.  Multilingual label
-overlay (M6) is the active kernel-level work (§10);
-template-scoped queries land with the query DSL (TASKS.md F3).
+overlay (M6, §10) and the F3 query language (§11) are landed.
+`graphdb_rules` is the only remaining gen_server stub.
 
 ---
 
@@ -227,7 +228,8 @@ graphdb (application — started after mnesia + nref)
         ├── graphdb_class        — taxonomic hierarchy
         ├── graphdb_instance     — compositional hierarchy + inheritance
         ├── graphdb_rules        — rule storage/enforcement (stub)
-        └── graphdb_language     — multilingual label overlay + query language
+        ├── graphdb_language     — multilingual label overlay (M6)
+        └── graphdb_query        — F3 query language gen_server
 
 dictionary (application — started alongside graphdb)
   └── dictionary_sup
@@ -519,3 +521,35 @@ rows to traversal into project instance graphs, and the overlay tables will
 become caches of that traversal. The `resolve_label/3` API does not change
 when the backing changes. See `TASKS.md` F2 for current implementation
 scope.
+
+---
+
+## 11. Query Layer (`graphdb_query`)
+
+`graphdb_query` is the sole entry point for read-side traversal of the
+graph. It is a gen_server peer to the other graphdb workers under
+`graphdb_sup`.
+
+Architectural shape:
+
+- AST records in `apps/graphdb/include/graphdb_query.hrl`
+  (`#q_get_node{}`, `#q_get_arcs{}`, `#q_describe{}`,
+  `#q_instances_of{}`, `#q_find_path{}`).
+- Session is a value-passed map carrying a snapshot timestamp and a
+  read-through cache of node and arc reads.
+- Sessions are snapshots: `refresh/1` is the only invalidation path.
+  Continuations are tagged with their issuing snapshot; resuming
+  against a refreshed session returns `{error, snapshot_expired}`.
+- Mnesia access is funnelled through `session_read_node/2` and
+  `session_read_arcs/4`. The executor never calls `mnesia:dirty_*`
+  directly.
+- `find_path` is always bounded (caller supplies `max_depth`); reaching
+  the bound returns `{partial, Path, Continuation}` for later
+  resumption. The cont stores the original `max_depth` as
+  `remaining_depth` so resume gets a fresh full budget.
+- Category-kind nodes (nrefs 1-5) are filtered as structural scaffold
+  in BFS expansion, matching the semantics already encoded in
+  `graphdb_class:ancestors/1`'s NREF_CLASSES filter.
+
+See `docs/f3-graphdb-query-design.md` for the durable architectural
+contract.

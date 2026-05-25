@@ -588,36 +588,15 @@ the boundary.
 
 ---
 
-## F3. Task 6 — `graphdb_language` Query Language
+## F3. graphdb Query Language — RESOLVED
 
-**Depends on F2.**
-
-**Spec:** §13 (query) and §15 (languages).
-
-**Evidence:** `apps/graphdb/src/graphdb_language.erl` is a gen_server
-stub returning `?UEM` on every call.
-
-**Scope:**
-
-- Multi-criteria queries spanning class membership, attribute values,
-  and connections in one query.
-- Unit-tracked quantity expressions.
-- Template-filtered traversal — kernel-side templates landed (M7);
-  this task adds the query-side selectivity that reads the Template
-  AVP off connection arcs.
-- Language-tagged label resolution at render time — via M6 overlay API.
-- Conversational/natural-language entry point (§13).
-
-**Sub-tasks:**
-
-- Define query DSL (term-shaped representation; natural-language
-  frontend is later).
-- `parse_query/1`, `execute_query/1`.
-- Path queries: `find_path/3`.
-- Render-time label lookup: call `resolve_label/3` with the per-call
-  language chain at result rendering time.
-
-**Dependencies:** F2 must land first.
+Implemented as `graphdb_query` (the `graphdb_language` slot is occupied
+by the M6 multilingual overlay layer). Design at
+`docs/f3-graphdb-query-design.md`; plan at
+`docs/superpowers/plans/2026-05-23-f3-graphdb-query.md`. Seven query
+primitives (Q1, Q1b, Q2-Q6), snapshot-semantics sessions, continuation
++ resume with `snapshot_expired` detection. Template-filtered
+traversal lands in a future iteration alongside richer query criteria.
 
 ---
 

@@ -81,6 +81,9 @@
 	add_qc_idempotent/1,
 	add_qc_rejects_non_class/1,
 	add_qc_rejects_non_attribute/1,
+	bind_qc_value_basic/1,
+	bind_qc_value_undeclared_qc/1,
+	bind_qc_value_updates_existing_binding/1,
 	%% Lookups
 	get_class_returns_node/1,
 	get_class_not_found/1,
@@ -147,7 +150,10 @@ groups() ->
 			add_qc_basic,
 			add_qc_idempotent,
 			add_qc_rejects_non_class,
-			add_qc_rejects_non_attribute
+			add_qc_rejects_non_attribute,
+			bind_qc_value_basic,
+			bind_qc_value_undeclared_qc,
+			bind_qc_value_updates_existing_binding
 		]},
 		{lookups, [], [
 			get_class_returns_node,
@@ -532,6 +538,46 @@ add_qc_rejects_non_attribute(_Config) ->
 	%% Nref 1 is a category node, not attribute
 	?assertMatch({error, {not_an_attribute, 1}},
 		graphdb_class:add_qualifying_characteristic(ClassNref, 1)).
+
+%%-----------------------------------------------------------------------------
+%% bind_qc_value sets a value on a declared QC and inherited_qcs reflects it.
+%%-----------------------------------------------------------------------------
+bind_qc_value_basic(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, Veh}   = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+	{ok, AttrN} = graphdb_attr:create_literal_attribute("weight", number),
+	ok = graphdb_class:add_qualifying_characteristic(Veh, AttrN),
+	ok = graphdb_class:bind_qc_value(Veh, AttrN, 3500),
+	{ok, QCs}   = graphdb_class:inherited_qcs(Veh),
+	?assert(lists:member({AttrN, 3500}, QCs)).
+
+%%-----------------------------------------------------------------------------
+%% bind_qc_value rejects an attribute that has not been added as a QC.
+%%-----------------------------------------------------------------------------
+bind_qc_value_undeclared_qc(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, Veh}   = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+	{ok, AttrN} = graphdb_attr:create_literal_attribute("weight", number),
+	%% Did NOT call add_qualifying_characteristic
+	?assertEqual({error, qc_not_declared},
+		graphdb_class:bind_qc_value(Veh, AttrN, 3500)),
+	%% Defense-in-depth: ensure the transaction abort rolled back
+	%% the write — no spurious QC was added to the class node.
+	?assertMatch({ok, []}, graphdb_class:inherited_qcs(Veh)).
+
+%%-----------------------------------------------------------------------------
+%% bind_qc_value called twice for the same QC replaces the prior value.
+%%-----------------------------------------------------------------------------
+bind_qc_value_updates_existing_binding(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, Veh}   = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+	{ok, AttrN} = graphdb_attr:create_literal_attribute("weight", number),
+	ok = graphdb_class:add_qualifying_characteristic(Veh, AttrN),
+	ok = graphdb_class:bind_qc_value(Veh, AttrN, 3500),
+	ok = graphdb_class:bind_qc_value(Veh, AttrN, 4000),
+	{ok, QCs}   = graphdb_class:inherited_qcs(Veh),
+	?assert(lists:member({AttrN, 4000}, QCs)),
+	?assertNot(lists:member({AttrN, 3500}, QCs)).
 
 
 %%=============================================================================

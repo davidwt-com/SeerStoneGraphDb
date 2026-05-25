@@ -102,6 +102,10 @@
 	resolve_value_walks_class_taxonomy/1,
 	resolve_value_local_class_overrides_taxonomy_ancestor/1,
 	resolve_value_p4_ignores_compositional_arc/1,
+	resolve_value_source_local/1,
+	resolve_value_source_class/1,
+	resolve_value_source_ancestor/1,
+	resolve_value_source_connected/1,
 	%% Multi-membership (H4)
 	add_class_membership_basic/1,
 	add_class_membership_writes_arcs/1,
@@ -181,7 +185,11 @@ groups() ->
 			resolve_value_priority_ancestor_over_connected,
 			resolve_value_walks_class_taxonomy,
 			resolve_value_local_class_overrides_taxonomy_ancestor,
-			resolve_value_p4_ignores_compositional_arc
+			resolve_value_p4_ignores_compositional_arc,
+			resolve_value_source_local,
+			resolve_value_source_class,
+			resolve_value_source_ancestor,
+			resolve_value_source_connected
 		]},
 		{multi_membership, [], [
 			add_class_membership_basic,
@@ -771,7 +779,8 @@ resolve_value_local(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
 	{ok, InstNref} = graphdb_instance:create_instance("T1", ClassNref, 5),
 	%% The name attribute (20) was set by create_instance
-	?assertEqual({ok, "T1"}, graphdb_instance:resolve_value(InstNref, ?NAME_ATTR_INSTANCE)).
+	?assertMatch({ok, "T1", _},
+		graphdb_instance:resolve_value(InstNref, ?NAME_ATTR_INSTANCE)).
 
 %%-----------------------------------------------------------------------------
 %% resolve_value finds a value from the class node's AVPs.
@@ -783,7 +792,7 @@ resolve_value_from_class(_Config) ->
 	set_avp(ClassNref, TestAttr, "blue"),
 	{ok, InstNref} = graphdb_instance:create_instance("C1", ClassNref, 5),
 	%% Instance doesn't have shade — resolved from class
-	?assertEqual({ok, "blue"},
+	?assertMatch({ok, "blue", _},
 		graphdb_instance:resolve_value(InstNref, TestAttr)).
 
 %%-----------------------------------------------------------------------------
@@ -797,7 +806,7 @@ resolve_value_from_ancestor(_Config) ->
 	{ok, Engine} = graphdb_instance:create_instance("Engine", ClassNref, Car),
 	{ok, Block} = graphdb_instance:create_instance("Block", ClassNref, Engine),
 	%% Block doesn't have location, Engine doesn't — resolved from Car
-	?assertEqual({ok, "garage"},
+	?assertMatch({ok, "garage", _},
 		graphdb_instance:resolve_value(Block, TestAttr)).
 
 %%-----------------------------------------------------------------------------
@@ -814,7 +823,7 @@ resolve_value_from_connected(_Config) ->
 	ok = graphdb_instance:add_relationship(Taurus, MadeByNref, Ford, MakesNref),
 	%% Taurus doesn't have country, its class doesn't, no ancestors have it
 	%% — resolved from connected Ford
-	?assertEqual({ok, "USA"},
+	?assertMatch({ok, "USA", _},
 		graphdb_instance:resolve_value(Taurus, TestAttr)).
 
 %%-----------------------------------------------------------------------------
@@ -835,7 +844,7 @@ resolve_value_priority_local_over_class(_Config) ->
 	set_avp(ClassNref, TestAttr, "class_hue"),
 	{ok, InstNref} = graphdb_instance:create_instance("C1", ClassNref, 5),
 	set_avp(InstNref, TestAttr, "local_hue"),
-	?assertEqual({ok, "local_hue"},
+	?assertMatch({ok, "local_hue", _},
 		graphdb_instance:resolve_value(InstNref, TestAttr)).
 
 %%-----------------------------------------------------------------------------
@@ -850,7 +859,7 @@ resolve_value_priority_class_over_ancestor(_Config) ->
 	{ok, Child} = graphdb_instance:create_instance("C1", ClassNref, Parent),
 	%% Child has no local value; class has weight; parent has weight
 	%% Class (priority 2) should win over parent (priority 3)
-	?assertEqual({ok, "class_weight"},
+	?assertMatch({ok, "class_weight", _},
 		graphdb_instance:resolve_value(Child, TestAttr)).
 
 %%-----------------------------------------------------------------------------
@@ -869,7 +878,7 @@ resolve_value_priority_ancestor_over_connected(_Config) ->
 	ok = graphdb_instance:add_relationship(Child, LinksNref, Peer, LinkedByNref),
 	%% Child has no local value, class has no value
 	%% Ancestor Parent (priority 3) should win over connected Peer (priority 4)
-	?assertEqual({ok, "ancestor_region"},
+	?assertMatch({ok, "ancestor_region", _},
 		graphdb_instance:resolve_value(Child, TestAttr)).
 
 %%-----------------------------------------------------------------------------
@@ -885,7 +894,7 @@ resolve_value_walks_class_taxonomy(_Config) ->
 	%% Bind kingdom only on the topmost class
 	set_avp(AnimalNref, TestAttr, "Animalia"),
 	{ok, Rex} = graphdb_instance:create_instance("Rex", DogNref, 5),
-	?assertEqual({ok, "Animalia"},
+	?assertMatch({ok, "Animalia", _},
 		graphdb_instance:resolve_value(Rex, TestAttr)).
 
 %%-----------------------------------------------------------------------------
@@ -899,7 +908,7 @@ resolve_value_local_class_overrides_taxonomy_ancestor(_Config) ->
 	set_avp(AnimalNref, TestAttr, "from_animal"),
 	set_avp(DogNref,    TestAttr, "from_dog"),
 	{ok, Rex} = graphdb_instance:create_instance("Rex", DogNref, 5),
-	?assertEqual({ok, "from_dog"},
+	?assertMatch({ok, "from_dog", _},
 		graphdb_instance:resolve_value(Rex, TestAttr)).
 
 %%-----------------------------------------------------------------------------
@@ -918,6 +927,69 @@ resolve_value_p4_ignores_compositional_arc(_Config) ->
 	%% parent_arc — only true connection arcs count.
 	?assertEqual(not_found,
 		graphdb_instance:resolve_value(InstNref, TestAttr)).
+
+
+%%-----------------------------------------------------------------------------
+%% Task 0: Source tagging — Priority 1 hit returns `local`.
+%%-----------------------------------------------------------------------------
+resolve_value_source_local(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+	{ok, AttrNref}  = graphdb_attr:create_literal_attribute("weight", number),
+	ok = graphdb_class:add_qualifying_characteristic(ClassNref, AttrNref),
+	{ok, InstNref}  = graphdb_instance:create_instance(
+						"Taurus", ClassNref, ?NREF_PROJECTS),
+	set_avp(InstNref, AttrNref, 3500),
+	?assertEqual({ok, 3500, local},
+		graphdb_instance:resolve_value(InstNref, AttrNref)).
+
+%%-----------------------------------------------------------------------------
+%% Task 0: Source tagging — Priority 2 hit returns `{class, ClassNref}`.
+%% Requires graphdb_class:bind_qc_value/3 to set the class-level value.
+%%-----------------------------------------------------------------------------
+resolve_value_source_class(_Config) ->
+	{ok, Veh}    = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+	{ok, AttrN}  = graphdb_attr:create_literal_attribute("weight", number),
+	ok = graphdb_class:add_qualifying_characteristic(Veh, AttrN),
+	ok = graphdb_class:bind_qc_value(Veh, AttrN, 3500),
+	{ok, InstN}  = graphdb_instance:create_instance(
+						"Taurus", Veh, ?NREF_PROJECTS),
+	?assertEqual({ok, 3500, {class, Veh}},
+		graphdb_instance:resolve_value(InstN, AttrN)).
+
+%%-----------------------------------------------------------------------------
+%% Task 0: Source tagging — Priority 3 hit returns `{compositional, AncNref}`
+%% identifying the ancestor instance that held the value.
+%%-----------------------------------------------------------------------------
+resolve_value_source_ancestor(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Part", ?NREF_CLASSES),
+	{ok, TestAttr}  = graphdb_attr:create_literal_attribute("location", string),
+	{ok, Car}       = graphdb_instance:create_instance(
+						"Car", ClassNref, ?NREF_PROJECTS),
+	set_avp(Car, TestAttr, "garage"),
+	{ok, Engine}    = graphdb_instance:create_instance(
+						"Engine", ClassNref, Car),
+	{ok, Block}     = graphdb_instance:create_instance(
+						"Block", ClassNref, Engine),
+	?assertEqual({ok, "garage", {compositional, Car}},
+		graphdb_instance:resolve_value(Block, TestAttr)).
+
+%%-----------------------------------------------------------------------------
+%% Task 0: Source tagging — Priority 4 hit returns `{connected, NodeNref}`
+%% identifying the directly-connected node that held the value.
+%%-----------------------------------------------------------------------------
+resolve_value_source_connected(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Org", ?NREF_CLASSES),
+	{ok, TestAttr}  = graphdb_attr:create_literal_attribute("country", string),
+	{ok, Ford}      = graphdb_instance:create_instance(
+						"Ford", ClassNref, ?NREF_PROJECTS),
+	set_avp(Ford, TestAttr, "USA"),
+	{ok, Taurus}    = graphdb_instance:create_instance(
+						"Taurus", ClassNref, ?NREF_PROJECTS),
+	{ok, {MakesNref, MadeByNref}} =
+		graphdb_attr:create_relationship_attribute("Makes", "MadeBy", instance),
+	ok = graphdb_instance:add_relationship(Taurus, MadeByNref, Ford, MakesNref),
+	?assertEqual({ok, "USA", {connected, Ford}},
+		graphdb_instance:resolve_value(Taurus, TestAttr)).
 
 
 %%=============================================================================
@@ -1041,7 +1113,7 @@ resolve_value_unique_across_two_classes(_Config) ->
 	set_avp(ClassA, Attr, "blue_badge"),
 	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
 	ok = graphdb_instance:add_class_membership(Inst, ClassB),
-	?assertEqual({ok, "blue_badge"},
+	?assertMatch({ok, "blue_badge", _},
 		graphdb_instance:resolve_value(Inst, Attr)).
 
 %%-----------------------------------------------------------------------------
@@ -1056,7 +1128,7 @@ resolve_value_same_value_two_classes(_Config) ->
 	set_avp(ClassB, Attr, "red"),
 	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
 	ok = graphdb_instance:add_class_membership(Inst, ClassB),
-	?assertEqual({ok, "red"},
+	?assertMatch({ok, "red", _},
 		graphdb_instance:resolve_value(Inst, Attr)).
 
 %%-----------------------------------------------------------------------------
@@ -1091,7 +1163,7 @@ resolve_value_local_overrides_ambiguity(_Config) ->
 	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
 	ok = graphdb_instance:add_class_membership(Inst, ClassB),
 	set_avp(Inst, Attr, "umami"),
-	?assertEqual({ok, "umami"},
+	?assertMatch({ok, "umami", _},
 		graphdb_instance:resolve_value(Inst, Attr)).
 
 %%-----------------------------------------------------------------------------

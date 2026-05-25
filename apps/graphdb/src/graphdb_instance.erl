@@ -298,13 +298,20 @@ add_class_membership(InstanceNref, ClassNref) ->
 
 %%-----------------------------------------------------------------------------
 %% resolve_value(InstanceNref, AttrNref) ->
-%%     {ok, Value} | not_found | {error, term()}
+%%     {ok, Value, Source} | not_found | {error, term()}
 %%
 %% Full inheritance resolution following priority order:
-%%   1. Local values (highest)
-%%   2. Class-level bound values
-%%   3. Compositional ancestors (unbroken chain upward)
-%%   4. Directly connected nodes (one level deep; lowest)
+%%   1. Local values (highest)        -> Source = local
+%%   2. Class-level bound values      -> Source = {class,         ClassNref}
+%%   3. Compositional ancestors       -> Source = {compositional, AncNref}
+%%   4. Directly connected nodes      -> Source = {connected,     NodeNref}
+%%
+%% Source identifies where in the inheritance chain the resolved value
+%% was found.  For Priority 2, ClassNref is the class node that actually
+%% held the AVP (may be a taxonomy ancestor of one of the instance's
+%% direct class memberships).  For Priority 3, AncNref is the
+%% compositional-ancestor instance node.  For Priority 4, NodeNref is
+%% the directly-connected node (one level deep).
 %%-----------------------------------------------------------------------------
 resolve_value(InstanceNref, AttrNref) ->
 	gen_server:call(?MODULE, {resolve_value, InstanceNref, AttrNref}).
@@ -869,33 +876,43 @@ do_walk_ancestors(Nref, Acc) ->
 
 %%-----------------------------------------------------------------------------
 %% do_resolve_value(InstNref, AttrNref) ->
-%%     {ok, Value} | not_found | {error, term()}
+%%     {ok, Value, Source} | not_found | {error, term()}
 %%
-%% Full four-level inheritance resolution.
+%% Full four-level inheritance resolution.  Source identifies the
+%% priority level where the value was found:
+%%   - `local`                  (Priority 1)
+%%   - `{class,         Nref}`  (Priority 2, the class node that held it)
+%%   - `{compositional, Nref}`  (Priority 3, the ancestor instance)
+%%   - `{connected,     Nref}`  (Priority 4, the directly-connected node)
 %%-----------------------------------------------------------------------------
 do_resolve_value(InstNref, AttrNref) ->
 	case do_get_instance(InstNref) of
 		{ok, Node} ->
 			%% Priority 1: Local values
 			case find_avp_value(Node#node.attribute_value_pairs, AttrNref) of
-				{ok, _} = Found ->
-					Found;
+				{ok, V} ->
+					{ok, V, local};
 				not_found ->
 					%% Priority 2: Class-level bound values
 					case resolve_from_class(InstNref, AttrNref) of
-						{ok, _} = Found ->
-							Found;
+						{ok, V, ClassNref} ->
+							{ok, V, {class, ClassNref}};
 						not_found ->
 							%% Priority 3: Compositional ancestors
 							case resolve_from_ancestors(
 									head_parent(Node#node.parents),
 									AttrNref) of
-								{ok, _} = Found ->
-									Found;
+								{ok, V, AncNref} ->
+									{ok, V, {compositional, AncNref}};
 								not_found ->
 									%% Priority 4: Directly connected nodes
-									resolve_from_connected(
-										InstNref, AttrNref);
+									case resolve_from_connected(
+										InstNref, AttrNref) of
+										{ok, V, ConnNref} ->
+											{ok, V, {connected, ConnNref}};
+										not_found ->
+											not_found
+									end;
 								{error, _} = Err ->
 									Err
 							end;
@@ -910,7 +927,7 @@ do_resolve_value(InstNref, AttrNref) ->
 
 %%-----------------------------------------------------------------------------
 %% resolve_from_class(InstNref, AttrNref) ->
-%%     {ok, Value} | not_found |
+%%     {ok, Value, ClassNref} | not_found |
 %%     {error, {ambiguous_class_value, AttrNref, [{ClassNref, Value}]}}
 %%
 %% Reads every class membership and, for each one, walks the class node
@@ -918,11 +935,14 @@ do_resolve_value(InstNref, AttrNref) ->
 %%
 %% - 0 hits across all memberships -> not_found (caller falls through
 %%   to Priority 3).
-%% - All hits agree on a single distinct value -> {ok, Value}.
+%% - All hits agree on a single distinct value -> {ok, Value, ClassNref}.
+%%   ClassNref is the class node where the value was actually found (may
+%%   be a taxonomy ancestor of one of the instance's direct class
+%%   memberships).  When multiple memberships yield the same value, the
+%%   first hit's class is reported.
 %% - Two or more distinct values -> {error, {ambiguous_class_value,
 %%   AttrNref, [{ClassNref, Value}]}}, where ClassNref is the class
-%%   where the value was actually found (may be a taxonomy ancestor of
-%%   a directly-bound membership).
+%%   where the value was actually found.
 %%-----------------------------------------------------------------------------
 resolve_from_class(InstNref, AttrNref) ->
 	case do_class_memberships(InstNref) of
@@ -946,11 +966,11 @@ collect_class_hits(Classes, AttrNref) ->
 
 classify_class_hits([], _AttrNref) ->
 	not_found;
-classify_class_hits([{_, Value}], _AttrNref) ->
-	{ok, Value};
-classify_class_hits(Hits, AttrNref) ->
+classify_class_hits([{ClassNref, Value}], _AttrNref) ->
+	{ok, Value, ClassNref};
+classify_class_hits([{ClassNref, _} | _] = Hits, AttrNref) ->
 	case lists:usort([V || {_, V} <- Hits]) of
-		[Value] -> {ok, Value};
+		[Value] -> {ok, Value, ClassNref};
 		_       -> {error, {ambiguous_class_value, AttrNref, Hits}}
 	end.
 
@@ -986,10 +1006,12 @@ search_first_in_ancestors(
 
 %%-----------------------------------------------------------------------------
 %% resolve_from_ancestors(ParentNref, AttrNref) ->
-%%     {ok, Value} | not_found | {error, term()}
+%%     {ok, Value, AncestorNref} | not_found | {error, term()}
 %%
 %% Walks up the compositional parent chain, checking each instance
-%% ancestor's AVPs.  Stops at a non-instance or missing node.
+%% ancestor's AVPs.  Stops at a non-instance or missing node.  When a
+%% match is found, returns the nref of the ancestor instance that held
+%% the value.
 %%-----------------------------------------------------------------------------
 resolve_from_ancestors(undefined, _AttrNref) ->
 	not_found;
@@ -998,9 +1020,9 @@ resolve_from_ancestors(ParentNref, AttrNref) ->
 		[#node{kind = instance, parents = GrandParents,
 				attribute_value_pairs = AVPs}] ->
 			case find_avp_value(AVPs, AttrNref) of
-				{ok, _} = Found -> Found;
-				not_found       -> resolve_from_ancestors(
-									head_parent(GrandParents), AttrNref)
+				{ok, V}   -> {ok, V, ParentNref};
+				not_found -> resolve_from_ancestors(
+								head_parent(GrandParents), AttrNref)
 			end;
 		[_] ->
 			not_found;
@@ -1039,12 +1061,14 @@ downward_children_by_arc(ParentNref, ChildArc, RelKind) ->
 
 %%-----------------------------------------------------------------------------
 %% resolve_from_connected(InstNref, AttrNref) ->
-%%     {ok, Value} | not_found
+%%     {ok, Value, NodeNref} | not_found
 %%
 %% Checks all directly connected nodes (one level deep).  Only
 %% kind=connection arcs are considered; instantiation (membership) and
 %% composition (parent/child) arcs are excluded — those targets are
-%% already covered by Priorities 2 and 3.
+%% already covered by Priorities 2 and 3.  Returns the nref of the
+%% connected node that held the AVP; the caller wraps it as
+%% {connected, NodeNref} for the Source tag.
 %%-----------------------------------------------------------------------------
 resolve_from_connected(InstNref, AttrNref) ->
 	F = fun() ->
@@ -1063,10 +1087,11 @@ resolve_from_connected(InstNref, AttrNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% search_targets(Nrefs, AttrNref) -> {ok, Value} | not_found
+%% search_targets(Nrefs, AttrNref) ->
+%%     {ok, Value, NodeNref} | not_found
 %%
 %% Checks each target node's AVPs for the attribute.  Returns the
-%% first match.
+%% first match together with the nref of the node that held the value.
 %%-----------------------------------------------------------------------------
 search_targets([], _AttrNref) ->
 	not_found;
@@ -1074,8 +1099,8 @@ search_targets([Nref | Rest], AttrNref) ->
 	case mnesia:dirty_read(nodes, Nref) of
 		[#node{attribute_value_pairs = AVPs}] ->
 			case find_avp_value(AVPs, AttrNref) of
-				{ok, _} = Found -> Found;
-				not_found       -> search_targets(Rest, AttrNref)
+				{ok, V}   -> {ok, V, Nref};
+				not_found -> search_targets(Rest, AttrNref)
 			end;
 		_ ->
 			search_targets(Rest, AttrNref)

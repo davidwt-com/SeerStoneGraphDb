@@ -108,6 +108,7 @@
 		create_class/2,
 		add_superclass/2,
 		add_qualifying_characteristic/2,
+		bind_qc_value/3,
 		add_template/2,
 		%% Lookups
 		get_class/1,
@@ -210,6 +211,20 @@ add_template(ClassNref, Name) ->
 %%-----------------------------------------------------------------------------
 add_qualifying_characteristic(ClassNref, AttrNref) ->
 	gen_server:call(?MODULE, {add_qualifying_characteristic, ClassNref, AttrNref}).
+
+
+%%-----------------------------------------------------------------------------
+%% bind_qc_value(ClassNref, AttrNref, Value) -> ok | {error, term()}
+%%
+%% Sets the bound value for a declared qualifying characteristic on the
+%% class.  The QC must already exist on the class node (declared via
+%% add_qualifying_characteristic/2); calling bind_qc_value/3 on an
+%% undeclared QC returns {error, qc_not_declared}.  Replaces any
+%% previously-bound value for the same QC.  This is the Priority-2 input
+%% for graphdb_instance:resolve_value/2 inheritance.
+%%-----------------------------------------------------------------------------
+bind_qc_value(ClassNref, AttrNref, Value) ->
+	gen_server:call(?MODULE, {bind_qc_value, ClassNref, AttrNref, Value}).
 
 
 %%-----------------------------------------------------------------------------
@@ -321,6 +336,9 @@ handle_call({add_superclass, ClassNref, AdditionalParentNref}, _From, State) ->
 handle_call({add_qualifying_characteristic, ClassNref, AttrNref}, _From,
 		State) ->
 	{reply, do_add_qc(ClassNref, AttrNref), State};
+
+handle_call({bind_qc_value, ClassNref, AttrNref, Value}, _From, State) ->
+	{reply, do_bind_qc_value(ClassNref, AttrNref, Value), State};
 
 handle_call({add_template, ClassNref, Name}, _From, State) ->
 	{reply, do_add_template(ClassNref, Name), State};
@@ -743,6 +761,54 @@ do_add_qc(ClassNref, AttrNref) ->
 		{atomic, {error, _} = E} -> E;
 		{aborted, Reason}        -> {error, Reason}
 	end.
+
+
+%%-----------------------------------------------------------------------------
+%% do_bind_qc_value(ClassNref, AttrNref, Value) -> ok | {error, term()}
+%%
+%% Updates the class node's AVP for the matching QC AttrNref in place.
+%% Aborts with `qc_not_declared` when the QC was never added via
+%% add_qualifying_characteristic/2.  Aborts with `not_a_class` for nodes
+%% of any other kind, and `not_found` when the nref doesn't exist.
+%%-----------------------------------------------------------------------------
+do_bind_qc_value(ClassNref, AttrNref, Value) ->
+	F = fun() ->
+		case mnesia:read(nodes, ClassNref) of
+			[#node{kind = class, attribute_value_pairs = AVPs} = N] ->
+				Declared = lists:any(
+					fun(#{attribute := A}) -> A =:= AttrNref;
+					   (_)                 -> false
+					end, AVPs),
+				case Declared of
+					false ->
+						mnesia:abort(qc_not_declared);
+					true ->
+						NewAVPs = update_qc_value(AVPs, AttrNref, Value),
+						mnesia:write(nodes,
+							N#node{attribute_value_pairs = NewAVPs},
+							write)
+				end;
+			[_] -> mnesia:abort(not_a_class);
+			[]  -> mnesia:abort(not_found)
+		end
+	end,
+	case mnesia:transaction(F) of
+		{atomic, ok}      -> ok;
+		{aborted, Reason} -> {error, Reason}
+	end.
+
+%%-----------------------------------------------------------------------------
+%% update_qc_value(AVPs, AttrNref, Value) -> NewAVPs
+%%
+%% Returns a copy of the AVP list with the entry matching AttrNref
+%% updated to carry Value.  Non-matching entries are preserved in
+%% place.  Caller has already verified that AttrNref is present in AVPs.
+%%-----------------------------------------------------------------------------
+update_qc_value(AVPs, AttrNref, Value) ->
+	[case A of
+		#{attribute := AttrNref} -> A#{value => Value};
+		_                        -> A
+	 end || A <- AVPs].
 
 
 %%-----------------------------------------------------------------------------
