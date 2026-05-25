@@ -551,5 +551,5 @@ Architectural shape:
   in BFS expansion, matching the semantics already encoded in
   `graphdb_class:ancestors/1`'s NREF_CLASSES filter.
 
-See `docs/f3-graphdb-query-design.md` for the durable architectural
+See `docs/designs/f3-graphdb-query-design.md` for the durable architectural
 contract.

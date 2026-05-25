@@ -8,7 +8,7 @@
 
 **Tech Stack:** Erlang/OTP 28.5, rebar3 3.27.0, Mnesia (disc_copies), Common Test, EUnit.
 
-**Spec source:** `docs/f4-graphdb-rules-design.md` §1 prerequisite and §3.1 seed-list pattern.
+**Spec source:** `docs/designs/f4-graphdb-rules-design.md` §1 prerequisite and §3.1 seed-list pattern.
 
 ---
 

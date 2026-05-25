@@ -592,7 +592,7 @@ the boundary.
 
 Implemented as `graphdb_query` (the `graphdb_language` slot is occupied
 by the M6 multilingual overlay layer). Design at
-`docs/f3-graphdb-query-design.md`; plan at
+`docs/designs/f3-graphdb-query-design.md`; plan at
 `docs/superpowers/plans/2026-05-23-f3-graphdb-query.md`. Seven query
 primitives (Q1, Q1b, Q2-Q6), snapshot-semantics sessions, continuation
 + resume with `snapshot_expired` detection. Template-filtered

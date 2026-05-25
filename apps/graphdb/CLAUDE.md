@@ -284,7 +284,7 @@ Queries are represented as records defined in
 through `session_read_node/2` or `session_read_arcs/4`; direct
 `mnesia:dirty_*` calls outside those helpers are a code smell.
 
-See `docs/f3-graphdb-query-design.md` for the architectural contract.
+See `docs/designs/f3-graphdb-query-design.md` for the architectural contract.
 
 ### `graphdb_mgr` — Primary Coordinator
 
