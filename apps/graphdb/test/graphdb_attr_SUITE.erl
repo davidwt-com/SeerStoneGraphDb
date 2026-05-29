@@ -172,6 +172,8 @@ init_per_testcase(_TC, Config) ->
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
 	%% Start rel_id_server first (needed for relationship ID allocation)
 	{ok, _} = rel_id_server:start_link(),
+	graphdb_nref:set_permanent_phase(),
+	{ok, _} = graphdb_nref:start_link(),
 	%% Start graphdb_mgr to trigger bootstrap load (populates Mnesia)
 	{ok, _} = graphdb_mgr:start_link(),
 	Config1.
@@ -198,6 +200,8 @@ end_per_testcase(TC, Config) ->
 	verify_cache_invariant(TC),
 	catch gen_server:stop(graphdb_attr),
 	catch gen_server:stop(graphdb_mgr),
+	catch gen_server:stop(graphdb_nref),
+	catch persistent_term:erase({graphdb_nref, phase}),
 	catch gen_server:stop(rel_id_server),
 	catch application:stop(nref),
 	catch mnesia:stop(),

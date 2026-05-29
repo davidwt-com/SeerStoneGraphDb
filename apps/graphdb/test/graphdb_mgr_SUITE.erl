@@ -186,6 +186,8 @@ init_per_testcase(init_fails_on_bad_config, Config) ->
 	BadPath = filename:join(proplists:get_value(tmp_dir, Config1),
 		"does_not_exist.terms"),
 	application:set_env(seerstone_graph_db, bootstrap_file, BadPath),
+	graphdb_nref:set_permanent_phase(),
+	{ok, _} = graphdb_nref:start_link(),
 	Config1;
 init_per_testcase(TC, Config) when
 		TC =:= create_name_attribute_delegates;
@@ -202,6 +204,8 @@ init_per_testcase(TC, Config) when
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
 	%% Start rel_id_server first (needed for relationship ID allocation)
 	{ok, _} = rel_id_server:start_link(),
+	graphdb_nref:set_permanent_phase(),
+	{ok, _} = graphdb_nref:start_link(),
 	%% Start mgr first (runs bootstrap, sets up tables), then workers
 	{ok, _} = graphdb_mgr:start_link(),
 	{ok, _} = graphdb_attr:start_link(),
@@ -214,6 +218,8 @@ init_per_testcase(_TC, Config) ->
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
 	%% Start rel_id_server first (needed for relationship ID allocation)
 	{ok, _} = rel_id_server:start_link(),
+	graphdb_nref:set_permanent_phase(),
+	{ok, _} = graphdb_nref:start_link(),
 	Config1.
 
 setup_isolated_env(Config) ->
@@ -250,6 +256,8 @@ end_per_testcase(TC, Config) ->
 	catch gen_server:stop(graphdb_attr),
 	%% Stop graphdb_mgr if running
 	catch gen_server:stop(graphdb_mgr),
+	catch gen_server:stop(graphdb_nref),
+	catch persistent_term:erase({graphdb_nref, phase}),
 	catch gen_server:stop(rel_id_server),
 
 	%% Stop applications (ignore errors -- they may not be running)
