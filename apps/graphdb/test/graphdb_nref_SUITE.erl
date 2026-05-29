@@ -1,7 +1,13 @@
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
 %% Copyright (c) 2026 David W. Thomas
 %% SPDX-License-Identifier: GPL-2.0-or-later
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
+%% Author: David W. Thomas
+%% Created: May 2026
+%% Description: Common Test integration suite for graphdb_nref.
+%%              Tests switchable allocation facade (permanent vs. runtime
+%%              phases) and persistent_term durability across restarts.
+%%---------------------------------------------------------------------
 -module(graphdb_nref_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
@@ -41,7 +47,7 @@ init_per_testcase(_TC, Config) ->
     ok = mnesia:create_schema([node()]),
     ok = mnesia:start(),
     {atomic, ok} = mnesia:create_table(nodes,
-        [{record_name, node}, {attributes, [nref, kind, parents, classes, avps]}]),
+        [{record_name, node}, {attributes, [nref, kind, parents, classes, attribute_value_pairs]}]),
     graphdb_nref:set_permanent_phase(),
     {ok, _} = graphdb_nref:start_link(),
     [{orig_cwd, OrigCwd} | Config].
@@ -70,7 +76,8 @@ compute_from_populated_resumes(_Config) ->
     ok = put_node(10000),   %% English (permanent, below ?NREF_START)
     ok = put_node(10050),
     ok = put_node(2000000), %% a runtime node — must be ignored by the scan
-    ?assertEqual(10051, graphdb_nref:get_next()).
+    ?assertEqual(10051, graphdb_nref:get_next()),
+    ?assertEqual(10052, graphdb_nref:get_next()).
 
 sequential_unique_and_monotonic(_Config) ->
     A = graphdb_nref:get_next(),

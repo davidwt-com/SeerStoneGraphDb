@@ -1,22 +1,30 @@
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
 %% Copyright (c) 2026 David W. Thomas
 %% SPDX-License-Identifier: GPL-2.0-or-later
-%%-----------------------------------------------------------------------------
-%% File        : graphdb_nref.erl
-%% Author      : David W. Thomas
-%% Created     : 2026-05-28
-%% Description : Switchable node-nref allocation facade for graphdb.
-%%               Permanent phase (init): hands out permanent-tier nrefs
-%%               [?LABEL_START, ?NREF_START) computed from the nodes table.
-%%               Runtime phase (after the boot flip): delegates to
-%%               nref_server:get_nref/0.  The phase lives in persistent_term
-%%               so a single process restart cannot resurrect the wrong phase.
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
+%% Author: David W. Thomas
+%% Created: May 2026
+%% Description: Switchable node-nref allocation facade for graphdb.
+%%              Permanent phase (init): hands out permanent-tier nrefs
+%%              [?LABEL_START, ?NREF_START) computed from the nodes table.
+%%              Runtime phase (after the boot flip): delegates to
+%%              nref_server:get_nref/0.  The phase lives in persistent_term
+%%              so a single process restart cannot resurrect the wrong phase.
+%%---------------------------------------------------------------------
+%% Revision History
+%%---------------------------------------------------------------------
+%% Rev A Date: May 2026 Author: David W. Thomas
+%% Initial implementation.
+%%---------------------------------------------------------------------
 -module(graphdb_nref).
 -behaviour(gen_server).
 
--revision('Rev: PA1').
--created('2026-05-28').
+
+%%---------------------------------------------------------------------
+%% Module Attributes
+%%---------------------------------------------------------------------
+-revision('Revision: A ').
+-created('Date: May 2026').
 -created_by('david@davidwt.com').
 
 -define(NYI(X), (begin
@@ -28,8 +36,16 @@ end)).
     exit(uem)
 end)).
 
--include("graphdb_nrefs.hrl").
 
+%%---------------------------------------------------------------------
+%% Include files
+%%---------------------------------------------------------------------
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
+
+
+%%---------------------------------------------------------------------
+%% Public API
+%%---------------------------------------------------------------------
 -export([
     start_link/0,
     get_next/0,
@@ -51,59 +67,62 @@ end)).
 
 -record(state, {cursor :: undefined | integer()}).
 
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
 %% start_link() -> {ok, pid()}
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
+-spec start_link() -> {ok, pid()}.
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
 %% get_next() -> integer()
 %%
 %% The single entry point for all graphdb node-nref allocation.  The phase
 %% decides the tier: permanent (init) -> compute-from-DB cursor; runtime
 %% (after the flip) -> nref_server:get_nref/0.
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
+-spec get_next() -> pos_integer().
 get_next() ->
     case phase() of
         runtime   -> nref_server:get_nref();
         permanent -> gen_server:call(?MODULE, next_permanent)
     end.
 
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
 %% phase() -> permanent | runtime   (defaults to permanent when unset)
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
+-spec phase() -> permanent | runtime.
 phase() ->
     persistent_term:get(?PHASE_KEY, permanent).
 
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
 %% set_permanent_phase() -> ok
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
+-spec set_permanent_phase() -> ok.
 set_permanent_phase() ->
     persistent_term:put(?PHASE_KEY, permanent),
     ok.
 
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
 %% set_runtime_phase() -> ok
 %%
 %% Flips to runtime and raises nref_server's floor to ?NREF_START so the
 %% first runtime allocation lands in the runtime tier.  Idempotent
 %% (set_floor is monotonic; persistent_term:put overwrites).
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
+-spec set_runtime_phase() -> ok.
 set_runtime_phase() ->
     ok = nref_server:set_floor(?NREF_START),
     persistent_term:put(?PHASE_KEY, runtime),
     ok.
 
-%%-----------------------------------------------------------------------------
-%% init/1
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
+%% Callbacks
+%%---------------------------------------------------------------------
 init([]) ->
     {ok, #state{cursor = undefined}}.
 
-%%-----------------------------------------------------------------------------
-%% handle_call/3
-%%-----------------------------------------------------------------------------
+
 handle_call(next_permanent, _From, #state{cursor = undefined}) ->
     allocate(compute_cursor());
 handle_call(next_permanent, _From, #state{cursor = C}) ->
@@ -126,29 +145,30 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-%%=============================================================================
-%% Internal Functions
-%%=============================================================================
 
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
+%% Internal Functions
+%%---------------------------------------------------------------------
+
+%%---------------------------------------------------------------------
 %% allocate(N) -> {reply, N, #state{}}
 %%
 %% Hands out N and advances the cursor.  On spillover (N >= ?NREF_START)
 %% raises the runtime floor so runtime allocations stay above the spill.
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
 allocate(N) when N >= ?NREF_START ->
     ok = nref_server:set_floor(N + 1),
     {reply, N, #state{cursor = N + 1}};
 allocate(N) ->
     {reply, N, #state{cursor = N + 1}}.
 
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
 %% compute_cursor() -> integer()
 %%
 %% Next permanent nref = max(?LABEL_START, 1 + max permanent nref already in
 %% the nodes table).  nref is the primary key, so dirty_all_keys/1 yields
 %% every nref directly.  Runtime nrefs (>= ?NREF_START) are filtered out.
-%%-----------------------------------------------------------------------------
+%%---------------------------------------------------------------------
 compute_cursor() ->
     Keys  = mnesia:dirty_all_keys(nodes),
     Below = [K || K <- Keys, is_integer(K), K < ?NREF_START],
