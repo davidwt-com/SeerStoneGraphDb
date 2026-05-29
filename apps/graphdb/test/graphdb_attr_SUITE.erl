@@ -283,17 +283,17 @@ seeds_idempotent_on_restart(_Config) ->
 	?assertEqual(NodesBefore, NodesAfter).
 
 %%-----------------------------------------------------------------------------
-%% Seeded nrefs are runtime-allocated and must be >= the nref_start
-%% floor (1000000 from bootstrap.terms).
+%% Seeded nrefs are permanent-tier-allocated and must be in the range
+%% (?NREF_ENGLISH, ?NREF_START) = (10000, 1000000).
 %%-----------------------------------------------------------------------------
 seeded_nrefs_are_above_floor(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, #{literal_type := Lt, target_kind := Tk, relationship_avp := Ra,
 			attribute_type := At}} = graphdb_attr:seeded_nrefs(),
-	?assert(Lt >= 1000000),
-	?assert(Tk >= 1000000),
-	?assert(Ra >= 1000000),
-	?assert(At >= 1000000).
+	?assert(Lt > ?NREF_ENGLISH andalso Lt < ?NREF_START),
+	?assert(Tk > ?NREF_ENGLISH andalso Tk < ?NREF_START),
+	?assert(Ra > ?NREF_ENGLISH andalso Ra < ?NREF_START),
+	?assert(At > ?NREF_ENGLISH andalso At < ?NREF_START).
 
 %%-----------------------------------------------------------------------------
 %% After init, the bootstrap-seeded Template AVP node (nref 31) carries
@@ -329,15 +329,15 @@ template_avp_marker_idempotent(_Config) ->
 
 %%-----------------------------------------------------------------------------
 %% The Attribute Literals sub-group node must exist after init and have
-%% nref >= 1000000 (runtime tier), kind=attribute, and its parent must be
-%% the Literals subtree (nref 7).
+%% nref in the permanent tier (?NREF_ENGLISH, ?NREF_START), kind=attribute,
+%% and its parent must be the Literals subtree (nref 7).
 %%-----------------------------------------------------------------------------
 seeds_attribute_literals_subgroup(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, #{attribute_literals_group := AttrLitNref}} =
 		graphdb_attr:seeded_nrefs(),
 	?assert(is_integer(AttrLitNref)),
-	?assert(AttrLitNref >= 1000000),
+	?assert(AttrLitNref > ?NREF_ENGLISH andalso AttrLitNref < ?NREF_START),
 	{ok, Node} = graphdb_attr:get_attribute(AttrLitNref),
 	?assertEqual(attribute, Node#node.kind),
 	?assertEqual([?NREF_LITERALS], Node#node.parents).
@@ -594,7 +594,7 @@ seeded_nrefs_includes_attribute_type(_Config) ->
 	?assert(maps:is_key(attribute_type, Map)),
 	#{attribute_type := At} = Map,
 	?assert(is_integer(At)),
-	?assert(At >= 1000000),
+	?assert(At > ?NREF_ENGLISH andalso At < ?NREF_START),
 	%% The attribute_type seed itself is a literal-attribute under
 	%% Literals (7) and is retro-stamped with attribute_type=literal.
 	{ok, Node} = graphdb_attr:get_attribute(At),

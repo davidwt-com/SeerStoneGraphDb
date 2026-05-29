@@ -502,7 +502,7 @@ node_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 %% to avoid side-effects on transaction retry.
 %%-----------------------------------------------------------------------------
 do_create_attribute(Name, ParentNref, ExtraAVPs) ->
-	Nref = nref_server:get_nref(),
+	Nref = graphdb_nref:get_next(),
 	NameAVP = #{attribute => ?NAME_ATTR_ATTRIBUTE, value => Name},
 	Node = #node{
 		nref = Nref,
@@ -551,8 +551,8 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 %% mid-pair abort cannot leave the database with an orphan half-pair.
 %%-----------------------------------------------------------------------------
 do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
-	FwdNref = nref_server:get_nref(),
-	RevNref = nref_server:get_nref(),
+	FwdNref = graphdb_nref:get_next(),
+	RevNref = graphdb_nref:get_next(),
 	{Id1, Id2} = rel_id_server:get_id_pair(),
 	{Id3, Id4} = rel_id_server:get_id_pair(),
 	FwdAVPs = [#{attribute => ?NAME_ATTR_ATTRIBUTE, value => FwdName}
