@@ -258,15 +258,13 @@ seeded_nrefs_above_floor(_Config) ->
     %% lang_code and lang_human are bootstrap-labeled (loader-assigned),
     %% so they sit in the permanent tier above English and below nref_start.
     ?assert(LC > ?NREF_ENGLISH),
-    ?assert(LC < 1000000),
+    ?assert(LC < ?NREF_START),
     ?assert(LH > ?NREF_ENGLISH),
-    ?assert(LH < 1000000),
-    %% Language Literals sub-group, base_language and project_language are
-    %% runtime-seeded by graphdb_language:init/1 AFTER bootstrap, so they
-    %% come from nref_server with the runtime-tier floor in effect.
-    ?assert(LL >= 1000000),
-    ?assert(BL >= 1000000),
-    ?assert(PL >= 1000000).
+    ?assert(LH < ?NREF_START),
+    %% Language Literals sub-group, base_language and project_language are seeded by graphdb_language:init/1 in the permanent tier via graphdb_nref.
+    ?assert(LL > ?NREF_ENGLISH andalso LL < ?NREF_START),
+    ?assert(BL > ?NREF_ENGLISH andalso BL < ?NREF_START),
+    ?assert(PL > ?NREF_ENGLISH andalso PL < ?NREF_START).
 
 language_en_table_created(_Config) ->
     {ok, _} = graphdb_language:start_link(),
@@ -278,7 +276,7 @@ seeds_language_literals_subgroup(_Config) ->
     {ok, #{language_literals_group := LangLitNref}} =
         graphdb_language:seeded_nrefs(),
     ?assert(is_integer(LangLitNref)),
-    ?assert(LangLitNref >= 1000000),
+    ?assert(LangLitNref > ?NREF_ENGLISH andalso LangLitNref < ?NREF_START),
     {ok, Node} = graphdb_attr:get_attribute(LangLitNref),
     ?assertEqual(attribute, Node#node.kind),
     ?assertEqual([?NREF_LITERALS], Node#node.parents).
