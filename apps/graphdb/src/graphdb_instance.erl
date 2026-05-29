@@ -441,7 +441,7 @@ do_create_instance(Name, ClassNref, ParentNref) ->
 
 do_write_instance(Name, ClassNref, ParentNref) ->
 	%% Allocate all nrefs OUTSIDE the Mnesia transaction
-	Nref = nref_server:get_nref(),
+	Nref = graphdb_nref:get_next(),
 	{MembId1, MembId2} = rel_id_server:get_id_pair(),
 	{CompId1, CompId2} = rel_id_server:get_id_pair(),
 	NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
