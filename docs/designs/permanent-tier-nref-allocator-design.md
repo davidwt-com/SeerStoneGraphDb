@@ -5,7 +5,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 # Permanent-Tier Nref Allocator (init-seed nref tier)
 
-**Status:** Draft — pending review
+**Status:** Implemented
 **Date:** 2026-05-28
 **Topic origin:** `memory/project-init-seed-nref-tier.md` (first of two
 pending topics flagged 2026-05-27)
