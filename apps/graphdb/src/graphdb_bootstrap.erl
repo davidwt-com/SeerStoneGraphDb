@@ -106,7 +106,7 @@
 		expand_avps/1,
 		kind_order/1,
 		collect_labels/2,
-		build_symbol_table/2,
+		build_symbol_table/4,
 		apply_symbol_table/3,
 		resolve_node/2,
 		resolve_rel/2,
@@ -234,12 +234,15 @@ do_load() ->
 	logger:info("graphdb_bootstrap: loading ~s", [File]),
 	case file:consult(File) of
 		{ok, Terms} ->
-			{NrefStart, Nodes, Rels} = classify_terms(Terms),
-			ok = validate(NrefStart, Nodes),
+			{Nodes, Rels} = classify_terms(Terms),
+			ok = validate(?NREF_START, Nodes),
 			ok = validate_relationships(Rels),
-			logger:info("graphdb_bootstrap: set_floor(~p)", [NrefStart]),
-			ok = nref_server:set_floor(NrefStart),
-			SymTable = build_symbol_table(Nodes, Rels),
+			%% Allocate atom-label nrefs from a local counter in the
+			%% permanent tier [?LABEL_START, ?NREF_START).  The runtime
+			%% floor is set later by graphdb:start/2's phase flip, not here.
+			SymTable = build_symbol_table(Nodes, Rels, ?LABEL_START, ?NREF_START),
+			logger:info("graphdb_bootstrap: allocated ~p label nrefs from ~p",
+				[maps:size(SymTable), ?LABEL_START]),
 			{ResNodes, ResRels} = apply_symbol_table(Nodes, Rels, SymTable),
 			ok = validate_no_unresolved_labels(ResNodes, ResRels),
 			ok = write_nodes(ResNodes),
@@ -291,32 +294,23 @@ get_bootstrap_file() ->
 
 
 %%-----------------------------------------------------------------------------
-%% classify_terms(Terms) -> {NrefStart, SortedNodes, Relationships}
+%% classify_terms(Terms) -> {SortedNodes, Relationships}
 %%
-%% Partitions the flat term list into the nref_start value, a list of
-%% node terms sorted by kind (category first), and a list of
-%% relationship terms in file order.
+%% Partitions the flat term list into node terms (sorted by kind, category
+%% first) and relationship terms (file order).  Tier boundaries are header
+%% macros, not directives — any non node/relationship term is rejected.
 %%-----------------------------------------------------------------------------
 classify_terms(Terms) ->
-	classify_terms(Terms, undefined, [], []).
+	classify_terms(Terms, [], []).
 
-classify_terms([], undefined, _Nodes, _Rels) ->
-	throw({error, missing_nref_start});
-classify_terms([], NrefStart, Nodes, Rels) ->
-	{NrefStart, sort_nodes_by_kind(lists:reverse(Nodes)), lists:reverse(Rels)};
-classify_terms([{nref_start, N} | Rest], undefined, Nodes, Rels)
-		when is_integer(N), N > 0 ->
-	classify_terms(Rest, N, Nodes, Rels);
-classify_terms([{nref_start, N} | _Rest], undefined, _Nodes, _Rels) ->
-	throw({error, {invalid_nref_start, N}});
-classify_terms([{nref_start, _} | _Rest], _Already, _Nodes, _Rels) ->
-	throw({error, duplicate_nref_start});
-classify_terms([{node, _, _, _, _} = Node | Rest], NrefStart, Nodes, Rels) ->
-	classify_terms(Rest, NrefStart, [Node | Nodes], Rels);
-classify_terms([{relationship, _, _, _, _, _, _, _} = Rel | Rest], NrefStart, Nodes, Rels) ->
-	classify_terms(Rest, NrefStart, Nodes, [Rel | Rels]);
-classify_terms([Unknown | _Rest], _NrefStart, _Nodes, _Rels) ->
-	throw({error, {unknown_term, Unknown}}).
+classify_terms([], Nodes, Rels) ->
+	{sort_nodes_by_kind(lists:reverse(Nodes)), lists:reverse(Rels)};
+classify_terms([{node, _, _, _, _} = Node | Rest], Nodes, Rels) ->
+	classify_terms(Rest, [Node | Nodes], Rels);
+classify_terms([{relationship, _, _, _, _, _, _, _} = Rel | Rest], Nodes, Rels) ->
+	classify_terms(Rest, Nodes, [Rel | Rels]);
+classify_terms([Other | _Rest], _Nodes, _Rels) ->
+	throw({error, {unknown_term, Other}}).
 
 
 %%-----------------------------------------------------------------------------
@@ -386,20 +380,34 @@ validate_relationships(Rels) ->
 
 
 %%-----------------------------------------------------------------------------
-%% build_symbol_table(Nodes, Rels) -> #{atom() => integer()}
+%% build_symbol_table(Nodes, Rels, LabelStart, NrefStart) ->
+%%     #{atom() => integer()}
 %%
 %% Discovers every atom label used as a node nref or AVP attribute key in
-%% Nodes and Rels, allocates a fresh runtime nref for each (via
-%% nref_server:get_nref/0, which is >= nref_start after set_floor), and
-%% returns the label-to-nref map.  Called after set_floor so all allocated
-%% nrefs land in the runtime tier.
+%% Nodes and Rels, and assigns each a fresh nref from a local counter
+%% starting at LabelStart.  Allocated nrefs sit in the permanent tier
+%% (LabelStart .. NrefStart-1), immediately above the pre-assigned
+%% permanent seeds (English et al).
+%%
+%% Labels are allocated from the loader's local counter (not from
+%% nref_server:get_nref/0). The runtime floor is set later by
+%% graphdb:start/2's phase flip, not by the loader.
+%% Throws {labels_exceeded_nref_start, ...} if the counter would reach
+%% NrefStart (spill-over to runtime tier via get_nref/0 is not implemented
+%% yet -- see bootstrap.terms header).
+%%
 %%-----------------------------------------------------------------------------
-build_symbol_table(Nodes, Rels) ->
+build_symbol_table(Nodes, Rels, LabelStart, NrefStart) ->
 	Labels = collect_labels(Nodes, Rels),
-	lists:foldl(fun(Label, Acc) ->
-		Nref = nref_server:get_nref(),
-		Acc#{Label => Nref}
-	end, #{}, Labels).
+	{Map, _Next} = lists:foldl(fun(Label, {Acc, Counter}) ->
+		case Counter < NrefStart of
+			true  -> {Acc#{Label => Counter}, Counter + 1};
+			false ->
+				throw({error,
+					{labels_exceeded_nref_start, Label, Counter, NrefStart}})
+		end
+	end, {#{}, LabelStart}, Labels),
+	Map.
 
 
 %%-----------------------------------------------------------------------------

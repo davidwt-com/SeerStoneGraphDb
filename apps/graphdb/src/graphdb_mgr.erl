@@ -187,7 +187,7 @@ get_relationships(Nref, Direction) ->
 %% Delegates to graphdb_attr (not yet implemented).
 %%
 %% Transaction-like sequencing (when implemented):
-%% 1. Allocate Nref via nref_server:get_nref/0 (outside Mnesia txn)
+%% 1. Allocate Nref via graphdb_nref:get_next/0 (outside Mnesia txn)
 %% 2. Delegate to graphdb_attr to write the node record
 %% 3. Return {ok, Nref}
 %%-----------------------------------------------------------------------------

@@ -20,84 +20,77 @@
 
 classify_terms_valid_test() ->
 	Terms = [
-		{nref_start, 100},
 		{node, 1, category, {17, "Root"}, []},
 		{node, 6, attribute, {18, "Names"}, []},
 		{relationship, 1, 22, [], 21, 2, [], composition}
 	],
-	{NrefStart, Nodes, Rels} = graphdb_bootstrap:classify_terms(Terms),
-	?assertEqual(100, NrefStart),
+	{Nodes, Rels} = graphdb_bootstrap:classify_terms(Terms),
 	?assertEqual(2, length(Nodes)),
 	?assertEqual(1, length(Rels)).
 
 classify_terms_sorts_by_kind_test() ->
 	Terms = [
-		{nref_start, 100},
 		{node, 6, attribute, {18, "Names"}, []},
 		{node, 1, category, {17, "Root"}, []}
 	],
-	{_, Nodes, _} = graphdb_bootstrap:classify_terms(Terms),
+	{Nodes, _} = graphdb_bootstrap:classify_terms(Terms),
 	%% category should come before attribute regardless of file order
 	[{node, 1, category, _, _}, {node, 6, attribute, _, _}] = Nodes.
 
 classify_terms_preserves_relationship_order_test() ->
 	Terms = [
-		{nref_start, 100},
 		{relationship, 1, 22, [], 21, 2, [], composition},
 		{relationship, 1, 22, [], 21, 3, [], composition},
 		{relationship, 2, 24, [], 23, 6, [], taxonomy}
 	],
-	{_, _, Rels} = graphdb_bootstrap:classify_terms(Terms),
+	{_, Rels} = graphdb_bootstrap:classify_terms(Terms),
 	?assertEqual(3, length(Rels)),
 	%% File order preserved
 	{relationship, 1, 22, [], 21, 2, [], composition} = lists:nth(1, Rels),
 	{relationship, 1, 22, [], 21, 3, [], composition} = lists:nth(2, Rels),
 	{relationship, 2, 24, [], 23, 6, [], taxonomy} = lists:nth(3, Rels).
 
-classify_terms_missing_nref_start_test() ->
-	Terms = [{node, 1, category, {17, "Root"}, []}],
-	?assertThrow({error, missing_nref_start},
-		graphdb_bootstrap:classify_terms(Terms)).
-
-classify_terms_duplicate_nref_start_test() ->
-	Terms = [{nref_start, 100}, {nref_start, 200}],
-	?assertThrow({error, duplicate_nref_start},
-		graphdb_bootstrap:classify_terms(Terms)).
-
-classify_terms_invalid_nref_start_test() ->
-	%% nref_start must be a positive integer
-	Terms = [{nref_start, -5}],
-	?assertThrow({error, {invalid_nref_start, -5}},
-		graphdb_bootstrap:classify_terms(Terms)).
-
-classify_terms_zero_nref_start_test() ->
-	Terms = [{nref_start, 0}],
-	?assertThrow({error, {invalid_nref_start, 0}},
-		graphdb_bootstrap:classify_terms(Terms)).
+classify_terms_empty_returns_empty_test() ->
+	?assertEqual({[], []}, graphdb_bootstrap:classify_terms([])).
 
 classify_terms_unknown_term_test() ->
-	Terms = [{nref_start, 100}, {bogus, stuff}],
 	?assertThrow({error, {unknown_term, {bogus, stuff}}},
-		graphdb_bootstrap:classify_terms(Terms)).
-
-classify_terms_empty_test() ->
-	?assertThrow({error, missing_nref_start},
-		graphdb_bootstrap:classify_terms([])).
-
-classify_terms_nref_start_only_test() ->
-	{100, [], []} = graphdb_bootstrap:classify_terms([{nref_start, 100}]).
+		graphdb_bootstrap:classify_terms([{bogus, stuff}])).
 
 classify_terms_all_four_kinds_test() ->
 	Terms = [
-		{nref_start, 100},
 		{node, 1, category, {17, "Root"}, []},
 		{node, 6, attribute, {18, "Attr"}, []},
 		{node, 50, class, {19, "Cls"}, []},
 		{node, 60, instance, {20, "Inst"}, []}
 	],
-	{_, Nodes, _} = graphdb_bootstrap:classify_terms(Terms),
+	{Nodes, _} = graphdb_bootstrap:classify_terms(Terms),
 	Kinds = [Kind || {node, _, Kind, _, _} <- Nodes],
 	?assertEqual([category, attribute, class, instance], Kinds).
+
+
+%%=============================================================================
+%% build_symbol_table/4 tests
+%%=============================================================================
+
+build_symbol_table_assigns_sequential_test() ->
+	%% Two labels assigned 10001, 10002 in usort order
+	Nodes = [{node, lang_human, class,     {19, "Human Language"}, []},
+	         {node, lang_code,  attribute, {18, "lang_code"},      []}],
+	Map = graphdb_bootstrap:build_symbol_table(Nodes, [], 10001, 1000000),
+	?assertEqual(10001, maps:get(lang_code,  Map)),
+	?assertEqual(10002, maps:get(lang_human, Map)).
+
+build_symbol_table_empty_test() ->
+	?assertEqual(#{},
+		graphdb_bootstrap:build_symbol_table([], [], 10001, 1000000)).
+
+build_symbol_table_throws_when_would_cross_nref_start_test() ->
+	%% NrefStart of 10002 only leaves room for one label
+	Nodes = [{node, foo, attribute, {18, "F"}, []},
+	         {node, bar, attribute, {18, "B"}, []}],
+	?assertThrow({error, {labels_exceeded_nref_start, _, _, _}},
+		graphdb_bootstrap:build_symbol_table(Nodes, [], 10001, 10002)).
 
 
 %%=============================================================================

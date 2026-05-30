@@ -412,7 +412,7 @@ ensure_literal_seed(Name, ParentNref) ->
 		{ok, Nref} ->
 			Nref;
 		not_found ->
-			Nref = nref_server:get_nref(),
+			Nref = graphdb_nref:get_next(),
 			NameAVP = #{attribute => ?NAME_ATTR_ATTRIBUTE, value => Name},
 			Node = #node{
 				nref = Nref,
@@ -592,7 +592,7 @@ read_terminal(Nref, AttrNref, _Scope) ->
 do_register_language(Code, Name, State) ->
 	#state{lang_code_nref  = LCAttr,
 	       lang_human_nref = LHNref} = State,
-	Nref              = nref_server:get_nref(),
+	Nref              = graphdb_nref:get_next(),
 	{ArcId1, ArcId2} = rel_id_server:get_id_pair(),
 	NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
 	CodeAVP = #{attribute => LCAttr,                 value => Code},
@@ -654,7 +654,7 @@ do_register_dialect(Code, Name, BaseCode, State) ->
 		BaseNref ->
 			#state{lang_code_nref  = LCAttr,
 			       lang_human_nref = LHNref} = State,
-			Nref              = nref_server:get_nref(),
+			Nref              = graphdb_nref:get_next(),
 			{ArcId1, ArcId2} = rel_id_server:get_id_pair(),
 			NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
 			CodeAVP = #{attribute => LCAttr,  value => Code},

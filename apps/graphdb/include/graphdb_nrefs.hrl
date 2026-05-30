@@ -72,3 +72,9 @@
 
 %% -- Permanent named instance nrefs (10000-99999 tier) ----------------
 -define(NREF_ENGLISH,      10000).  %% English; first instance in ontology
+
+%% -- Permanent / runtime tier boundaries ------------------------------
+%% System invariants (NOT per-bootstrap-file knobs).  Permanent seeds
+%% occupy [?LABEL_START, ?NREF_START); runtime nrefs are >= ?NREF_START.
+-define(LABEL_START,    10001).    %% first permanent nref above English
+-define(NREF_START,   1000000).    %% runtime tier floor; permanent < this

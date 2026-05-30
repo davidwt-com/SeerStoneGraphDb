@@ -11,21 +11,22 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 ## Files
 
-| File                    | Description                                                 |
-| ----------------------- | ----------------------------------------------------------- |
-| `graphdb.erl`           | OTP `application` behaviour callback module                 |
-| `graphdb_sup.erl`       | OTP `supervisor` behaviour callback module                  |
-| `graphdb_bootstrap.erl` | Bootstrap file loader + Mnesia schema creator (implemented) |
-| `graphdb_mgr.erl`       | Primary coordinator gen_server (stub)                       |
-| `graphdb_rules.erl`     | Graph rules gen_server (stub)                               |
-| `graphdb_attr.erl`      | Attribute library gen_server (stub)                         |
-| `graphdb_class.erl`     | Taxonomic hierarchy gen_server (stub)                       |
-| `graphdb_instance.erl`  | Instance/compositional hierarchy gen_server (stub)          |
-| `graphdb_language.erl`  | M6 multilingual overlay layer (implemented)                 |
-| `graphdb_query.erl`     | F3 query language gen_server (implemented)                  |
+| File                    | Description                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------- |
+| `graphdb.erl`           | OTP `application` behaviour callback module; performs permanent→runtime phase flip     |
+| `graphdb_sup.erl`       | OTP `supervisor` behaviour callback module                                             |
+| `graphdb_nref.erl`      | Switchable node-nref allocation facade gen_server (first child; permanent during init) |
+| `graphdb_bootstrap.erl` | Bootstrap file loader + Mnesia schema creator (implemented)                            |
+| `graphdb_mgr.erl`       | Primary coordinator gen_server (stub)                                                  |
+| `graphdb_rules.erl`     | Graph rules gen_server (stub)                                                          |
+| `graphdb_attr.erl`      | Attribute library gen_server (stub)                                                    |
+| `graphdb_class.erl`     | Taxonomic hierarchy gen_server (stub)                                                  |
+| `graphdb_instance.erl`  | Instance/compositional hierarchy gen_server (stub)                                     |
+| `graphdb_language.erl`  | M6 multilingual overlay layer (implemented)                                            |
+| `graphdb_query.erl`     | F3 query language gen_server (implemented)                                             |
 
-`apps/graphdb/priv/bootstrap.terms` — Erlang Terms file fully written; contains 35 nodes
-(nrefs 1–35, BFS) and 34 hierarchy relationship pairs (8 composition + 26 taxonomy). Loaded at first ontology startup.
+`apps/graphdb/priv/bootstrap.terms` — Erlang Terms file fully written; contains 38 nodes
+(nrefs 1–35 scaffold, nref 10000 English, 2 atom-labeled nodes) and hierarchy relationship pairs. Loaded at first ontology startup. Tier boundaries are macros in `graphdb_nrefs.hrl` — no `{nref_start}` or `{label_start}` directives.
 
 ## Application Lifecycle
 
@@ -35,15 +36,20 @@ SPDX-License-Identifier: GPL-2.0-or-later
 ```
 application_master
   -> graphdb:start(normal, [])
-    -> graphdb_sup:start_link/0
+    -> graphdb_nref:set_permanent_phase()   %% arm permanent-tier allocation
+    -> graphdb_sup:start_link/0             %% starts all children (init/1s allocate in permanent tier)
       -> graphdb_sup:init/1
+    -> graphdb_nref:set_runtime_phase()     %% flip to runtime; raises nref_server floor to ?NREF_START
 ```
 
-`graphdb:start/2` delegates immediately to `graphdb_sup:start_link/0`.
+`graphdb:start/2` brackets the supervised startup with the permanent→runtime
+phase flip so the bootstrap loader and every worker `init/1` allocate in the
+permanent tier `[?LABEL_START, ?NREF_START)`.
 
 ## Supervisor (`graphdb_sup`)
 
-`graphdb_sup` is a `one_for_one` supervisor for the six worker gen_servers below. All workers must be implemented before the graph database is functional.
+`graphdb_sup` is a `one_for_one` supervisor. `graphdb_nref` is the first
+child (the phase must be armed before any other child starts).
 
 ---
 
@@ -59,7 +65,7 @@ Two database roles operate in parallel:
 The ontology is shared across all projects and is a **living, growing database**: new literal attributes, relationship attributes, and classes are added over time. Only category nodes (nrefs 1–5) are permanently fixed.
 
 nref spaces:
-- **Environment**: bootstrap nrefs 1–35 (scaffold) + nref 10000 (English permanent seed); runtime nrefs 100000+ (floor set by `{nref_start, 100000}` directive in `bootstrap.terms`)
+- **Environment**: scaffold nrefs 1–35; permanent tier `[?LABEL_START, ?NREF_START)` = `[10001, 1000000)` holds English (10000), loader-assigned atom-labeled nodes, and worker `init/1` seeds (graphdb_attr, graphdb_language sub-groups); runtime nrefs ≥ `?NREF_START` (1000000). Boundaries are macros in `apps/graphdb/include/graphdb_nrefs.hrl` — not directives in `bootstrap.terms`. All node-nref allocation goes through `graphdb_nref`.
 - **Project**: allocator starts at **1** — no pre-assigned nrefs, no bootstrap file, no floor needed
 
 Cross-database nref resolution: `characterization` and `reciprocal` fields always reference environment nrefs; `target_nref` is routed to environment or project based on the arc label's `target_kind` AVP.
@@ -213,7 +219,10 @@ Loaded by `graphdb_mgr:init/1` when the Mnesia `nodes` table is empty (first sta
 - Creates the Mnesia schema and tables (`nodes`, `relationships`)
 - Reads `bootstrap_file` path from `application:get_env(seerstone_graph_db, bootstrap_file)`
 - Calls `file:consult/1` on the bootstrap file; validates all terms
-- Calls `nref_server:set_floor(100000)` first, then builds a symbol table for atom-labeled nrefs, resolves all labels, then writes nodes and relationship pairs
+- Builds a symbol table for atom-labeled nrefs using a **local counter** starting at
+  `?LABEL_START` (10001); does **not** call `nref_server:set_floor` — the runtime floor
+  is raised by `graphdb:start/2`'s `set_runtime_phase/0` call after all workers start
+- Resolves all labels and writes nodes and relationship pairs
 - Public API: `graphdb_bootstrap:load() -> ok | {error, Reason}`
 
 ### `graphdb_attr` — Attribute Library
@@ -312,7 +321,7 @@ are all fully implemented.
 
 ## Key Design Notes
 
-- `graphdb_sup:start_link/0` takes no args, matching every supervisor in the umbrella. `graphdb_sup` is started by `database_sup`'s childspec via the zero-arg `{graphdb_sup, start_link, []}` form, not by `graphdb:start/2`.
+- `graphdb_sup:start_link/0` takes no args, matching every supervisor in the umbrella. It is called from `graphdb:start/2` after `graphdb_nref:set_permanent_phase/0` arms the permanent-tier allocator. `graphdb:start/2` then calls `graphdb_nref:set_runtime_phase/0` after `start_link` returns.
 - `graphdb_bootstrap`, `graphdb_mgr` (startup + read API), `graphdb_attr`, `graphdb_class`, `graphdb_instance`, `graphdb_language`, and `graphdb_query` are implemented. Remaining work is in `TASKS.md` at the project root.
 - Consult `the-knowledge-network.md` for the full model spec before implementing
 

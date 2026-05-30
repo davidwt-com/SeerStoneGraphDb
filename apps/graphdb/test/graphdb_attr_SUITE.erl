@@ -172,6 +172,8 @@ init_per_testcase(_TC, Config) ->
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
 	%% Start rel_id_server first (needed for relationship ID allocation)
 	{ok, _} = rel_id_server:start_link(),
+	graphdb_nref:set_permanent_phase(),
+	{ok, _} = graphdb_nref:start_link(),
 	%% Start graphdb_mgr to trigger bootstrap load (populates Mnesia)
 	{ok, _} = graphdb_mgr:start_link(),
 	Config1.
@@ -198,6 +200,8 @@ end_per_testcase(TC, Config) ->
 	verify_cache_invariant(TC),
 	catch gen_server:stop(graphdb_attr),
 	catch gen_server:stop(graphdb_mgr),
+	catch gen_server:stop(graphdb_nref),
+	catch persistent_term:erase({graphdb_nref, phase}),
 	catch gen_server:stop(rel_id_server),
 	catch application:stop(nref),
 	catch mnesia:stop(),
@@ -279,17 +283,17 @@ seeds_idempotent_on_restart(_Config) ->
 	?assertEqual(NodesBefore, NodesAfter).
 
 %%-----------------------------------------------------------------------------
-%% Seeded nrefs are runtime-allocated and must be >= the nref_start
-%% floor (100000 from bootstrap.terms).
+%% Seeded nrefs are permanent-tier-allocated and must be in the range
+%% (?NREF_ENGLISH, ?NREF_START) = (10000, 1000000).
 %%-----------------------------------------------------------------------------
 seeded_nrefs_are_above_floor(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, #{literal_type := Lt, target_kind := Tk, relationship_avp := Ra,
 			attribute_type := At}} = graphdb_attr:seeded_nrefs(),
-	?assert(Lt >= 100000),
-	?assert(Tk >= 100000),
-	?assert(Ra >= 100000),
-	?assert(At >= 100000).
+	?assert(Lt > ?NREF_ENGLISH andalso Lt < ?NREF_START),
+	?assert(Tk > ?NREF_ENGLISH andalso Tk < ?NREF_START),
+	?assert(Ra > ?NREF_ENGLISH andalso Ra < ?NREF_START),
+	?assert(At > ?NREF_ENGLISH andalso At < ?NREF_START).
 
 %%-----------------------------------------------------------------------------
 %% After init, the bootstrap-seeded Template AVP node (nref 31) carries
@@ -325,15 +329,15 @@ template_avp_marker_idempotent(_Config) ->
 
 %%-----------------------------------------------------------------------------
 %% The Attribute Literals sub-group node must exist after init and have
-%% nref >= 100000 (runtime tier), kind=attribute, and its parent must be
-%% the Literals subtree (nref 7).
+%% nref in the permanent tier (?NREF_ENGLISH, ?NREF_START), kind=attribute,
+%% and its parent must be the Literals subtree (nref 7).
 %%-----------------------------------------------------------------------------
 seeds_attribute_literals_subgroup(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, #{attribute_literals_group := AttrLitNref}} =
 		graphdb_attr:seeded_nrefs(),
 	?assert(is_integer(AttrLitNref)),
-	?assert(AttrLitNref >= 100000),
+	?assert(AttrLitNref > ?NREF_ENGLISH andalso AttrLitNref < ?NREF_START),
 	{ok, Node} = graphdb_attr:get_attribute(AttrLitNref),
 	?assertEqual(attribute, Node#node.kind),
 	?assertEqual([?NREF_LITERALS], Node#node.parents).
@@ -590,7 +594,7 @@ seeded_nrefs_includes_attribute_type(_Config) ->
 	?assert(maps:is_key(attribute_type, Map)),
 	#{attribute_type := At} = Map,
 	?assert(is_integer(At)),
-	?assert(At >= 100000),
+	?assert(At > ?NREF_ENGLISH andalso At < ?NREF_START),
 	%% The attribute_type seed itself is a literal-attribute under
 	%% Literals (7) and is retro-stamped with attribute_type=literal.
 	{ok, Node} = graphdb_attr:get_attribute(At),

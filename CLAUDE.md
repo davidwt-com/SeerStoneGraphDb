@@ -45,11 +45,8 @@ SeerStoneGraphDb/
 
 ## OTP Supervision Tree
 
-`nref`, `database`, and `seerstone` are peer OTP applications started by
-`application_master` in dependency order from `seerstone.app.src`'s
-`applications:` list. `graphdb` and `dictionary` are `included_applications`
-of `database` (legacy 2008 idiom; modernization tracked as
-`TASKS.md` E5).
+`nref`, `graphdb`, `dictionary`, `database`, and `seerstone` are peer OTP
+applications started by `application_master` in dependency order.
 
 ```
 nref (application — started first)
@@ -57,19 +54,26 @@ nref (application — started first)
         ├── nref_allocator  (DETS-backed block allocator, gen_server — fully implemented)
         └── nref_server     (serves nrefs to callers, gen_server — fully implemented)
 
-database (application — started after nref)
-  └── database_sup (supervisor)
-        ├── graphdb_sup (supervisor — graphdb is included_application)
-        │     ├── graphdb_mgr       (gen_server — implemented: bootstrap init, read API, category guard)
-        │     ├── graphdb_rules     (gen_server — stub, implementation pending)
-        │     ├── graphdb_attr      (gen_server — implemented: seeds + create/lookup API)
-        │     ├── graphdb_class     (gen_server — implemented: taxonomic hierarchy, QC inheritance)
-        │     ├── graphdb_instance  (gen_server — implemented: compositional hierarchy, inheritance)
-        │     ├── graphdb_language  (gen_server — implemented: M6 multilingual overlay)
-        │     └── graphdb_query     (gen_server — implemented: F3 query language)
-        └── dictionary_sup (supervisor — dictionary is included_application)
-              ├── dictionary_server (gen_server — stub, not yet wired to dictionary_imp)
-              └── term_server       (gen_server — stub, not yet wired to dictionary_imp)
+graphdb (application — started after mnesia + nref)
+  └── graphdb_sup (supervisor)
+        ├── graphdb_nref      (gen_server — switchable node-nref allocation facade;
+        │                      permanent phase during init, runtime phase after flip)
+        ├── rel_id_server     (gen_server — arc row ID allocator)
+        ├── graphdb_mgr       (gen_server — implemented: bootstrap init, read API, category guard)
+        ├── graphdb_rules     (gen_server — stub, implementation pending)
+        ├── graphdb_attr      (gen_server — implemented: seeds + create/lookup API)
+        ├── graphdb_class     (gen_server — implemented: taxonomic hierarchy, QC inheritance)
+        ├── graphdb_instance  (gen_server — implemented: compositional hierarchy, inheritance)
+        ├── graphdb_language  (gen_server — implemented: M6 multilingual overlay)
+        └── graphdb_query     (gen_server — implemented: F3 query language)
+
+dictionary (application — started alongside graphdb)
+  └── dictionary_sup (supervisor)
+        ├── dictionary_server (gen_server — stub, not yet wired to dictionary_imp)
+        └── term_server       (gen_server — stub, not yet wired to dictionary_imp)
+
+database (application — started after graphdb + dictionary)
+  └── database_sup (supervisor) — empty; attachment point for future database-level services
 
 seerstone (application — top-level; started last)
   └── seerstone_sup (supervisor) — empty; placeholder for future seerstone-specific workers
@@ -79,7 +83,10 @@ seerstone (application — top-level; started last)
 predecessor to `nref_server` and is fully superseded by it.
 
 `graphdb_bootstrap.erl` — implemented; loaded by `graphdb_mgr:init/1`
-on first startup when the Mnesia `nodes` table is empty.
+on first startup when the Mnesia `nodes` table is empty. The loader uses a
+local counter for permanent-tier labels (`?LABEL_START`..`?NREF_START-1`) and
+does **not** call `set_floor` — the `graphdb:start/2` phase flip raises the
+runtime floor after all child `init/1`s complete.
 
 ## Common Coding Conventions
 
@@ -150,7 +157,7 @@ Two database roles:
 The environment is shared across all projects. Only bootstrap nrefs (1–35) and a small number of explicitly seeded runtime nrefs (e.g., `target_kind`) are referenced by nref constant in code — all other runtime-added nodes are treated generically.
 
 nref spaces:
-- **Environment**: bootstrap nrefs 1–35; runtime nrefs 10000+ (protected by `{nref_start, 10000}` in `bootstrap.terms`)
+- **Environment**: scaffold nrefs 1–35; permanent tier `[?LABEL_START, ?NREF_START)` = `[10001, 1000000)` holds English (10000), loader-assigned atom-labeled bootstrap nodes, and worker `init/1` seeds (graphdb_attr, graphdb_language sub-groups); runtime allocations ≥ `?NREF_START` (1000000). Boundaries are macros in `apps/graphdb/include/graphdb_nrefs.hrl` — **not** directives in `bootstrap.terms`. All graphdb node-nref allocation goes through `graphdb_nref` (first child of `graphdb_sup`): permanent phase during init, runtime phase after the `graphdb:start/2` flip.
 - **Project**: allocator starts at **1** — no pre-assigned nrefs, no bootstrap file, no floor needed
 
 Cross-database nref resolution: `characterization` and `reciprocal` fields always reference environment nrefs; `target_nref` is routed to environment or project based on the arc label's `target_kind` AVP stored in the environment attribute library.
@@ -332,6 +339,22 @@ detail.
 - Internal refactors that don't change the contract.
 - Bug fixes, style changes, comment edits, test additions.
 - Implementation progress within an already-described component.
+
+`docs/diagrams/ontology-tree.md` is the visual reference for the
+post-bootstrap + init-seeded environment ontology. The Mermaid block in
+that file must reflect the current shape of the tree.
+
+**Update `docs/diagrams/ontology-tree.md` when:**
+- `apps/graphdb/priv/bootstrap.terms` adds, removes, or reparents a node.
+- Any `init/1` in `graphdb_attr`, `graphdb_class`, `graphdb_instance`,
+  or `graphdb_language` adds, removes, or reparents a runtime-seeded
+  node, sub-group, or arc-label that belongs in the environment tree.
+- A new `graphdb_*` worker is added that seeds at startup.
+
+**Don't update `docs/diagrams/ontology-tree.md` for:**
+- Per-test or per-project instance-DB additions (the diagram is
+  environment-only).
+- Internal refactors that leave the seed shape unchanged.
 
 The canonical spec is `the-knowledge-network.md` — it does **not** track
 the code. Outstanding work lives in `TASKS.md`.

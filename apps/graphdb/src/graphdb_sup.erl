@@ -223,6 +223,7 @@ init([]) ->
   		MaxR = 5, 					%% maximum number of restarts
 		MaxT = 5000, 				%% restart period,
 	SupFlags = {Restart_Strategy, MaxR, MaxT},
+	{ok, ChSpecN} = childspec(graphdb_nref),
 	{ok, ChSpec0} = childspec(rel_id_server),
 	{ok, ChSpec1} = childspec(graphdb_mgr),
 	{ok, ChSpec2} = childspec(graphdb_rules),
@@ -231,7 +232,7 @@ init([]) ->
 	{ok, ChSpec5} = childspec(graphdb_instance),
 	{ok, ChSpec6} = childspec(graphdb_language),
 	{ok, ChSpec7} = childspec(graphdb_query),
-	{ok, {SupFlags, [ChSpec0, ChSpec1, ChSpec2, ChSpec3, ChSpec4, ChSpec5, ChSpec6, ChSpec7]}};
+	{ok, {SupFlags, [ChSpecN, ChSpec0, ChSpec1, ChSpec2, ChSpec3, ChSpec4, ChSpec5, ChSpec6, ChSpec7]}};
 init(State) -> 
 	?NYI({init, {State}}),
 	ignore.

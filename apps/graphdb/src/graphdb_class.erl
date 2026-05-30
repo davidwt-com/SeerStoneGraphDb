@@ -422,9 +422,9 @@ is_valid_parent_kind(_)        -> false.
 do_create_class(Name, ParentClassNref) ->
 	case do_validate_parent(ParentClassNref) of
 		ok ->
-			ClassNref              = nref_server:get_nref(),
+			ClassNref              = graphdb_nref:get_next(),
 			{TaxId1, TaxId2}       = rel_id_server:get_id_pair(),
-			TemplateNref           = nref_server:get_nref(),
+			TemplateNref           = graphdb_nref:get_next(),
 			{TmplCompId1, TmplCompId2} = rel_id_server:get_id_pair(),
 			ClassNameAVP    = #{attribute => ?NAME_ATTR_CLASS, value => Name},
 			TemplateNameAVP = #{attribute => ?NAME_ATTR_CLASS,
@@ -575,7 +575,7 @@ do_add_template(ClassNref, Name) ->
 	end.
 
 do_write_template(ClassNref, Name) ->
-	TemplateNref = nref_server:get_nref(),
+	TemplateNref = graphdb_nref:get_next(),
 	{Id1, Id2} = rel_id_server:get_id_pair(),
 	NameAVP = #{attribute => ?NAME_ATTR_CLASS, value => Name},
 	Node = #node{

@@ -28,7 +28,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_rules`     | Stub                                                                                                                                        |
 | `graphdb_language`  | Implemented — M6 multilingual overlay layer (label resolution, dialect chains, per-language Mnesia overlay tables)                          |
 | `graphdb_query`     | Implemented — F3 query language (Q1-Q6) with snapshot-semantics sessions and continuation-based bounded BFS                                 |
-| Tests               | 370 passing (267 Common Test + 103 EUnit)                                                                                                   |
+| Tests               | 378 passing (277 Common Test + 101 EUnit)                                                                                                   |
 
 The kernel is functional under multi-inheritance, multi-class-
 membership, and per-class template semantics.  Multilingual label
@@ -161,7 +161,8 @@ Five top-level categories are pre-assigned at bootstrap:
 
 The bootstrap loads 38 nodes in total: the 35-node BFS scaffold (nrefs
 1–35), the permanent English instance seed (nref 10000), and 2 labeled
-runtime nodes (`lang_code`, `lang_human` — nrefs ≥ 100000). The full
+permanent nodes (`lang_code`, `lang_human` — nrefs assigned by the
+loader's local counter starting at `label_start` = 10001). The full
 content is documented in `apps/graphdb/priv/bootstrap.terms`. Code that
 needs specific nrefs uses the constants defined as macros in the worker
 that owns them (`graphdb_attr`, `graphdb_class`, `graphdb_instance`).
@@ -222,6 +223,7 @@ nref (application — started first)
 
 graphdb (application — started after mnesia + nref)
   └── graphdb_sup
+        ├── graphdb_nref         — switchable node-nref allocation facade (permanent during init; runtime after flip)
         ├── rel_id_server        — arc row ID allocator (separate from nref space)
         ├── graphdb_mgr          — primary coordinator; bootstrap startup
         ├── graphdb_attr         — attribute library
@@ -272,18 +274,18 @@ exist on the same node, each with its own Mnesia schema.
 
 ### What lives where
 
-| Concept                                                      | Location                        |
-| ------------------------------------------------------------ | ------------------------------- |
-| Category, attribute, class nodes                             | Ontology                        |
-| Language class nodes; domain connection arcs                 | Ontology — see §10              |
-| Permanent ontology instance seeds (e.g., English nref 10000) | Ontology — see §10              |
-| Bootstrap and runtime compositional arcs                     | Ontology                        |
-| Project anchor nodes (children of Projects nref 5)           | Ontology                        |
-| Language overlay tables for environment nrefs                | Ontology node (`language_<code>`) |
-| Instance nodes (project entities)                            | Project                         |
-| Instance compositional arcs                                  | Project                         |
-| Instance → class membership arcs                             | Project                         |
-| Instance user-defined connections                            | Project                         |
+| Concept                                                      | Location                                       |
+| ------------------------------------------------------------ | ---------------------------------------------- |
+| Category, attribute, class nodes                             | Ontology                                       |
+| Language class nodes; domain connection arcs                 | Ontology — see §10                             |
+| Permanent ontology instance seeds (e.g., English nref 10000) | Ontology — see §10                             |
+| Bootstrap and runtime compositional arcs                     | Ontology                                       |
+| Project anchor nodes (children of Projects nref 5)           | Ontology                                       |
+| Language overlay tables for environment nrefs                | Ontology node (`language_<code>`)              |
+| Instance nodes (project entities)                            | Project                                        |
+| Instance compositional arcs                                  | Project                                        |
+| Instance → class membership arcs                             | Project                                        |
+| Instance user-defined connections                            | Project                                        |
 | Language overlay tables for project nrefs                    | Project node (`language_<code>_<anchor_nref>`) |
 
 ### Cross-database nref resolution
@@ -329,18 +331,36 @@ always exists regardless of its visibility.
 
 Bootstrap introduces three nref tiers:
 
-| Tier                     | Range           | Contents                                              |
-| ------------------------ | --------------- | ----------------------------------------------------- |
-| Scaffold                 | 1 – 9 999       | Pre-assigned category/attribute bootstrap nodes       |
-| Permanent concept seeds  | 10 000 – 99 999 | Pre-assigned first-class ontology seeds (e.g., English nref 10000) |
-| Runtime                  | 100 000+        | All runtime allocations — symbol-table labels + relationship IDs |
+| Tier                    | Range                              | Contents                                                                                                                                                    |
+| ----------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scaffold                | 1 – 9 999                          | Pre-assigned category/attribute bootstrap nodes                                                                                                             |
+| Permanent concept seeds | `?LABEL_START` – `?NREF_START` − 1 | English (10000), loader-assigned atom-labeled nodes starting at `?LABEL_START` (10001), and worker init/1 seeds (graphdb_attr, graphdb_language sub-groups) |
+| Runtime                 | ≥ `?NREF_START`                    | Post-boot allocations from `nref_server` — all instance/class/attribute runtime APIs, relationship row IDs                                                  |
 
-Single global allocator served by `nref_server` / `nref_allocator`,
-DETS-backed. Counter starts at 1 on a fresh node. `graphdb_bootstrap`
-calls `nref_server:set_floor(100000)` once during the first scaffold
-load, advancing the counter into the runtime tier. All subsequent
-runtime allocations (symbol-table labels and relationship IDs) are
-≥ 100000.
+Tier boundaries are the `?LABEL_START` and `?NREF_START` macros in
+`apps/graphdb/include/graphdb_nrefs.hrl` (`?LABEL_START = 10001`,
+`?NREF_START = 1 000 000`). They are **not** directives in `bootstrap.terms`
+— that file contains only node and relationship terms.
+
+Node-nref allocation is routed through `graphdb_nref` (first child of
+`graphdb_sup`): during the init phase it hands out permanent-tier nrefs
+computed from the `nodes` table; after the `graphdb:start/2` phase flip it
+delegates to `nref_server:get_nref/0`. The phase is held in
+`persistent_term` so a process restart cannot resurrect the wrong phase.
+
+`graphdb:start/2` brackets the boot: it calls
+`graphdb_nref:set_permanent_phase/0` before `graphdb_sup:start_link/0`, so
+the bootstrap loader and every worker `init/1` allocate in the permanent
+tier; after all child `init/1`s complete it calls
+`graphdb_nref:set_runtime_phase/0`, which also raises the `nref_server`
+floor to `?NREF_START`.
+
+`graphdb_bootstrap` assigns atom-labeled node nrefs from a **local counter**
+starting at `?LABEL_START`. If the counter would reach `?NREF_START` the
+loader throws `{labels_exceeded_nref_start, ...}`; the `graphdb_nref`
+spillover path (raise floor and continue via get_nref) is not yet wired to
+the loader. With `?NREF_START = 1 000 000` and `?LABEL_START = 10 001` the
+permanent tier has roughly 990 000 free slots — spill-over is not expected.
 
 ### Project allocators
 
@@ -374,14 +394,17 @@ sets it.
 
 ### Bootstrap file format
 
-Erlang terms via `file:consult/1`. Three term shapes (full schema in
+Erlang terms via `file:consult/1`. Two term shapes (full schema in
 `graphdb_bootstrap.erl`):
 
 ```erlang
-{nref_start, N}.
 {node, Nref, Kind, {NameAttrNref, NameValue}, ExtraAVPs}.
 {relationship, N1, R1, AVPs1, R2, N2, AVPs2, Kind}.
 ```
+
+Tier boundaries (`?LABEL_START`, `?NREF_START`) are compile-time macros in
+`graphdb_nrefs.hrl` — no `{nref_start, N}` or `{label_start, N}` directives
+live in the file.
 
 `Nref` (and endpoint fields `N1`, `N2`) may be either a pre-assigned
 `integer()` or an **atom label** — a symbolic placeholder resolved at
@@ -401,15 +424,15 @@ dependencies and direct pattern matching.
 tables if absent, loads scaffold only if `nodes` is empty. Called from
 `graphdb_mgr:init/1`. Processing is a **two-pass** sequence:
 
-1. `classify_terms` — partition into `{NrefStart, Nodes, Rels}`
-2. `validate` — accept integer nrefs `< NrefStart` and atom labels; reject unknown kinds
+1. `classify_terms` — partition into `{Nodes, Rels}`; unknown terms are rejected
+2. `validate` — accept integer nrefs `< ?NREF_START` and atom labels; reject unknown kinds
 3. `validate_relationships` — reject unknown relationship kinds
-4. `set_floor(NrefStart)` — advance the nref counter into the runtime tier
-5. `build_symbol_table` — allocate a fresh runtime nref for each unique atom label
-6. `apply_symbol_table` — substitute all atom labels with their allocated nrefs
-7. `validate_no_unresolved_labels` — sanity-check; no atom must survive resolution
-8. `write_nodes` → `write_relationships` — write to Mnesia
-9. `rebuild_caches` + `verify_caches` — enforce the cache invariant (see §3)
+4. `build_symbol_table` — allocate a permanent-tier nref for each unique atom label
+   from a local counter starting at `?LABEL_START` (no `nref_server` call)
+5. `apply_symbol_table` — substitute all atom labels with their allocated nrefs
+6. `validate_no_unresolved_labels` — sanity-check; no atom must survive resolution
+7. `write_nodes` → `write_relationships` — write to Mnesia
+8. `rebuild_caches` + `verify_caches` — enforce the cache invariant (see §3)
 
 Relationship IDs are allocated outside Mnesia transactions to avoid
 retry side-effects. A verify mismatch in step 9 throws

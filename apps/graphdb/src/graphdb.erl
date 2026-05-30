@@ -138,16 +138,22 @@
 %%--------------------------------------------------------------------- 
 
 start(Type, StartArgs) ->
-    case graphdb_sup:start_link() of
+	%% Mark the permanent phase before any child init runs, so the bootstrap
+	%% loader and every seeding worker allocate in the permanent tier.
+	ok = graphdb_nref:set_permanent_phase(),
+	case graphdb_sup:start_link() of
 		{ok, Pid} ->
+			%% All child init/1s have completed; flip to the runtime tier
+			%% (also raises nref_server's floor to ?NREF_START).
+			ok = graphdb_nref:set_runtime_phase(),
 			{ok, Pid};
-		ignore -> 
+		ignore ->
 			{error, ignore};
-		{error, Reason} ->	
+		{error, Reason} ->
 			{error, Reason};
 		MSG ->
 			?UEM({start , {Type, StartArgs}}, MSG)
-    end.
+	end.
 
 
 %%--------------------------------------------------------------------- 

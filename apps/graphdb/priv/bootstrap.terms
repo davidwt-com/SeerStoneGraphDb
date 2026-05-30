@@ -5,20 +5,8 @@
 %% bootstrap.terms -- SeerStoneGraphDb initial graph scaffold
 %%
 %% Loaded once by graphdb_bootstrap:load/0 on first startup when the Mnesia
-%% nodes table is empty.  After a successful load, nref_server:set_floor/1 is
-%% called and the file is never consulted again.
-%%
-%% Nref tiers:
-%%   scaffold   (1–9 999):   pre-assigned category/attribute nodes
-%%   permanent  (10 000–99 999): pre-assigned first-class concept seeds
-%%   runtime    (100 000+):  dynamically allocated (floor = nref_start)
-%%
-%% Labeled atom nrefs (e.g. lang_code, lang_human): allocated at load
-%% time by the two-pass loader from the runtime tier (>= nref_start).
-%%
-%% Relationship record IDs are allocated by nref_server:get_nref/0.
-%% Symbol-table allocations happen before relationship writes, so both
-%% categories of runtime IDs land in the runtime tier.
+%% nodes table is empty.  The file is never consulted again after a successful
+%% load.  Tier boundaries are macros in graphdb_nrefs.hrl, not file directives.
 %%
 %% Node tuple shape (Option B, post-H0d):
 %%   {node, Nref, Kind, {NameAttrNref, NameValue}, ExtraAVPs}
@@ -55,10 +43,30 @@
 %% Each {relationship,...} term expands to two directed rows written atomically.
 
 %% -------------------------------------------------------------------------
-%% nref floor -- processed first; nref_server:set_floor(100000) is called so
-%% all subsequent get_nref/0 calls return >= 100000 (runtime tier).
+%% Tier boundaries.
+%%
+%% The permanent/runtime tier boundaries are compile-time constants defined
+%% in apps/graphdb/include/graphdb_nrefs.hrl:
+%%
+%%   ?LABEL_START  (10001) -- starting value of the loader's local counter
+%%                            used to assign nrefs to atom-labeled nodes
+%%                            (lang_code, lang_human, ...).  Set to
+%%                            English's nref + 1 so labeled nodes sit
+%%                            immediately above the pre-assigned permanent
+%%                            seeds.
+%%
+%%   ?NREF_START (1000000) -- boundary between the permanent and runtime
+%%                            tiers.  Bumped from 100000 to 1000000 to
+%%                            leave generous head room (~990k slots) for
+%%                            labeled permanent seeds.
+%%
+%% The runtime floor (nref_server:set_floor/1) is raised to ?NREF_START
+%% by graphdb:start/2 (via graphdb_nref:set_runtime_phase/0) AFTER all
+%% child init/1 callbacks complete, not by the bootstrap loader.
+%%
+%% Loader labels land in [?LABEL_START, ?NREF_START); relationship row
+%% IDs are allocated by rel_id_server (a separate counter, starts at 1).
 %% -------------------------------------------------------------------------
-{nref_start, 100000}.
 
 %% -------------------------------------------------------------------------
 %% Level 0 -- Root
@@ -196,18 +204,33 @@
 %% label resolution.  First instance node in the ontology.
 %% lang_code AVP records the ISO 639-1 language code (value = en).
 %%
-%% English has no compositional parent (parents=[]).  Domain membership
-%% (English → Human Languages, nref 32) is recorded as a lateral connection
-%% arc — ASSOCIATE type, template-scoped.  Template infrastructure is not yet
-%% implemented; that arc is deferred to the connection-arc work.
+%% Wiring (the four arcs below):
+%%   - English (10000) -> lang_human (instantiation): English IS-AN-INSTANCE-OF
+%%     the "Human Language" class.  This is its taxonomic membership.
+%%   - Human Languages (32) -> English (composition): places English in the
+%%     Human Languages domain of the organisational scaffold.  English's
+%%     parents cache ends up as [32].
+%%
+%% OPEN QUESTION (deferred -- do not resolve here):
+%%   The composition arc from category 32 to instance 10000 is the only
+%%   category->instance composition arc in the bootstrap.  Semantically
+%%   English is "an example of" a Human Language, not "a part of" the
+%%   Human Languages category -- the more accurate arc shape is a
+%%   template-scoped connection (ASSOCIATE) arc, which requires template
+%%   infrastructure that is not yet implemented.  The composition arc is
+%%   retained as an interim representation so that downstream tooling has
+%%   a working scaffold today.  Revisit when connection-arc work lands;
+%%   nothing below this point should be changed without resolving the
+%%   question above.
 {node, 10000, instance, {20, "English"}, [{lang_code, en}]}.
 
 %% =========================================================================
-%% Labeled nodes -- zero pre-assigned nrefs.
+%% Labeled nodes -- atom-labeled permanent seeds.
 %%
 %% Atom labels are symbolic nref placeholders resolved at load time by the
 %% two-pass bootstrap loader (build_symbol_table → apply_symbol_table).
-%% The allocated nrefs land in the runtime tier (>= 100000).
+%% The allocated nrefs land in the permanent tier, starting at label_start
+%% (10001 -- immediately above English).
 %%
 %% These nodes are mutable: knowledge improvements (renaming, reparenting,
 %% adding AVPs) do not affect the permanent English node.

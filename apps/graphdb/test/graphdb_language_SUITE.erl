@@ -165,6 +165,8 @@ init_per_testcase(_TC, Config) ->
     BootFile = proplists:get_value(bootstrap_file, Config),
     application:set_env(seerstone_graph_db, bootstrap_file, BootFile),
     {ok, _}  = rel_id_server:start_link(),
+    graphdb_nref:set_permanent_phase(),
+    {ok, _}  = graphdb_nref:start_link(),
     {ok, _}  = graphdb_mgr:start_link(),
     {ok, _}  = graphdb_attr:start_link(),
     {ok, _}  = graphdb_class:start_link(),
@@ -176,6 +178,8 @@ end_per_testcase(TC, Config) ->
     catch gen_server:stop(graphdb_class),
     catch gen_server:stop(graphdb_attr),
     catch gen_server:stop(graphdb_mgr),
+    catch gen_server:stop(graphdb_nref),
+    catch persistent_term:erase({graphdb_nref, phase}),
     catch gen_server:stop(rel_id_server),
     catch application:stop(nref),
     catch mnesia:stop(),
@@ -251,11 +255,16 @@ seeded_nrefs_above_floor(_Config) ->
            language_literals_group := LL,
            base_language           := BL,
            project_language        := PL}} = graphdb_language:seeded_nrefs(),
-    ?assert(LC >= 100000),
-    ?assert(LH >= 100000),
-    ?assert(LL >= 100000),
-    ?assert(BL >= 100000),
-    ?assert(PL >= 100000).
+    %% lang_code and lang_human are bootstrap-labeled (loader-assigned),
+    %% so they sit in the permanent tier above English and below nref_start.
+    ?assert(LC > ?NREF_ENGLISH),
+    ?assert(LC < ?NREF_START),
+    ?assert(LH > ?NREF_ENGLISH),
+    ?assert(LH < ?NREF_START),
+    %% Language Literals sub-group, base_language and project_language are seeded by graphdb_language:init/1 in the permanent tier via graphdb_nref.
+    ?assert(LL > ?NREF_ENGLISH andalso LL < ?NREF_START),
+    ?assert(BL > ?NREF_ENGLISH andalso BL < ?NREF_START),
+    ?assert(PL > ?NREF_ENGLISH andalso PL < ?NREF_START).
 
 language_en_table_created(_Config) ->
     {ok, _} = graphdb_language:start_link(),
@@ -267,7 +276,7 @@ seeds_language_literals_subgroup(_Config) ->
     {ok, #{language_literals_group := LangLitNref}} =
         graphdb_language:seeded_nrefs(),
     ?assert(is_integer(LangLitNref)),
-    ?assert(LangLitNref >= 100000),
+    ?assert(LangLitNref > ?NREF_ENGLISH andalso LangLitNref < ?NREF_START),
     {ok, Node} = graphdb_attr:get_attribute(LangLitNref),
     ?assertEqual(attribute, Node#node.kind),
     ?assertEqual([?NREF_LITERALS], Node#node.parents).

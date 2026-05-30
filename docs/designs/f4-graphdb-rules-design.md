@@ -104,9 +104,11 @@ nref 3 (Classes, category)
 **Why:** keeps the class taxonomy clean (no rule meta-classes mixed
 with user classes), parses naturally ("a CompositionRule is a Rule"),
 gives the engine a single ancestor to pattern-match on, and adds zero
-bootstrap scaffold. Mirrors the M6 precedent where `graphdb_language`
-seeds the English instance node at runtime rather than in
-`bootstrap.terms`.
+bootstrap scaffold. Mirrors the L7 precedent where `graphdb_attr` and
+`graphdb_language` seed sub-groups and literal attributes at runtime
+via `init/1` rather than expanding `bootstrap.terms` (English itself
+is bootstrap-seeded in `bootstrap.terms:203`; the runtime
+ensure-seed-by-name pattern is the L7 contribution).
 
 ### D2. Rule representation (A2 + B3)
 
@@ -154,54 +156,98 @@ proposes SoundSystem [propose]). Learned rules from §11 land
 naturally as `propose`-mode entries — the engine learns by suggesting,
 not enforcing.
 
-### D5. Attachment mechanism (Attachment B)
+### D5. Attachment mechanism (Attachment B + arc-AVP enforcement)
 
-A rule attaches to its **owning class** by a relationship arc with
-characterization `applies_to` (reciprocal `applied_by`). Secondary
-class references (child_class for CompositionRule, target_class for
-ConnectionRule) live as AVPs on the rule instance.
+A rule attaches to its **owning class** by a `kind = connection`
+relationship arc pair with characterization `applies_to` (reciprocal
+`applied_by`). Secondary class references (`child_class` for
+CompositionRule, `target_class` for ConnectionRule) live as AVPs on
+the rule instance.
+
+The connection arc carries three AVPs:
+
+| Index | AVP                  | Source                                                                              |
+|-------|----------------------|-------------------------------------------------------------------------------------|
+| 0     | `Template` (attr 31) | Owning class's default template (preserves the connection-arc convention)           |
+| 1     | `mode`               | `mandatory \| auto \| propose` — enforcement level of *this attachment*             |
+| 2     | `multiplicity`       | `pos_integer() \| unbounded` — number of children/connections the engine creates    |
+
+`mode` and `multiplicity` live on the arc, not on the rule node,
+because they describe the *deployment* of a rule (how strictly the
+owning class enforces it) — not the rule's *content* (what the rule
+references). The same rule node can attach to two classes with
+different enforcement levels by varying only the arc AVPs.
 
 ```
+                    [Template, mode, multiplicity AVPs on arc]
+                              │
 ClassNode  ──applies_to──▶  RuleInstance
 ClassNode  ◀──applied_by──  RuleInstance
 ```
 
 Lookup "rules attached to class C" reads the `relationships` table
 filtered by `source_nref = C, characterization = applies_to` — O(1)
-via the existing secondary index on `source_nref`.
+via the existing secondary index on `source_nref`. Reading the
+attachment's AVPs gives the engine its enforcement contract for that
+class.
 
-**Why:** symmetric with how every other associative relationship in
-the codebase is expressed (taxonomy arcs, instance-of arcs, attribute
-taxonomy arcs). Reuses existing graph machinery. Keeps the
-primary-owner semantics distinct from secondary references — useful
-when engines need to ask "what's the owning class of this rule?"
-without scanning AVPs.
+**Why kind=connection:** lateral, metadata-carrying arc; matches the
+existing graph-kind set without introducing a fifth kind. The
+Template AVP convention is preserved (owning class's default template
+scopes the attachment). `verify_caches/0` already ignores
+`kind=connection`, so no cache-audit changes are required.
+
+**Why mode and multiplicity on the arc:** enforcement is a property
+of the binding, not the rule. Reactive learning (§11) maps cleanly:
+a learned rule node can attach to multiple classes with different
+modes (e.g., `propose` on the originating class, `auto` once
+promoted) without duplicating the rule data.
+
+**Phase B+ semantics (informative):** even when the attachment mode
+is `auto` or `propose`, it does not restrict the rules attached to
+the target/child class's template — each class resolves its own rules
+based on its own attachment modes. A `propose`-mode attachment that
+the user executes promotes downstream resolution at the child/target
+class without retroactively gating the parent.
 
 ### D6. AVP schemas
 
-**CompositionRule** (owning class = parent_class, via `applies_to`
-arc):
+Per D5, rule-content AVPs live on the rule instance node; deployment
+AVPs (`mode`, `multiplicity`) live on the `applies_to` connection
+arc.
+
+**CompositionRule instance** (content) — owning class = parent_class,
+via `applies_to` arc:
 
 ```
-AVP child_class_nref :: integer()                  [required]
-AVP mode             :: mandatory | auto | propose [required]
-AVP multiplicity     :: pos_integer() | unbounded  [required, default 1]
-AVP template_nref    :: integer()                  [optional]
+AVP child_class_nref :: integer()  [required]
+AVP template_nref    :: integer()  [optional]
 ```
 
-**ConnectionRule** (owning class = source_class, via `applies_to`
-arc):
+**ConnectionRule instance** (content) — owning class = source_class,
+via `applies_to` arc:
 
 ```
-AVP characterization_nref :: integer()                  [required]
-AVP target_class_nref     :: integer()                  [required]
-AVP mode                  :: mandatory | auto | propose [required]
-AVP multiplicity          :: pos_integer() | unbounded  [required, default 1]
-AVP template_nref         :: integer()                  [optional]
+AVP characterization_nref :: integer()  [required]
+AVP target_class_nref     :: integer()  [required]
+AVP template_nref         :: integer()  [optional]
 ```
 
-Plus the standard instance-name AVP (nref 20 = `?NAME_ATTR_INSTANCE`)
-that every `kind = instance` carries.
+Both rule instances additionally carry the standard instance-name AVP
+(nref 20 = `?NAME_ATTR_INSTANCE`) required of every `kind = instance`
+node.
+
+**`applies_to` connection arc** (deployment, per D5):
+
+```
+AVP Template     :: integer()                  [required, attr 31, index 0]
+AVP mode         :: mandatory | auto | propose [required]
+AVP multiplicity :: pos_integer() | unbounded  [required, default 1]
+```
+
+The Template AVP is the owning class's default template (mirroring
+the standard connection-arc convention). `mode` and `multiplicity`
+follow.
 
 ### D7. Scope-aware API (env-only in Phase A)
 
@@ -244,6 +290,17 @@ All seeds are idempotent — re-running them after restart is a no-op.
 All nrefs are cached in gen_server state and exposed via
 `seeded_nrefs/0`.
 
+**Side-effect of `graphdb_class:create_class/2`:** the existing API
+atomically writes the class node *and* a default Template node
+(`kind = template`) plus the class→template composition arc pair.
+Seeding `Rule`, `CompositionRule`, and `ConnectionRule` therefore
+creates three meta-class nodes **plus three default Template nodes**.
+The default-template nrefs are not exposed via `seeded_nrefs/0` in
+Phase A — Phase B+ engines dispatch on `classes` cache on rule
+instances, never on meta-class default templates. The owning class's
+default template (e.g., Car's default template) is what scopes the
+`applies_to` arc per D5, not the meta-class's default template.
+
 ### 3.1 Seed list
 
 `Rule Literals` is seeded first as the sub-group parent for the six
@@ -262,7 +319,7 @@ to seed under their own sub-groups.
 | 5  | `characterization_nref` literal attr   | `graphdb_attr:create_literal_attribute("characterization_nref", integer, RuleLiteralsNref)`         | Rule Literals               |
 | 6  | `mode` literal attr                    | `graphdb_attr:create_literal_attribute("mode", atom, RuleLiteralsNref)`                             | Rule Literals               |
 | 7  | `multiplicity` literal attr            | `graphdb_attr:create_literal_attribute("multiplicity", term, RuleLiteralsNref)`                     | Rule Literals               |
-| 8  | `applies_to` / `applied_by` rel attrs  | `graphdb_attr:create_relationship_attribute("applies_to", "applied_by", instance)`                  | nref 16 (Instance Relationships) |
+| 8  | `applies_to` / `applied_by` rel attrs  | `graphdb_attr:create_relationship_attribute("applies_to", "applied_by", instance)`                  | **PINNED — see §10.1 P1** (current API parks under nref 8; nref 16 placement requires API extension) |
 | 9  | `Rule` class                           | `graphdb_class:create_class("Rule", ?NREF_CLASSES)`                                                 | nref 3 (Classes)            |
 | 10 | `CompositionRule` class                | `graphdb_class:create_class("CompositionRule", RuleNref)` (taxonomy arc)                            | subclass of Rule            |
 | 11 | `ConnectionRule` class                 | `graphdb_class:create_class("ConnectionRule", RuleNref)` (taxonomy arc)                             | subclass of Rule            |
@@ -292,18 +349,20 @@ seeded_nrefs() ->
 
 ### 3.3 Supervisor reorder
 
-Current child order in `graphdb_sup`:
+Current child order in `graphdb_sup` (verified in
+`graphdb_sup.erl:226-234`):
 
 ```
-graphdb_mgr → graphdb_rules → graphdb_attr → graphdb_class
-→ graphdb_instance → graphdb_language → graphdb_query
+rel_id_server → graphdb_mgr → graphdb_rules → graphdb_attr
+→ graphdb_class → graphdb_instance → graphdb_language → graphdb_query
 ```
 
-New child order (Phase A):
+New child order (Phase A) — `rel_id_server` and `graphdb_mgr` keep
+their positions; `graphdb_rules` moves to the end:
 
 ```
-graphdb_mgr → graphdb_attr → graphdb_class → graphdb_instance
-→ graphdb_language → graphdb_query → graphdb_rules
+rel_id_server → graphdb_mgr → graphdb_attr → graphdb_class
+→ graphdb_instance → graphdb_language → graphdb_query → graphdb_rules
 ```
 
 `graphdb_rules` becomes the last child so that
@@ -374,17 +433,28 @@ create_connection_rule(
 ```
 
 Each create call performs the validation set (§5) in a single Mnesia
-transaction. On success:
+transaction managed directly by `graphdb_rules`. The existing
+`graphdb_instance:create_instance/3` API is **not** used: it requires
+a compositional parent and writes a composition arc, which is wrong
+for rule instances. D2 reuses the *data model*
+(`kind=instance`, `classes` cache, AVP storage) — not the worker API.
+
+On success:
 
 1. The rule's nref is allocated via `nref_server:get_nref/0`.
-2. The instance node is written with `kind = instance`, `classes =
-   [RuleMetaClassNref]`, `parents = []`, and the full AVP list.
-3. The instance-to-class membership arc pair (chars 29/30) is written.
-4. The `applies_to` / `applied_by` arc pair is written between the
-   owning class and the new rule instance.
+2. The instance node is written with `kind = instance`,
+   `classes = [RuleMetaClassNref]`, `parents = []`, and the
+   content-only AVP list (per D6).
+3. The instance↔class membership arc pair (chars 29/30,
+   `kind = instantiation`) is written.
+4. The `applies_to` / `applied_by` arc pair is written as
+   `kind = connection` rows between the owning class and the new
+   rule instance, stamped with the Template + mode + multiplicity
+   AVPs (per D5).
 
-All four writes happen in the same transaction. If any validation
-check or write fails, no nref is consumed and no records are written.
+All four writes happen in the same Mnesia transaction. If any
+validation check or write fails, no nref is consumed and no records
+are written.
 
 ### 4.3 Retrieval
 
@@ -476,9 +546,9 @@ diagnostics, `{error, {AtomReason, OffendingValue}}`).
 | `seeding`          | `seeded_nrefs_returns_all_twelve`                      | `seeded_nrefs/0` map has all 12 expected keys (including `rule_literals_group`) |
 | `composition`      | `creates_composition_rule_minimal`                     | Required args only; multiplicity defaults to 1; no template |
 | `composition`      | `creates_composition_rule_with_template`               | /7 arity stamps template_nref AVP                        |
-| `composition`      | `applies_to_arc_pair_written`                          | Arc from parent class to rule + reciprocal present       |
+| `composition`      | `applies_to_arc_pair_written`                          | `kind=connection` arc pair from parent class to rule + reciprocal; Template + `mode` + `multiplicity` AVPs stamped on the forward arc |
 | `composition`      | `instance_to_class_membership_written`                 | 29/30 arc pair to CompositionRule meta-class present     |
-| `composition`      | `avps_present_and_correct`                             | All required AVPs present and equal to the args          |
+| `composition`      | `avps_present_and_correct`                             | Content AVPs (`child_class_nref`, optional `template_nref`) on the rule node; deployment AVPs (Template, `mode`, `multiplicity`) on the `applies_to` arc; all equal to the args |
 | `connection`       | `creates_connection_rule_minimal`                      | Required args only                                       |
 | `connection`       | `creates_connection_rule_with_template`                | /8 arity stamps template_nref AVP                        |
 | `connection`       | `instance_to_class_membership_to_connection_rule`      | 29/30 arc pair to ConnectionRule meta-class present      |
@@ -518,8 +588,13 @@ above is sufficient.
 
 Every CT suite's `end_per_testcase` already asserts
 `graphdb_mgr:verify_caches/0 = ok`. Rule instances carry
-`classes = [RuleMetaClassNref]` and `parents = []`; the cache audit
-verifies these against the instantiation and applies_to arcs.
+`classes = [RuleMetaClassNref]` and `parents = []`. The cache audit
+verifies `classes` against the `kind=instantiation, char=29` arc
+(present) and `parents` against parent-direction `kind ∈ {taxonomy,
+composition}` arcs (none — rules have no compositional or taxonomic
+parents). The `applies_to` connection arcs are invisible to the
+audit (it ignores `kind=connection`), which is the correct outcome:
+rule attachments are deployment metadata, not hierarchy.
 
 ---
 
@@ -566,7 +641,52 @@ L6 is **not** blocked by Phase A. Phase A is not blocked by L6.
 
 ---
 
-## 10. Open Issues — Deferred
+## 10. Open Issues
+
+### 10.1 Pinned — Resolve Before Implementation
+
+These questions surfaced during pre-implementation review of the
+design. They must be answered before Phase A coding begins. They are
+kept prominent so an implementer reading top-down encounters them
+before assuming the design is complete.
+
+**P1. Parent placement of `applies_to` / `applied_by` arc-label
+nodes.**
+
+The seeded `applies_to` / `applied_by` pair are the
+relationship-attribute nodes that name the arc characterization.
+Their parent in the Attributes subtree is unresolved.
+
+- The existing `graphdb_attr:create_relationship_attribute/3` API
+  parks both arc-label nodes directly under nref 8
+  (`?NREF_RELATIONSHIPS`), with the `TargetKind = instance` argument
+  stamped only as a routing AVP (`target_kind => instance`). This is
+  the L7-shipped behaviour.
+- An earlier version of §3.1 row 8 asserted the pair should live
+  under nref 16 (`?NREF_INST_REL_ATTRS`) to mirror the Instance
+  Relationships subcategory. The current API does not place them
+  there.
+
+Three exits:
+
+- **Accept nref 8.** Fix §3.1 row 8 and the CT case
+  `seeds_applies_to_pair` to assert parent under nref 8. The
+  `target_kind = instance` AVP suffices for query-engine routing.
+  Lowest scope.
+- **Add a kind-specific-parent variant** of
+  `create_relationship_attribute` so arc-label nodes can be parked
+  under nref 13/14/15/16. Scope creep into the attribute worker;
+  affects L7 conventions.
+- **Modify the existing API.** Would touch L7's already-shipped
+  behavior and re-open closed tests.
+
+**Status:** pinned pending review of broader seeding questions that
+surfaced alongside it (the default-template auto-creation by
+`create_class/2` noted in §3, and any related seed-shape questions
+the user wishes to explore). Resolution of those questions may
+shape or directly answer P1.
+
+### 10.2 Deferred — Later Phases or Follow-up Tasks
 
 Items surfaced during design that Phase A deliberately leaves for
 later phases or follow-up tasks.
@@ -705,6 +825,7 @@ commitments in §2.
 | D9   | Multiplicity literal attr uses `attribute_type => term`; union types are future M8 work | 2026-05-25 |
 | D10  | Supervisor reorder: `graphdb_rules` becomes last child of `graphdb_sup` | 2026-05-25 |
 | D11  | Literals subtree partitioned by owning subsystem (`Attribute Literals` / `Language Literals` / `Rule Literals`). L7 lands the first two; Phase A adds the third. No runtime migration — clean-slate seeding. | 2026-05-25 |
+| D12  | `applies_to` / `applied_by` arc pair is `kind = connection`. The arc carries Template (owning class's default), `mode`, and `multiplicity` as AVPs. `mode` and `multiplicity` move off the rule instance node — they are properties of the binding, not the rule. Same rule node reusable across classes with different enforcement. | 2026-05-26 |
 
 ---
 
@@ -720,5 +841,5 @@ on L7 (Literals subtree restructuring) having landed first. Phase A
 itself adds 12 seeded nrefs to the environment ontology (1 sub-group
 parent + 6 literal attrs + 1 relationship-attribute pair + 1 Rule
 class + 2 leaf meta-classes), one new worker capability surface, one
-supervisor child reorder, and approximately 26 new CT cases. It
+supervisor child reorder, and approximately 30 new CT cases. It
 unblocks the entire F4 track.
