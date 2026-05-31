@@ -76,6 +76,10 @@
 	create_relationship_attribute_pair_bad_parent/1,
 	create_relationship_type_basic/1,
 	new_attribute_writes_taxonomy_arcs/1,
+	create_value_attribute_under_parent/1,
+	create_value_attribute_bad_args/1,
+	named_wrappers_take_explicit_parent/1,
+	default_wrappers_preserve_parents/1,
 	%% Lookups
 	get_attribute_returns_node/1,
 	get_attribute_not_found/1,
@@ -128,7 +132,11 @@ groups() ->
 			create_relationship_attribute_pair_under_parent,
 			create_relationship_attribute_pair_bad_parent,
 			create_relationship_type_basic,
-			new_attribute_writes_taxonomy_arcs
+			new_attribute_writes_taxonomy_arcs,
+			create_value_attribute_under_parent,
+			create_value_attribute_bad_args,
+			named_wrappers_take_explicit_parent,
+			default_wrappers_preserve_parents
 		]},
 		{lookups, [], [
 			get_attribute_returns_node,
@@ -548,6 +556,70 @@ new_attribute_writes_taxonomy_arcs(_Config) ->
 		R#relationship.characterization =:= ?ARC_ATTR_PARENT andalso
 		R#relationship.reciprocal =:= ?ARC_ATTR_CHILD
 	end, ChildOut)).
+
+
+%%-----------------------------------------------------------------------------
+%% create_value_attribute/4 files a single attribute node under an
+%% explicit parent and stamps the attribute_type AVP.
+%%-----------------------------------------------------------------------------
+create_value_attribute_under_parent(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
+	{ok, Nref} =
+		graphdb_attr:create_value_attribute("CatName", name, [],
+			?NREF_CAT_NAME_ATTRS),
+	{ok, Node} = graphdb_attr:get_attribute(Nref),
+	?assertEqual([?NREF_CAT_NAME_ATTRS], Node#node.parents),
+	?assert(lists:member(#{attribute => ?NAME_ATTR_ATTRIBUTE, value => "CatName"},
+		Node#node.attribute_value_pairs)),
+	?assert(lists:member(#{attribute => At, value => name},
+		Node#node.attribute_value_pairs)).
+
+%%-----------------------------------------------------------------------------
+%% A literal carries exactly one type arg; name/relationship carry none.
+%% Wrong TypeArgs for a known AttrType is bad_type_args; an unknown
+%% AttrType is bad_attribute_type.  Neither writes a node.
+%%-----------------------------------------------------------------------------
+create_value_attribute_bad_args(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	NodesBefore = mnesia:table_info(nodes, size),
+	?assertMatch({error, {bad_type_args, name, [junk]}},
+		graphdb_attr:create_value_attribute("X", name, [junk], ?NREF_NAMES)),
+	?assertMatch({error, {bad_type_args, literal, []}},
+		graphdb_attr:create_value_attribute("X", literal, [], ?NREF_LITERALS)),
+	?assertMatch({error, {bad_attribute_type, frob}},
+		graphdb_attr:create_value_attribute("X", frob, [], ?NREF_NAMES)),
+	?assertEqual(NodesBefore, mnesia:table_info(nodes, size)).
+
+%%-----------------------------------------------------------------------------
+%% create_name_attribute/2 and create_relationship_type/2 honour an
+%% explicit parent; the /1 wrappers still default to 6 and 8.
+%%-----------------------------------------------------------------------------
+named_wrappers_take_explicit_parent(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, NameNref} =
+		graphdb_attr:create_name_attribute("ClsName", ?NREF_CLS_NAME_ATTRS),
+	{ok, NameNode} = graphdb_attr:get_attribute(NameNref),
+	?assertEqual([?NREF_CLS_NAME_ATTRS], NameNode#node.parents),
+	{ok, GrpNref} =
+		graphdb_attr:create_relationship_type("Kinship", ?NREF_INST_REL_ATTRS),
+	{ok, GrpNode} = graphdb_attr:get_attribute(GrpNref),
+	?assertEqual([?NREF_INST_REL_ATTRS], GrpNode#node.parents).
+
+%%-----------------------------------------------------------------------------
+%% Back-compat: the original wrappers still default to 6 / 7 / 8.
+%%-----------------------------------------------------------------------------
+default_wrappers_preserve_parents(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, N6} = graphdb_attr:create_name_attribute("Plain"),
+	{ok, N7} = graphdb_attr:create_literal_attribute("Mass", kilogram),
+	{ok, N8} = graphdb_attr:create_relationship_type("Assoc"),
+	{ok, Node6} = graphdb_attr:get_attribute(N6),
+	{ok, Node7} = graphdb_attr:get_attribute(N7),
+	{ok, Node8} = graphdb_attr:get_attribute(N8),
+	?assertEqual([?NREF_NAMES],         Node6#node.parents),
+	?assertEqual([?NREF_LITERALS],      Node7#node.parents),
+	?assertEqual([?NREF_RELATIONSHIPS], Node8#node.parents).
 
 
 %%-----------------------------------------------------------------------------

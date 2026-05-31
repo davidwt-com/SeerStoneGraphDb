@@ -118,12 +118,15 @@
 -export([
 		start_link/0,
 		%% Creators
+		create_value_attribute/4,
 		create_name_attribute/1,
+		create_name_attribute/2,
 		create_literal_attribute/2,
 		create_literal_attribute/3,
 		create_relationship_attribute_pair/3,
 		create_relationship_attribute_pair/4,
 		create_relationship_type/1,
+		create_relationship_type/2,
 		%% Lookups
 		get_attribute/1,
 		list_attributes/0,
@@ -167,37 +170,38 @@ start_link() ->
 
 
 %%-----------------------------------------------------------------------------
-%% create_name_attribute(Name) -> {ok, Nref} | {error, term()}
+%% create_value_attribute(Name, AttrType, TypeArgs, ParentNref) ->
+%%     {ok, Nref} | {error, term()}
 %%
-%% Creates a new name attribute node under the `Names` subtree (nref 6).
-%% A name attribute is an attribute-kind node whose value is a human-
-%% readable name.
+%% Canonical single-node attribute creator.  AttrType is one of
+%% name | literal | relationship.  TypeArgs is interpreted per AttrType:
+%% [] for name and relationship; [LiteralType] for literal (the literal
+%% value-type atom, stamped under the seeded `literal_type` attribute).
+%% ParentNref must name an existing kind=attribute node.
+%%-----------------------------------------------------------------------------
+create_value_attribute(Name, AttrType, TypeArgs, ParentNref) ->
+	gen_server:call(?MODULE,
+		{create_value_attribute, Name, AttrType, TypeArgs, ParentNref}).
+
+%%-----------------------------------------------------------------------------
+%% create_name_attribute(Name)            -> default parent ?NREF_NAMES (6)
+%% create_name_attribute(Name, ParentNref)
 %%-----------------------------------------------------------------------------
 create_name_attribute(Name) ->
-	gen_server:call(?MODULE, {create_name_attribute, Name}).
+	create_value_attribute(Name, name, [], ?NREF_NAMES).
 
+create_name_attribute(Name, ParentNref) ->
+	create_value_attribute(Name, name, [], ParentNref).
 
 %%-----------------------------------------------------------------------------
-%% create_literal_attribute(Name, Type) -> {ok, Nref} | {error, term()}
-%%
-%% Creates a new literal attribute node under the `Literals` subtree
-%% (nref 7).  Equivalent to create_literal_attribute(Name, Type, ?NREF_LITERALS).
+%% create_literal_attribute(Name, Type)             -> default ?NREF_LITERALS (7)
+%% create_literal_attribute(Name, Type, ParentNref)
 %%-----------------------------------------------------------------------------
 create_literal_attribute(Name, Type) ->
-	create_literal_attribute(Name, Type, ?NREF_LITERALS).
+	create_value_attribute(Name, literal, [Type], ?NREF_LITERALS).
 
-%%-----------------------------------------------------------------------------
-%% create_literal_attribute(Name, Type, ParentNref) -> {ok, Nref} | {error, term()}
-%%
-%% Creates a new literal attribute node under ParentNref.  ParentNref
-%% must be an attribute-kind node within the Literals subtree (or
-%% ?NREF_LITERALS itself); the caller is responsible for that
-%% invariant.  The Type argument is stored as an AVP keyed by the
-%% seeded `literal_type` attribute.
-%%-----------------------------------------------------------------------------
 create_literal_attribute(Name, Type, ParentNref) ->
-	gen_server:call(?MODULE,
-		{create_literal_attribute, Name, Type, ParentNref}).
+	create_value_attribute(Name, literal, [Type], ParentNref).
 
 
 %%-----------------------------------------------------------------------------
@@ -234,14 +238,14 @@ create_relationship_attribute_pair(Name, ReciprocalName, TargetKind, ParentNref)
 
 
 %%-----------------------------------------------------------------------------
-%% create_relationship_type(Name) -> {ok, Nref} | {error, term()}
-%%
-%% Creates a relationship-type grouping node as a direct child of the
-%% `Relationships` subtree (nref 8).  Subsequent arc labels may be
-%% placed under this grouping by a future /2 variant.
+%% create_relationship_type(Name)            -> default ?NREF_RELATIONSHIPS (8)
+%% create_relationship_type(Name, ParentNref) -- grouping/bucket node
 %%-----------------------------------------------------------------------------
 create_relationship_type(Name) ->
-	gen_server:call(?MODULE, {create_relationship_type, Name}).
+	create_value_attribute(Name, relationship, [], ?NREF_RELATIONSHIPS).
+
+create_relationship_type(Name, ParentNref) ->
+	create_value_attribute(Name, relationship, [], ParentNref).
 
 
 %%-----------------------------------------------------------------------------
@@ -361,16 +365,15 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Creators
 %%-----------------------------------------------------------------------------
-handle_call({create_name_attribute, Name}, _From, State) ->
-	Extra = [attr_type_avp(name, State)],
-	Reply = do_create_attribute(Name, ?NREF_NAMES, Extra),
-	{reply, Reply, State};
-
-handle_call({create_literal_attribute, Name, Type, ParentNref}, _From,
-		#state{literal_type_nref = TypeAttr} = State) ->
-	Extra = [#{attribute => TypeAttr, value => Type},
-			 attr_type_avp(literal, State)],
-	Reply = do_create_attribute(Name, ParentNref, Extra),
+handle_call({create_value_attribute, Name, AttrType, TypeArgs, ParentNref},
+		_From, State) ->
+	Reply = case validate_parent(ParentNref) of
+		ok ->
+			do_create_value_attribute(Name, AttrType, TypeArgs, ParentNref,
+				State);
+		{error, _} = Err ->
+			Err
+	end,
 	{reply, Reply, State};
 
 handle_call({create_relationship_attribute_pair, Name, ReciprocalName,
@@ -385,11 +388,6 @@ handle_call({create_relationship_attribute_pair, Name, ReciprocalName,
 		{error, _} = Err ->
 			Err
 	end,
-	{reply, Reply, State};
-
-handle_call({create_relationship_type, Name}, _From, State) ->
-	Extra = [attr_type_avp(relationship, State)],
-	Reply = do_create_attribute(Name, ?NREF_RELATIONSHIPS, Extra),
 	{reply, Reply, State};
 
 %%-----------------------------------------------------------------------------
@@ -557,6 +555,35 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 		{atomic, ok}      -> {ok, Nref};
 		{aborted, Reason} -> {error, Reason}
 	end.
+
+
+%%-----------------------------------------------------------------------------
+%% do_create_value_attribute(Name, AttrType, TypeArgs, ParentNref, State) ->
+%%     {ok, Nref} | {error, term()}
+%%
+%% Builds the attribute_type AVP (and, for literals, the literal_type
+%% AVP) from gen_server state, then writes one attribute node + taxonomy
+%% arc pair via do_create_attribute/3.  Clause heads enforce the
+%% TypeArgs contract: [] for name|relationship, [LiteralType] for
+%% literal.  Malformed args / unknown types are rejected without a write.
+%%-----------------------------------------------------------------------------
+do_create_value_attribute(Name, name, [], ParentNref, State) ->
+	Extra = [attr_type_avp(name, State)],
+	do_create_attribute(Name, ParentNref, Extra);
+do_create_value_attribute(Name, relationship, [], ParentNref, State) ->
+	Extra = [attr_type_avp(relationship, State)],
+	do_create_attribute(Name, ParentNref, Extra);
+do_create_value_attribute(Name, literal, [LiteralType], ParentNref,
+		#state{literal_type_nref = LtAttr} = State) ->
+	Extra = [#{attribute => LtAttr, value => LiteralType},
+			 attr_type_avp(literal, State)],
+	do_create_attribute(Name, ParentNref, Extra);
+do_create_value_attribute(_Name, AttrType, TypeArgs, _ParentNref, _State)
+		when AttrType =:= name; AttrType =:= literal;
+			 AttrType =:= relationship ->
+	{error, {bad_type_args, AttrType, TypeArgs}};
+do_create_value_attribute(_Name, AttrType, _TypeArgs, _ParentNref, _State) ->
+	{error, {bad_attribute_type, AttrType}}.
 
 
 %%-----------------------------------------------------------------------------
