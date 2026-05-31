@@ -72,6 +72,8 @@
 	create_relationship_attribute_pair/1,
 	create_relationship_attribute_pair_atomic/1,
 	create_relationship_attribute_rejects_bad_kind/1,
+	create_relationship_attribute_pair_under_parent/1,
+	create_relationship_attribute_pair_bad_parent/1,
 	create_relationship_type_basic/1,
 	new_attribute_writes_taxonomy_arcs/1,
 	%% Lookups
@@ -123,6 +125,8 @@ groups() ->
 			create_relationship_attribute_pair,
 			create_relationship_attribute_pair_atomic,
 			create_relationship_attribute_rejects_bad_kind,
+			create_relationship_attribute_pair_under_parent,
+			create_relationship_attribute_pair_bad_parent,
 			create_relationship_type_basic,
 			new_attribute_writes_taxonomy_arcs
 		]},
@@ -458,6 +462,49 @@ create_relationship_attribute_rejects_bad_kind(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	?assertEqual({error, {invalid_target_kind, bogus}},
 		graphdb_attr:create_relationship_attribute_pair("X", "Y", bogus)).
+
+%%-----------------------------------------------------------------------------
+%% create_relationship_attribute_pair/4 files both arc-label nodes under
+%% an explicit parent (here Instance Relationships, nref 16) instead of
+%% the default Relationships root (nref 8).
+%%-----------------------------------------------------------------------------
+create_relationship_attribute_pair_under_parent(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	NodesBefore = mnesia:table_info(nodes, size),
+	{ok, {FwdNref, RevNref}} =
+		graphdb_attr:create_relationship_attribute_pair("AppliesTo", "AppliedBy",
+			instance, ?NREF_INST_REL_ATTRS),
+	{ok, Fwd} = graphdb_attr:get_attribute(FwdNref),
+	{ok, Rev} = graphdb_attr:get_attribute(RevNref),
+	?assertEqual([?NREF_INST_REL_ATTRS], Fwd#node.parents),
+	?assertEqual([?NREF_INST_REL_ATTRS], Rev#node.parents),
+	?assertEqual(NodesBefore + 2, mnesia:table_info(nodes, size)),
+	{atomic, Out} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, ?NREF_INST_REL_ATTRS,
+			#relationship.source_nref)
+	end),
+	Inbound = [R || R <- Out,
+		R#relationship.characterization =:= ?ARC_ATTR_CHILD,
+		lists:member(R#relationship.target_nref, [FwdNref, RevNref])],
+	?assertEqual(2, length(Inbound)).
+
+%%-----------------------------------------------------------------------------
+%% A bad parent is rejected before any write: nonexistent nref yields
+%% parent_not_found; a non-attribute node (category root, nref 1) yields
+%% parent_not_attribute.  No nodes or relationships are written.
+%%-----------------------------------------------------------------------------
+create_relationship_attribute_pair_bad_parent(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	NodesBefore = mnesia:table_info(nodes, size),
+	RelsBefore  = mnesia:table_info(relationships, size),
+	?assertMatch({error, {parent_not_found, 99999999}},
+		graphdb_attr:create_relationship_attribute_pair("A", "B", instance,
+			99999999)),
+	?assertMatch({error, {parent_not_attribute, category}},
+		graphdb_attr:create_relationship_attribute_pair("A", "B", instance,
+			?NREF_ROOT)),
+	?assertEqual(NodesBefore, mnesia:table_info(nodes, size)),
+	?assertEqual(RelsBefore, mnesia:table_info(relationships, size)).
 
 %%-----------------------------------------------------------------------------
 %% create_relationship_type writes a grouping node under parent=8.

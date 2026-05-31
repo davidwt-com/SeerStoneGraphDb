@@ -122,6 +122,7 @@
 		create_literal_attribute/2,
 		create_literal_attribute/3,
 		create_relationship_attribute_pair/3,
+		create_relationship_attribute_pair/4,
 		create_relationship_type/1,
 		%% Lookups
 		get_attribute/1,
@@ -204,18 +205,29 @@ create_literal_attribute(Name, Type, ParentNref) ->
 %%     {ok, {Nref, ReciprocalNref}} | {error, term()}
 %%
 %% Creates a reciprocal pair of arc label attribute nodes under the
-%% `Relationships` subtree (nref 8).  TargetKind is one of
-%% category | attribute | class | instance and is stored as an AVP
-%% keyed by the seeded `target_kind` attribute on both nodes.  The
-%% query engine uses this annotation to route target lookups between
-%% the ontology and project (instance space).
+%% `Relationships` subtree (nref 8).  Delegates to /4 with the
+%% default parent.
 %%-----------------------------------------------------------------------------
 create_relationship_attribute_pair(Name, ReciprocalName, TargetKind) ->
+	create_relationship_attribute_pair(Name, ReciprocalName, TargetKind,
+		?NREF_RELATIONSHIPS).
+
+%%-----------------------------------------------------------------------------
+%% create_relationship_attribute_pair(Name, ReciprocalName, TargetKind,
+%%                                    ParentNref) ->
+%%     {ok, {Nref, ReciprocalNref}} | {error, term()}
+%%
+%% As /3 but files both arc-label nodes under ParentNref.  ParentNref
+%% must name an existing kind=attribute node (validated server-side);
+%% typically one of the Relationships sub-buckets (13-16) or the
+%% Relationships root (8).
+%%-----------------------------------------------------------------------------
+create_relationship_attribute_pair(Name, ReciprocalName, TargetKind, ParentNref) ->
 	case valid_target_kind(TargetKind) of
 		true ->
 			gen_server:call(?MODULE,
 				{create_relationship_attribute_pair, Name, ReciprocalName,
-					TargetKind});
+					TargetKind, ParentNref});
 		false ->
 			{error, {invalid_target_kind, TargetKind}}
 	end.
@@ -361,13 +373,19 @@ handle_call({create_literal_attribute, Name, Type, ParentNref}, _From,
 	Reply = do_create_attribute(Name, ParentNref, Extra),
 	{reply, Reply, State};
 
-handle_call({create_relationship_attribute_pair, Name, ReciprocalName, TargetKind},
+handle_call({create_relationship_attribute_pair, Name, ReciprocalName,
+		TargetKind, ParentNref},
 		_From, #state{target_kind_nref = TkAttr} = State) ->
-	Extra = [#{attribute => TkAttr, value => TargetKind},
-			 attr_type_avp(relationship, State)],
-	{reply,
-		do_create_relationship_attribute_pair(Name, ReciprocalName, Extra),
-		State};
+	Reply = case validate_parent(ParentNref) of
+		ok ->
+			Extra = [#{attribute => TkAttr, value => TargetKind},
+					 attr_type_avp(relationship, State)],
+			do_create_relationship_attribute_pair(Name, ReciprocalName, Extra,
+				ParentNref);
+		{error, _} = Err ->
+			Err
+	end,
+	{reply, Reply, State};
 
 handle_call({create_relationship_type, Name}, _From, State) ->
 	Extra = [attr_type_avp(relationship, State)],
@@ -542,16 +560,17 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
+%% do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs,
+%%                                        ParentNref) ->
 %%     {ok, {FwdNref, RevNref}} | {error, term()}
 %%
 %% Atomically creates a reciprocal pair of arc-label attribute nodes
-%% under the `Relationships` subtree (nref 8).  Both nodes plus all
-%% four taxonomy arc rows (parent->child + child->parent for each
-%% direction) are written inside a single Mnesia transaction so a
-%% mid-pair abort cannot leave the database with an orphan half-pair.
+%% under ParentNref.  Both nodes plus all four taxonomy arc rows
+%% (parent->child + child->parent for each direction) are written
+%% inside a single Mnesia transaction so a mid-pair abort cannot leave
+%% the database with an orphan half-pair.
 %%-----------------------------------------------------------------------------
-do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
+do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs, ParentNref) ->
 	FwdNref = graphdb_nref:get_next(),
 	RevNref = graphdb_nref:get_next(),
 	{Id1, Id2} = rel_id_server:get_id_pair(),
@@ -563,52 +582,34 @@ do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
 	FwdNode = #node{
 		nref = FwdNref,
 		kind = attribute,
-		parents = [?NREF_RELATIONSHIPS],
+		parents = [ParentNref],
 		attribute_value_pairs = FwdAVPs
 	},
 	RevNode = #node{
 		nref = RevNref,
 		kind = attribute,
-		parents = [?NREF_RELATIONSHIPS],
+		parents = [ParentNref],
 		attribute_value_pairs = RevAVPs
 	},
-	%% Forward node taxonomy arcs.
 	FwdP2C = #relationship{
-		id = Id1,
-		kind = taxonomy,
-		source_nref = ?NREF_RELATIONSHIPS,
-		characterization = ?ARC_ATTR_CHILD,
-		target_nref = FwdNref,
-		reciprocal = ?ARC_ATTR_PARENT,
-		avps = []
+		id = Id1, kind = taxonomy,
+		source_nref = ParentNref, characterization = ?ARC_ATTR_CHILD,
+		target_nref = FwdNref, reciprocal = ?ARC_ATTR_PARENT, avps = []
 	},
 	FwdC2P = #relationship{
-		id = Id2,
-		kind = taxonomy,
-		source_nref = FwdNref,
-		characterization = ?ARC_ATTR_PARENT,
-		target_nref = ?NREF_RELATIONSHIPS,
-		reciprocal = ?ARC_ATTR_CHILD,
-		avps = []
+		id = Id2, kind = taxonomy,
+		source_nref = FwdNref, characterization = ?ARC_ATTR_PARENT,
+		target_nref = ParentNref, reciprocal = ?ARC_ATTR_CHILD, avps = []
 	},
-	%% Reciprocal node taxonomy arcs.
 	RevP2C = #relationship{
-		id = Id3,
-		kind = taxonomy,
-		source_nref = ?NREF_RELATIONSHIPS,
-		characterization = ?ARC_ATTR_CHILD,
-		target_nref = RevNref,
-		reciprocal = ?ARC_ATTR_PARENT,
-		avps = []
+		id = Id3, kind = taxonomy,
+		source_nref = ParentNref, characterization = ?ARC_ATTR_CHILD,
+		target_nref = RevNref, reciprocal = ?ARC_ATTR_PARENT, avps = []
 	},
 	RevC2P = #relationship{
-		id = Id4,
-		kind = taxonomy,
-		source_nref = RevNref,
-		characterization = ?ARC_ATTR_PARENT,
-		target_nref = ?NREF_RELATIONSHIPS,
-		reciprocal = ?ARC_ATTR_CHILD,
-		avps = []
+		id = Id4, kind = taxonomy,
+		source_nref = RevNref, characterization = ?ARC_ATTR_PARENT,
+		target_nref = ParentNref, reciprocal = ?ARC_ATTR_CHILD, avps = []
 	},
 	Txn = fun() ->
 		ok = mnesia:write(nodes, FwdNode, write),
@@ -621,6 +622,23 @@ do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
 	case mnesia:transaction(Txn) of
 		{atomic, ok}      -> {ok, {FwdNref, RevNref}};
 		{aborted, Reason} -> {error, Reason}
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% validate_parent(ParentNref) -> ok | {error, term()}
+%%
+%% Confirms ParentNref names an existing kind=attribute node.  Run
+%% inside the gen_server before any write so a bad parent consumes no
+%% nref or relationship id.  Subtree membership is intentionally NOT
+%% checked -- any attribute-kind parent is accepted, keeping the
+%% creator decoupled from the scaffold's exact shape.
+%%-----------------------------------------------------------------------------
+validate_parent(ParentNref) ->
+	case mnesia:dirty_read(nodes, ParentNref) of
+		[#node{kind = attribute}] -> ok;
+		[#node{kind = K}]         -> {error, {parent_not_attribute, K}};
+		[]                        -> {error, {parent_not_found, ParentNref}}
 	end.
 
 
