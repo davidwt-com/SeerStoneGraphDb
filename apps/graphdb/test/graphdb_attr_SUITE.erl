@@ -401,7 +401,7 @@ create_relationship_attribute_pair(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, #{target_kind := Tk}} = graphdb_attr:seeded_nrefs(),
 	{ok, {FwdNref, RevNref}} =
-		graphdb_attr:create_relationship_attribute("Makes", "MadeBy", class),
+		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", class),
 	?assertNotEqual(FwdNref, RevNref),
 
 	{ok, Fwd} = graphdb_attr:get_attribute(FwdNref),
@@ -428,7 +428,7 @@ create_relationship_attribute_pair_atomic(_Config) ->
 	NodesBefore = mnesia:table_info(nodes, size),
 	RelsBefore  = mnesia:table_info(relationships, size),
 	{ok, {FwdNref, RevNref}} =
-		graphdb_attr:create_relationship_attribute("Owns", "OwnedBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Owns", "OwnedBy", instance),
 	?assertEqual(NodesBefore + 2, mnesia:table_info(nodes, size)),
 	?assertEqual(RelsBefore  + 4, mnesia:table_info(relationships, size)),
 
@@ -457,7 +457,7 @@ create_relationship_attribute_pair_atomic(_Config) ->
 create_relationship_attribute_rejects_bad_kind(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	?assertEqual({error, {invalid_target_kind, bogus}},
-		graphdb_attr:create_relationship_attribute("X", "Y", bogus)).
+		graphdb_attr:create_relationship_attribute_pair("X", "Y", bogus)).
 
 %%-----------------------------------------------------------------------------
 %% create_relationship_type writes a grouping node under parent=8.
@@ -634,7 +634,7 @@ create_relationship_stamps_attribute_type(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
 	{ok, {FwdNref, RevNref}} =
-		graphdb_attr:create_relationship_attribute("Drives", "DrivenBy",
+		graphdb_attr:create_relationship_attribute_pair("Drives", "DrivenBy",
 			instance),
 	{ok, Fwd} = graphdb_attr:get_attribute(FwdNref),
 	{ok, Rev} = graphdb_attr:get_attribute(RevNref),
@@ -664,7 +664,7 @@ attribute_type_of_returns_kind(_Config) ->
 	{ok, NameNref} = graphdb_attr:create_name_attribute("AnyName"),
 	{ok, LitNref}  = graphdb_attr:create_literal_attribute("Mass", grams),
 	{ok, {FwdNref, _}} =
-		graphdb_attr:create_relationship_attribute("Owns", "OwnedBy",
+		graphdb_attr:create_relationship_attribute_pair("Owns", "OwnedBy",
 			instance),
 	{ok, BucketNref} = graphdb_attr:create_relationship_type("Custodial"),
 

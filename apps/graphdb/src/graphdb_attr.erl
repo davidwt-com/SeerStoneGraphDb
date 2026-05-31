@@ -37,7 +37,7 @@
 %% Rev A Date: April 2026 Author: (completion of Dallas Noyes's design)
 %% Initial implementation: attribute library over Mnesia.  Provides
 %% create_name_attribute/1, create_literal_attribute/2,
-%% create_relationship_attribute/3, create_relationship_type/1,
+%% create_relationship_attribute_pair/3, create_relationship_type/1,
 %% get_attribute/1, list_attributes/0, list_relationship_types/0.
 %% Seeds literal_type, target_kind, and relationship_avp at init.
 %%---------------------------------------------------------------------
@@ -121,7 +121,7 @@
 		create_name_attribute/1,
 		create_literal_attribute/2,
 		create_literal_attribute/3,
-		create_relationship_attribute/3,
+		create_relationship_attribute_pair/3,
 		create_relationship_type/1,
 		%% Lookups
 		get_attribute/1,
@@ -200,7 +200,7 @@ create_literal_attribute(Name, Type, ParentNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% create_relationship_attribute(Name, ReciprocalName, TargetKind) ->
+%% create_relationship_attribute_pair(Name, ReciprocalName, TargetKind) ->
 %%     {ok, {Nref, ReciprocalNref}} | {error, term()}
 %%
 %% Creates a reciprocal pair of arc label attribute nodes under the
@@ -210,11 +210,12 @@ create_literal_attribute(Name, Type, ParentNref) ->
 %% query engine uses this annotation to route target lookups between
 %% the ontology and project (instance space).
 %%-----------------------------------------------------------------------------
-create_relationship_attribute(Name, ReciprocalName, TargetKind) ->
+create_relationship_attribute_pair(Name, ReciprocalName, TargetKind) ->
 	case valid_target_kind(TargetKind) of
 		true ->
 			gen_server:call(?MODULE,
-				{create_relationship_attribute, Name, ReciprocalName, TargetKind});
+				{create_relationship_attribute_pair, Name, ReciprocalName,
+					TargetKind});
 		false ->
 			{error, {invalid_target_kind, TargetKind}}
 	end.
@@ -360,7 +361,7 @@ handle_call({create_literal_attribute, Name, Type, ParentNref}, _From,
 	Reply = do_create_attribute(Name, ParentNref, Extra),
 	{reply, Reply, State};
 
-handle_call({create_relationship_attribute, Name, ReciprocalName, TargetKind},
+handle_call({create_relationship_attribute_pair, Name, ReciprocalName, TargetKind},
 		_From, #state{target_kind_nref = TkAttr} = State) ->
 	Extra = [#{attribute => TkAttr, value => TargetKind},
 			 attr_type_avp(relationship, State)],

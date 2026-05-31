@@ -412,7 +412,7 @@ add_relationship_basic(_Config) ->
 	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
 	%% Create a relationship attribute pair for testing
 	{ok, {MakesNref, MadeByNref}} =
-		graphdb_attr:create_relationship_attribute("Makes", "MadeBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", instance),
 	RelsBefore = mnesia:table_info(relationships, size),
 	ok = graphdb_instance:add_relationship(A, MakesNref, B, MadeByNref),
 	RelsAfter = mnesia:table_info(relationships, size),
@@ -426,7 +426,7 @@ add_relationship_both_directions(_Config) ->
 	{ok, Ford} = graphdb_instance:create_instance("Ford", ClassNref, 5),
 	{ok, Taurus} = graphdb_instance:create_instance("Taurus", ClassNref, 5),
 	{ok, {MakesNref, MadeByNref}} =
-		graphdb_attr:create_relationship_attribute("Makes", "MadeBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", instance),
 	ok = graphdb_instance:add_relationship(Ford, MakesNref, Taurus, MadeByNref),
 
 	%% Ford -> Taurus (char=Makes, reciprocal=MadeBy)
@@ -459,7 +459,7 @@ add_relationship_stamps_template_avp(_Config) ->
 	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
 	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
 
 	{atomic, ARels} = mnesia:transaction(fun() ->
@@ -481,7 +481,7 @@ add_relationship_explicit_template(_Config) ->
 	{ok, A} = graphdb_instance:create_instance("Alice", ClassNref, 5),
 	{ok, B} = graphdb_instance:create_instance("Bob", ClassNref, 5),
 	{ok, {Char, Recip}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	ok = graphdb_instance:add_relationship(A, Char, B, Recip, AltTmpl),
 
 	{atomic, ARels} = mnesia:transaction(fun() ->
@@ -501,7 +501,7 @@ add_relationship_rejects_non_template_nref(_Config) ->
 	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
 	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	%% ClassNref is a class, not a template
 	?assertMatch({error, {invalid_template, _, not_a_template}},
 		graphdb_instance:add_relationship(A, Char, B, Recip, ClassNref)).
@@ -517,7 +517,7 @@ add_relationship_rejects_template_out_of_ancestry(_Config) ->
 	{ok, A} = graphdb_instance:create_instance("Cat", AnimalCls, 5),
 	{ok, B} = graphdb_instance:create_instance("Dog", AnimalCls, 5),
 	{ok, {Char, Recip}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertMatch({error, {template_class_not_in_ancestry, _, _, _, _}},
 		graphdb_instance:add_relationship(A, Char, B, Recip, VehTmpl)).
 
@@ -531,7 +531,7 @@ add_relationship_no_default_after_delete(_Config) ->
 	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
 	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	{atomic, ok} = mnesia:transaction(fun() ->
 		mnesia:delete({nodes, DefaultTmpl})
 	end),
@@ -545,7 +545,7 @@ add_relationship_rejects_missing_source(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
 	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertEqual({error, {source_not_found, 99999}},
 		graphdb_instance:add_relationship(99999, Char, B, Recip)).
 
@@ -556,7 +556,7 @@ add_relationship_rejects_missing_target(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
 	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
 	{ok, {Char, Recip}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertEqual({error, {target_not_found, 99999}},
 		graphdb_instance:add_relationship(A, Char, 99999, Recip)).
 
@@ -569,7 +569,7 @@ add_relationship_rejects_non_attribute_char(_Config) ->
 	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
 	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {_Char, Recip}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertMatch({error, {characterization_not_an_attribute, 5, category}},
 		graphdb_instance:add_relationship(A, 5, B, Recip)).
 
@@ -581,7 +581,7 @@ add_relationship_rejects_non_attribute_reciprocal(_Config) ->
 	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
 	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, _Recip}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertMatch({error, {reciprocal_not_an_attribute, 5, category}},
 		graphdb_instance:add_relationship(A, Char, B, 5)).
 
@@ -596,7 +596,7 @@ add_relationship_rejects_target_kind_mismatch(_Config) ->
 	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
 	%% target_kind=class, but B is an instance
 	{ok, {Char, Recip}} =
-		graphdb_attr:create_relationship_attribute("Has", "HeldBy", class),
+		graphdb_attr:create_relationship_attribute_pair("Has", "HeldBy", class),
 	?assertEqual({error, {target_kind_mismatch, class, instance}},
 		graphdb_instance:add_relationship(A, Char, B, Recip)).
 
@@ -612,7 +612,7 @@ add_relationship_stamps_user_avps(_Config) ->
 	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
 	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	{ok, Confidence} = graphdb_attr:create_literal_attribute("confidence", float),
 	UserAVP = #{attribute => Confidence, value => 0.95},
 	ok = graphdb_instance:add_relationship(A, Char, B, Recip, DefaultTmpl,
@@ -639,7 +639,7 @@ add_relationship_avps_are_per_direction(_Config) ->
 	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
 	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	{ok, Source}     = graphdb_attr:create_literal_attribute("source",  string),
 	{ok, Confidence} = graphdb_attr:create_literal_attribute("conf",    float),
 	FwdOnly = #{attribute => Source,     value => "research-paper"},
@@ -675,7 +675,7 @@ add_relationship_default_avps_empty(_Config) ->
 	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
 	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
 
 	{atomic, ARels} = mnesia:transaction(fun() ->
@@ -823,7 +823,7 @@ resolve_value_from_connected(_Config) ->
 	set_avp(Ford, TestAttr, "USA"),
 	{ok, Taurus} = graphdb_instance:create_instance("Taurus", ClassNref, 5),
 	{ok, {MakesNref, MadeByNref}} =
-		graphdb_attr:create_relationship_attribute("Makes", "MadeBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", instance),
 	ok = graphdb_instance:add_relationship(Taurus, MadeByNref, Ford, MakesNref),
 	%% Taurus doesn't have country, its class doesn't, no ancestors have it
 	%% — resolved from connected Ford
@@ -878,7 +878,7 @@ resolve_value_priority_ancestor_over_connected(_Config) ->
 	{ok, Peer} = graphdb_instance:create_instance("Peer", ClassNref, 5),
 	set_avp(Peer, TestAttr, "peer_region"),
 	{ok, {LinksNref, LinkedByNref}} =
-		graphdb_attr:create_relationship_attribute("Links", "LinkedBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Links", "LinkedBy", instance),
 	ok = graphdb_instance:add_relationship(Child, LinksNref, Peer, LinkedByNref),
 	%% Child has no local value, class has no value
 	%% Ancestor Parent (priority 3) should win over connected Peer (priority 4)
@@ -990,7 +990,7 @@ resolve_value_source_connected(_Config) ->
 	{ok, Taurus}    = graphdb_instance:create_instance(
 						"Taurus", ClassNref, ?NREF_PROJECTS),
 	{ok, {MakesNref, MadeByNref}} =
-		graphdb_attr:create_relationship_attribute("Makes", "MadeBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", instance),
 	ok = graphdb_instance:add_relationship(Taurus, MadeByNref, Ford, MakesNref),
 	?assertEqual({ok, "USA", {connected, Ford}},
 		graphdb_instance:resolve_value(Taurus, TestAttr)).
