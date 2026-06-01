@@ -37,7 +37,7 @@
 %% Rev A Date: April 2026 Author: (completion of Dallas Noyes's design)
 %% Initial implementation: attribute library over Mnesia.  Provides
 %% create_name_attribute/1, create_literal_attribute/2,
-%% create_relationship_attribute/3, create_relationship_type/1,
+%% create_relationship_attribute_pair/3, create_relationship_type/1,
 %% get_attribute/1, list_attributes/0, list_relationship_types/0.
 %% Seeds literal_type, target_kind, and relationship_avp at init.
 %%---------------------------------------------------------------------
@@ -118,11 +118,15 @@
 -export([
 		start_link/0,
 		%% Creators
+		create_value_attribute/4,
 		create_name_attribute/1,
+		create_name_attribute/2,
 		create_literal_attribute/2,
 		create_literal_attribute/3,
-		create_relationship_attribute/3,
+		create_relationship_attribute_pair/3,
+		create_relationship_attribute_pair/4,
 		create_relationship_type/1,
+		create_relationship_type/2,
 		%% Lookups
 		get_attribute/1,
 		list_attributes/0,
@@ -166,69 +170,82 @@ start_link() ->
 
 
 %%-----------------------------------------------------------------------------
-%% create_name_attribute(Name) -> {ok, Nref} | {error, term()}
+%% create_value_attribute(Name, AttrType, TypeArgs, ParentNref) ->
+%%     {ok, Nref} | {error, term()}
 %%
-%% Creates a new name attribute node under the `Names` subtree (nref 6).
-%% A name attribute is an attribute-kind node whose value is a human-
-%% readable name.
+%% Canonical single-node attribute creator.  AttrType is one of
+%% name | literal | relationship.  TypeArgs is interpreted per AttrType:
+%% [] for name and relationship; [LiteralType] for literal (the literal
+%% value-type atom, stamped under the seeded `literal_type` attribute).
+%% ParentNref must name an existing kind=attribute node.
+%%-----------------------------------------------------------------------------
+create_value_attribute(Name, AttrType, TypeArgs, ParentNref) ->
+	gen_server:call(?MODULE,
+		{create_value_attribute, Name, AttrType, TypeArgs, ParentNref}).
+
+%%-----------------------------------------------------------------------------
+%% create_name_attribute(Name)            -> default parent ?NREF_NAMES (6)
+%% create_name_attribute(Name, ParentNref)
 %%-----------------------------------------------------------------------------
 create_name_attribute(Name) ->
-	gen_server:call(?MODULE, {create_name_attribute, Name}).
+	create_value_attribute(Name, name, [], ?NREF_NAMES).
 
+create_name_attribute(Name, ParentNref) ->
+	create_value_attribute(Name, name, [], ParentNref).
 
 %%-----------------------------------------------------------------------------
-%% create_literal_attribute(Name, Type) -> {ok, Nref} | {error, term()}
-%%
-%% Creates a new literal attribute node under the `Literals` subtree
-%% (nref 7).  Equivalent to create_literal_attribute(Name, Type, ?NREF_LITERALS).
+%% create_literal_attribute(Name, Type)             -> default ?NREF_LITERALS (7)
+%% create_literal_attribute(Name, Type, ParentNref)
 %%-----------------------------------------------------------------------------
 create_literal_attribute(Name, Type) ->
-	create_literal_attribute(Name, Type, ?NREF_LITERALS).
+	create_value_attribute(Name, literal, [Type], ?NREF_LITERALS).
 
-%%-----------------------------------------------------------------------------
-%% create_literal_attribute(Name, Type, ParentNref) -> {ok, Nref} | {error, term()}
-%%
-%% Creates a new literal attribute node under ParentNref.  ParentNref
-%% must be an attribute-kind node within the Literals subtree (or
-%% ?NREF_LITERALS itself); the caller is responsible for that
-%% invariant.  The Type argument is stored as an AVP keyed by the
-%% seeded `literal_type` attribute.
-%%-----------------------------------------------------------------------------
 create_literal_attribute(Name, Type, ParentNref) ->
-	gen_server:call(?MODULE,
-		{create_literal_attribute, Name, Type, ParentNref}).
+	create_value_attribute(Name, literal, [Type], ParentNref).
 
 
 %%-----------------------------------------------------------------------------
-%% create_relationship_attribute(Name, ReciprocalName, TargetKind) ->
+%% create_relationship_attribute_pair(Name, ReciprocalName, TargetKind) ->
 %%     {ok, {Nref, ReciprocalNref}} | {error, term()}
 %%
 %% Creates a reciprocal pair of arc label attribute nodes under the
-%% `Relationships` subtree (nref 8).  TargetKind is one of
-%% category | attribute | class | instance and is stored as an AVP
-%% keyed by the seeded `target_kind` attribute on both nodes.  The
-%% query engine uses this annotation to route target lookups between
-%% the ontology and project (instance space).
+%% `Relationships` subtree (nref 8).  Delegates to /4 with the
+%% default parent.
 %%-----------------------------------------------------------------------------
-create_relationship_attribute(Name, ReciprocalName, TargetKind) ->
+create_relationship_attribute_pair(Name, ReciprocalName, TargetKind) ->
+	create_relationship_attribute_pair(Name, ReciprocalName, TargetKind,
+		?NREF_RELATIONSHIPS).
+
+%%-----------------------------------------------------------------------------
+%% create_relationship_attribute_pair(Name, ReciprocalName, TargetKind,
+%%                                    ParentNref) ->
+%%     {ok, {Nref, ReciprocalNref}} | {error, term()}
+%%
+%% As /3 but files both arc-label nodes under ParentNref.  ParentNref
+%% must name an existing kind=attribute node (validated server-side);
+%% typically one of the Relationships sub-buckets (13-16) or the
+%% Relationships root (8).
+%%-----------------------------------------------------------------------------
+create_relationship_attribute_pair(Name, ReciprocalName, TargetKind, ParentNref) ->
 	case valid_target_kind(TargetKind) of
 		true ->
 			gen_server:call(?MODULE,
-				{create_relationship_attribute, Name, ReciprocalName, TargetKind});
+				{create_relationship_attribute_pair, Name, ReciprocalName,
+					TargetKind, ParentNref});
 		false ->
 			{error, {invalid_target_kind, TargetKind}}
 	end.
 
 
 %%-----------------------------------------------------------------------------
-%% create_relationship_type(Name) -> {ok, Nref} | {error, term()}
-%%
-%% Creates a relationship-type grouping node as a direct child of the
-%% `Relationships` subtree (nref 8).  Subsequent arc labels may be
-%% placed under this grouping by a future /2 variant.
+%% create_relationship_type(Name)            -> default ?NREF_RELATIONSHIPS (8)
+%% create_relationship_type(Name, ParentNref) -- grouping/bucket node
 %%-----------------------------------------------------------------------------
 create_relationship_type(Name) ->
-	gen_server:call(?MODULE, {create_relationship_type, Name}).
+	create_value_attribute(Name, relationship, [], ?NREF_RELATIONSHIPS).
+
+create_relationship_type(Name, ParentNref) ->
+	create_value_attribute(Name, relationship, [], ParentNref).
 
 
 %%-----------------------------------------------------------------------------
@@ -348,29 +365,29 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Creators
 %%-----------------------------------------------------------------------------
-handle_call({create_name_attribute, Name}, _From, State) ->
-	Extra = [attr_type_avp(name, State)],
-	Reply = do_create_attribute(Name, ?NREF_NAMES, Extra),
+handle_call({create_value_attribute, Name, AttrType, TypeArgs, ParentNref},
+		_From, State) ->
+	Reply = case validate_parent(ParentNref) of
+		ok ->
+			do_create_value_attribute(Name, AttrType, TypeArgs, ParentNref,
+				State);
+		{error, _} = Err ->
+			Err
+	end,
 	{reply, Reply, State};
 
-handle_call({create_literal_attribute, Name, Type, ParentNref}, _From,
-		#state{literal_type_nref = TypeAttr} = State) ->
-	Extra = [#{attribute => TypeAttr, value => Type},
-			 attr_type_avp(literal, State)],
-	Reply = do_create_attribute(Name, ParentNref, Extra),
-	{reply, Reply, State};
-
-handle_call({create_relationship_attribute, Name, ReciprocalName, TargetKind},
+handle_call({create_relationship_attribute_pair, Name, ReciprocalName,
+		TargetKind, ParentNref},
 		_From, #state{target_kind_nref = TkAttr} = State) ->
-	Extra = [#{attribute => TkAttr, value => TargetKind},
-			 attr_type_avp(relationship, State)],
-	{reply,
-		do_create_relationship_attribute_pair(Name, ReciprocalName, Extra),
-		State};
-
-handle_call({create_relationship_type, Name}, _From, State) ->
-	Extra = [attr_type_avp(relationship, State)],
-	Reply = do_create_attribute(Name, ?NREF_RELATIONSHIPS, Extra),
+	Reply = case validate_parent(ParentNref) of
+		ok ->
+			Extra = [#{attribute => TkAttr, value => TargetKind},
+					 attr_type_avp(relationship, State)],
+			do_create_relationship_attribute_pair(Name, ReciprocalName, Extra,
+				ParentNref);
+		{error, _} = Err ->
+			Err
+	end,
 	{reply, Reply, State};
 
 %%-----------------------------------------------------------------------------
@@ -541,16 +558,46 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
+%% do_create_value_attribute(Name, AttrType, TypeArgs, ParentNref, State) ->
+%%     {ok, Nref} | {error, term()}
+%%
+%% Builds the attribute_type AVP (and, for literals, the literal_type
+%% AVP) from gen_server state, then writes one attribute node + taxonomy
+%% arc pair via do_create_attribute/3.  Clause heads enforce the
+%% TypeArgs contract: [] for name|relationship, [LiteralType] for
+%% literal.  Malformed args / unknown types are rejected without a write.
+%%-----------------------------------------------------------------------------
+do_create_value_attribute(Name, name, [], ParentNref, State) ->
+	Extra = [attr_type_avp(name, State)],
+	do_create_attribute(Name, ParentNref, Extra);
+do_create_value_attribute(Name, relationship, [], ParentNref, State) ->
+	Extra = [attr_type_avp(relationship, State)],
+	do_create_attribute(Name, ParentNref, Extra);
+do_create_value_attribute(Name, literal, [LiteralType], ParentNref,
+		#state{literal_type_nref = LtAttr} = State) ->
+	Extra = [#{attribute => LtAttr, value => LiteralType},
+			 attr_type_avp(literal, State)],
+	do_create_attribute(Name, ParentNref, Extra);
+do_create_value_attribute(_Name, AttrType, TypeArgs, _ParentNref, _State)
+		when AttrType =:= name; AttrType =:= literal;
+			 AttrType =:= relationship ->
+	{error, {bad_type_args, AttrType, TypeArgs}};
+do_create_value_attribute(_Name, AttrType, _TypeArgs, _ParentNref, _State) ->
+	{error, {bad_attribute_type, AttrType}}.
+
+
+%%-----------------------------------------------------------------------------
+%% do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs,
+%%                                        ParentNref) ->
 %%     {ok, {FwdNref, RevNref}} | {error, term()}
 %%
 %% Atomically creates a reciprocal pair of arc-label attribute nodes
-%% under the `Relationships` subtree (nref 8).  Both nodes plus all
-%% four taxonomy arc rows (parent->child + child->parent for each
-%% direction) are written inside a single Mnesia transaction so a
-%% mid-pair abort cannot leave the database with an orphan half-pair.
+%% under ParentNref.  Both nodes plus all four taxonomy arc rows
+%% (parent->child + child->parent for each direction) are written
+%% inside a single Mnesia transaction so a mid-pair abort cannot leave
+%% the database with an orphan half-pair.
 %%-----------------------------------------------------------------------------
-do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
+do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs, ParentNref) ->
 	FwdNref = graphdb_nref:get_next(),
 	RevNref = graphdb_nref:get_next(),
 	{Id1, Id2} = rel_id_server:get_id_pair(),
@@ -562,52 +609,34 @@ do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
 	FwdNode = #node{
 		nref = FwdNref,
 		kind = attribute,
-		parents = [?NREF_RELATIONSHIPS],
+		parents = [ParentNref],
 		attribute_value_pairs = FwdAVPs
 	},
 	RevNode = #node{
 		nref = RevNref,
 		kind = attribute,
-		parents = [?NREF_RELATIONSHIPS],
+		parents = [ParentNref],
 		attribute_value_pairs = RevAVPs
 	},
-	%% Forward node taxonomy arcs.
 	FwdP2C = #relationship{
-		id = Id1,
-		kind = taxonomy,
-		source_nref = ?NREF_RELATIONSHIPS,
-		characterization = ?ARC_ATTR_CHILD,
-		target_nref = FwdNref,
-		reciprocal = ?ARC_ATTR_PARENT,
-		avps = []
+		id = Id1, kind = taxonomy,
+		source_nref = ParentNref, characterization = ?ARC_ATTR_CHILD,
+		target_nref = FwdNref, reciprocal = ?ARC_ATTR_PARENT, avps = []
 	},
 	FwdC2P = #relationship{
-		id = Id2,
-		kind = taxonomy,
-		source_nref = FwdNref,
-		characterization = ?ARC_ATTR_PARENT,
-		target_nref = ?NREF_RELATIONSHIPS,
-		reciprocal = ?ARC_ATTR_CHILD,
-		avps = []
+		id = Id2, kind = taxonomy,
+		source_nref = FwdNref, characterization = ?ARC_ATTR_PARENT,
+		target_nref = ParentNref, reciprocal = ?ARC_ATTR_CHILD, avps = []
 	},
-	%% Reciprocal node taxonomy arcs.
 	RevP2C = #relationship{
-		id = Id3,
-		kind = taxonomy,
-		source_nref = ?NREF_RELATIONSHIPS,
-		characterization = ?ARC_ATTR_CHILD,
-		target_nref = RevNref,
-		reciprocal = ?ARC_ATTR_PARENT,
-		avps = []
+		id = Id3, kind = taxonomy,
+		source_nref = ParentNref, characterization = ?ARC_ATTR_CHILD,
+		target_nref = RevNref, reciprocal = ?ARC_ATTR_PARENT, avps = []
 	},
 	RevC2P = #relationship{
-		id = Id4,
-		kind = taxonomy,
-		source_nref = RevNref,
-		characterization = ?ARC_ATTR_PARENT,
-		target_nref = ?NREF_RELATIONSHIPS,
-		reciprocal = ?ARC_ATTR_CHILD,
-		avps = []
+		id = Id4, kind = taxonomy,
+		source_nref = RevNref, characterization = ?ARC_ATTR_PARENT,
+		target_nref = ParentNref, reciprocal = ?ARC_ATTR_CHILD, avps = []
 	},
 	Txn = fun() ->
 		ok = mnesia:write(nodes, FwdNode, write),
@@ -620,6 +649,23 @@ do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs) ->
 	case mnesia:transaction(Txn) of
 		{atomic, ok}      -> {ok, {FwdNref, RevNref}};
 		{aborted, Reason} -> {error, Reason}
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% validate_parent(ParentNref) -> ok | {error, term()}
+%%
+%% Confirms ParentNref names an existing kind=attribute node.  Run
+%% inside the gen_server before any write so a bad parent consumes no
+%% nref or relationship id.  Subtree membership is intentionally NOT
+%% checked -- any attribute-kind parent is accepted, keeping the
+%% creator decoupled from the scaffold's exact shape.
+%%-----------------------------------------------------------------------------
+validate_parent(ParentNref) ->
+	case mnesia:dirty_read(nodes, ParentNref) of
+		[#node{kind = attribute}] -> ok;
+		[#node{kind = K}]         -> {error, {parent_not_attribute, K}};
+		[]                        -> {error, {parent_not_found, ParentNref}}
 	end.
 
 

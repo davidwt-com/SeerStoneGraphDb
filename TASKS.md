@@ -825,6 +825,21 @@ Clean-slate seeding; no runtime migration code.
 
 ---
 
+### L8. Generalize `graphdb_attr` attribute placement — **RESOLVED** (2026-05-31)
+
+Parent nref is now a first-class, validated argument on every
+`graphdb_attr` creator. Canonical general creators
+`create_value_attribute/4` (single node) and
+`create_relationship_attribute_pair/4` (reciprocal pair) back thin named
+wrappers that preserve the default parents (6/7/8). `validate_parent/1`
+rejects a non-existent or non-`attribute` parent before any write.
+`create_relationship_attribute` renamed to
+`create_relationship_attribute_pair`. Design at
+`docs/designs/l8-graphdb-attr-placement-design.md`. Removes the F4 §10.1
+P1 placement blocker by construction.
+
+---
+
 ### Task 7. Wire `dictionary_server` and `term_server` to `dictionary_imp` — **RESOLVED** (2026-05-19)
 
 Both gen_servers delegate to `dictionary_imp` via `start_dictionary/stop_dictionary`

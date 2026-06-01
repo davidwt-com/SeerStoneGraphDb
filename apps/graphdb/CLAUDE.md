@@ -230,11 +230,12 @@ Loaded by `graphdb_mgr:init/1` when the Mnesia `nodes` table is empty (first sta
 Maintains all named attribute concepts used as arc labels. All attribute nodes live in
 the ontology `nodes` Mnesia table with `kind = attribute`.
 
-- `create_name_attribute/1` (name)
-- `create_literal_attribute/2` (name, type) — defaults parent to nref 7 (Literals)
-- `create_literal_attribute/3` (name, type, parent_nref) — explicit parent for sub-group seeding
-- `create_relationship_attribute/3` (name, reciprocal_name, target_kind) — `target_kind :: category | attribute | class | instance` is mandatory; stored as an AVP on the arc label node and used by the query engine to route target lookups to the correct database
-- `create_relationship_type/1`
+- `create_value_attribute/4` (name, attr_type, type_args, parent_nref) — canonical single-node creator; `attr_type :: name | literal | relationship`, `type_args` = `[]` for name/relationship, `[LiteralType]` for literal
+- `create_name_attribute/1,2` (name [, parent_nref]) — defaults parent to nref 6 (Names)
+- `create_literal_attribute/2,3` (name, type [, parent_nref]) — defaults parent to nref 7 (Literals)
+- `create_relationship_type/1,2` (name [, parent_nref]) — single-node grouping; defaults parent to nref 8 (Relationships)
+- `create_relationship_attribute_pair/3,4` (name, reciprocal_name, target_kind [, parent_nref]) — reciprocal arc-label pair; `target_kind :: category | attribute | class | instance`; defaults parent to nref 8
+- All creators validate `parent_nref` (must be an existing `kind=attribute` node)
 - `get_attribute/1`, `list_attributes/0`, `list_relationship_types/0`
 - At bootstrap: seeds the `Attribute Literals` sub-group under the `Literals` subtree (nref 7), then seeds `literal_type`, `target_kind`, `relationship_avp`, and `attribute_type` literal attributes as children of that sub-group. Also stamps the `relationship_avp` marker AVP on the bootstrap Template node and retro-stamps `attribute_type` AVPs across the Attributes subtree.
 

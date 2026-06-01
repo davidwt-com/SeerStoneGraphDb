@@ -301,8 +301,16 @@ determines routing:
 
 `target_kind :: category | attribute | class | instance` is stored as a
 literal AVP on every arc-label attribute node. Built-in arc labels
-(nrefs 21–30) carry it; `graphdb_attr:create_relationship_attribute/3`
+(nrefs 21–30) carry it; `graphdb_attr:create_relationship_attribute_pair/4`
 requires it for runtime additions.
+
+Every `graphdb_attr` creator takes an explicit, validated `ParentNref`
+(must name an existing `kind=attribute` node); the named functions
+(`create_name_attribute`, `create_literal_attribute`,
+`create_relationship_type`, `create_relationship_attribute_pair`) are thin
+wrappers over the canonical `create_value_attribute/4` (single node) and
+`create_relationship_attribute_pair/4` (reciprocal pair), defaulting the
+parent to the appropriate scaffold subtree (6/7/8) when omitted.
 
 ### The `Projects` node (nref 5)
 

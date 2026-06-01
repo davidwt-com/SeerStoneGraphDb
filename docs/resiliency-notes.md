@@ -54,9 +54,12 @@ brainstorm but never answered. Most are smaller than (A)-vs-(B):
   Three candidates from the F4 Phase A pinned question (P1) are
   still live: (a) Relationships > Instance Relationships, (b) a new
   Rule Relationships sub-group, (c) under Classes.
-- **R2b.** Should `create_relationship_attribute/3` be fixed to honor
+- **R2b.** ~~Should `create_relationship_attribute/3` be fixed to honor
   kind sub-categories (13–16) instead of dropping new arc-labels
-  directly under nref 8?
+  directly under nref 8?~~ **Resolved by L8 (2026-05-31):**
+  `create_relationship_attribute_pair/4` takes an explicit, validated
+  `ParentNref`, so arc-labels can be filed under nref 13–16 (or any
+  attribute parent); the `/3` arity keeps the nref-8 default.
 - **R3.** Default Templates — show them in `ontology-tree.md`?
   Currently no Templates exist at end of bootstrap, so the diagram
   is clean. Decision pending first runtime Template seed.

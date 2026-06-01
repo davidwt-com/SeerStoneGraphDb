@@ -572,7 +572,7 @@ add_relationship_delegates(_Config) ->
 	{ok, InstB} = graphdb_instance:create_instance("B", ClassNref, 5),
 	%% Create a reciprocal relationship attribute pair (char/reciprocal nrefs)
 	{ok, {CharNref, RecipNref}} =
-		graphdb_attr:create_relationship_attribute("Knows", "KnownBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	%% Delegate through mgr
 	?assertEqual(ok,
 		graphdb_mgr:add_relationship(InstA, CharNref, InstB, RecipNref)),

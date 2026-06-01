@@ -578,7 +578,7 @@ q4_outgoing_and_incoming_connections(_Config) ->
                        "Taurus", Veh, ?NREF_PROJECTS),
     %% create_relationship_attribute/3 atomically creates BOTH directions
     %% in one call and returns {ok, {FwdNref, RevNref}}.
-    {ok, {MakesA, MadeByA}} = graphdb_attr:create_relationship_attribute(
+    {ok, {MakesA, MadeByA}} = graphdb_attr:create_relationship_attribute_pair(
                                   "makes", "made_by", instance),
     ok = graphdb_instance:add_relationship(Ford, MakesA, Tau, MadeByA),
     {ok, R} = graphdb_query:execute_query(

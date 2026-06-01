@@ -570,7 +570,7 @@ rebuild_one(Nref) ->
 %%
 %%   Relationships subtree (8, 13-16):
 %%     If AVPs contains both reciprocal_name and target_kind:
-%%       create_relationship_attribute(Name, RecipName, TargetKind)
+%%       create_relationship_attribute_pair(Name, RecipName, TargetKind)
 %%         -> {ok, {FwdNref, RevNref}} -- the forward nref is returned
 %%     If AVPs contains neither (relationship-type grouping):
 %%       create_relationship_type(Name) -> {ok, Nref}
@@ -598,7 +598,7 @@ do_create_attribute(Name, ParentNref, AVPs)
 		     ParentNref =:= 15; ParentNref =:= 16 ->
 	case {maps:find(reciprocal_name, AVPs), maps:find(target_kind, AVPs)} of
 		{{ok, RecipName}, {ok, TargetKind}} ->
-			case graphdb_attr:create_relationship_attribute(Name, RecipName, TargetKind) of
+			case graphdb_attr:create_relationship_attribute_pair(Name, RecipName, TargetKind) of
 				{ok, {FwdNref, _RevNref}} -> {ok, FwdNref};
 				{error, _} = Err          -> Err
 			end;

@@ -72,8 +72,14 @@
 	create_relationship_attribute_pair/1,
 	create_relationship_attribute_pair_atomic/1,
 	create_relationship_attribute_rejects_bad_kind/1,
+	create_relationship_attribute_pair_under_parent/1,
+	create_relationship_attribute_pair_bad_parent/1,
 	create_relationship_type_basic/1,
 	new_attribute_writes_taxonomy_arcs/1,
+	create_value_attribute_under_parent/1,
+	create_value_attribute_bad_args/1,
+	named_wrappers_take_explicit_parent/1,
+	default_wrappers_preserve_parents/1,
 	%% Lookups
 	get_attribute_returns_node/1,
 	get_attribute_not_found/1,
@@ -123,8 +129,14 @@ groups() ->
 			create_relationship_attribute_pair,
 			create_relationship_attribute_pair_atomic,
 			create_relationship_attribute_rejects_bad_kind,
+			create_relationship_attribute_pair_under_parent,
+			create_relationship_attribute_pair_bad_parent,
 			create_relationship_type_basic,
-			new_attribute_writes_taxonomy_arcs
+			new_attribute_writes_taxonomy_arcs,
+			create_value_attribute_under_parent,
+			create_value_attribute_bad_args,
+			named_wrappers_take_explicit_parent,
+			default_wrappers_preserve_parents
 		]},
 		{lookups, [], [
 			get_attribute_returns_node,
@@ -401,7 +413,7 @@ create_relationship_attribute_pair(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, #{target_kind := Tk}} = graphdb_attr:seeded_nrefs(),
 	{ok, {FwdNref, RevNref}} =
-		graphdb_attr:create_relationship_attribute("Makes", "MadeBy", class),
+		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", class),
 	?assertNotEqual(FwdNref, RevNref),
 
 	{ok, Fwd} = graphdb_attr:get_attribute(FwdNref),
@@ -428,7 +440,7 @@ create_relationship_attribute_pair_atomic(_Config) ->
 	NodesBefore = mnesia:table_info(nodes, size),
 	RelsBefore  = mnesia:table_info(relationships, size),
 	{ok, {FwdNref, RevNref}} =
-		graphdb_attr:create_relationship_attribute("Owns", "OwnedBy", instance),
+		graphdb_attr:create_relationship_attribute_pair("Owns", "OwnedBy", instance),
 	?assertEqual(NodesBefore + 2, mnesia:table_info(nodes, size)),
 	?assertEqual(RelsBefore  + 4, mnesia:table_info(relationships, size)),
 
@@ -457,7 +469,50 @@ create_relationship_attribute_pair_atomic(_Config) ->
 create_relationship_attribute_rejects_bad_kind(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	?assertEqual({error, {invalid_target_kind, bogus}},
-		graphdb_attr:create_relationship_attribute("X", "Y", bogus)).
+		graphdb_attr:create_relationship_attribute_pair("X", "Y", bogus)).
+
+%%-----------------------------------------------------------------------------
+%% create_relationship_attribute_pair/4 files both arc-label nodes under
+%% an explicit parent (here Instance Relationships, nref 16) instead of
+%% the default Relationships root (nref 8).
+%%-----------------------------------------------------------------------------
+create_relationship_attribute_pair_under_parent(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	NodesBefore = mnesia:table_info(nodes, size),
+	{ok, {FwdNref, RevNref}} =
+		graphdb_attr:create_relationship_attribute_pair("AppliesTo", "AppliedBy",
+			instance, ?NREF_INST_REL_ATTRS),
+	{ok, Fwd} = graphdb_attr:get_attribute(FwdNref),
+	{ok, Rev} = graphdb_attr:get_attribute(RevNref),
+	?assertEqual([?NREF_INST_REL_ATTRS], Fwd#node.parents),
+	?assertEqual([?NREF_INST_REL_ATTRS], Rev#node.parents),
+	?assertEqual(NodesBefore + 2, mnesia:table_info(nodes, size)),
+	{atomic, Out} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, ?NREF_INST_REL_ATTRS,
+			#relationship.source_nref)
+	end),
+	Inbound = [R || R <- Out,
+		R#relationship.characterization =:= ?ARC_ATTR_CHILD,
+		lists:member(R#relationship.target_nref, [FwdNref, RevNref])],
+	?assertEqual(2, length(Inbound)).
+
+%%-----------------------------------------------------------------------------
+%% A bad parent is rejected before any write: nonexistent nref yields
+%% parent_not_found; a non-attribute node (category root, nref 1) yields
+%% parent_not_attribute.  No nodes or relationships are written.
+%%-----------------------------------------------------------------------------
+create_relationship_attribute_pair_bad_parent(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	NodesBefore = mnesia:table_info(nodes, size),
+	RelsBefore  = mnesia:table_info(relationships, size),
+	?assertMatch({error, {parent_not_found, 99999999}},
+		graphdb_attr:create_relationship_attribute_pair("A", "B", instance,
+			99999999)),
+	?assertMatch({error, {parent_not_attribute, category}},
+		graphdb_attr:create_relationship_attribute_pair("A", "B", instance,
+			?NREF_ROOT)),
+	?assertEqual(NodesBefore, mnesia:table_info(nodes, size)),
+	?assertEqual(RelsBefore, mnesia:table_info(relationships, size)).
 
 %%-----------------------------------------------------------------------------
 %% create_relationship_type writes a grouping node under parent=8.
@@ -501,6 +556,70 @@ new_attribute_writes_taxonomy_arcs(_Config) ->
 		R#relationship.characterization =:= ?ARC_ATTR_PARENT andalso
 		R#relationship.reciprocal =:= ?ARC_ATTR_CHILD
 	end, ChildOut)).
+
+
+%%-----------------------------------------------------------------------------
+%% create_value_attribute/4 files a single attribute node under an
+%% explicit parent and stamps the attribute_type AVP.
+%%-----------------------------------------------------------------------------
+create_value_attribute_under_parent(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
+	{ok, Nref} =
+		graphdb_attr:create_value_attribute("CatName", name, [],
+			?NREF_CAT_NAME_ATTRS),
+	{ok, Node} = graphdb_attr:get_attribute(Nref),
+	?assertEqual([?NREF_CAT_NAME_ATTRS], Node#node.parents),
+	?assert(lists:member(#{attribute => ?NAME_ATTR_ATTRIBUTE, value => "CatName"},
+		Node#node.attribute_value_pairs)),
+	?assert(lists:member(#{attribute => At, value => name},
+		Node#node.attribute_value_pairs)).
+
+%%-----------------------------------------------------------------------------
+%% A literal carries exactly one type arg; name/relationship carry none.
+%% Wrong TypeArgs for a known AttrType is bad_type_args; an unknown
+%% AttrType is bad_attribute_type.  Neither writes a node.
+%%-----------------------------------------------------------------------------
+create_value_attribute_bad_args(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	NodesBefore = mnesia:table_info(nodes, size),
+	?assertMatch({error, {bad_type_args, name, [junk]}},
+		graphdb_attr:create_value_attribute("X", name, [junk], ?NREF_NAMES)),
+	?assertMatch({error, {bad_type_args, literal, []}},
+		graphdb_attr:create_value_attribute("X", literal, [], ?NREF_LITERALS)),
+	?assertMatch({error, {bad_attribute_type, frob}},
+		graphdb_attr:create_value_attribute("X", frob, [], ?NREF_NAMES)),
+	?assertEqual(NodesBefore, mnesia:table_info(nodes, size)).
+
+%%-----------------------------------------------------------------------------
+%% create_name_attribute/2 and create_relationship_type/2 honour an
+%% explicit parent; the /1 wrappers still default to 6 and 8.
+%%-----------------------------------------------------------------------------
+named_wrappers_take_explicit_parent(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, NameNref} =
+		graphdb_attr:create_name_attribute("ClsName", ?NREF_CLS_NAME_ATTRS),
+	{ok, NameNode} = graphdb_attr:get_attribute(NameNref),
+	?assertEqual([?NREF_CLS_NAME_ATTRS], NameNode#node.parents),
+	{ok, GrpNref} =
+		graphdb_attr:create_relationship_type("Kinship", ?NREF_INST_REL_ATTRS),
+	{ok, GrpNode} = graphdb_attr:get_attribute(GrpNref),
+	?assertEqual([?NREF_INST_REL_ATTRS], GrpNode#node.parents).
+
+%%-----------------------------------------------------------------------------
+%% Back-compat: the original wrappers still default to 6 / 7 / 8.
+%%-----------------------------------------------------------------------------
+default_wrappers_preserve_parents(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, N6} = graphdb_attr:create_name_attribute("Plain"),
+	{ok, N7} = graphdb_attr:create_literal_attribute("Mass", kilogram),
+	{ok, N8} = graphdb_attr:create_relationship_type("Assoc"),
+	{ok, Node6} = graphdb_attr:get_attribute(N6),
+	{ok, Node7} = graphdb_attr:get_attribute(N7),
+	{ok, Node8} = graphdb_attr:get_attribute(N8),
+	?assertEqual([?NREF_NAMES],         Node6#node.parents),
+	?assertEqual([?NREF_LITERALS],      Node7#node.parents),
+	?assertEqual([?NREF_RELATIONSHIPS], Node8#node.parents).
 
 
 %%-----------------------------------------------------------------------------
@@ -634,7 +753,7 @@ create_relationship_stamps_attribute_type(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
 	{ok, {FwdNref, RevNref}} =
-		graphdb_attr:create_relationship_attribute("Drives", "DrivenBy",
+		graphdb_attr:create_relationship_attribute_pair("Drives", "DrivenBy",
 			instance),
 	{ok, Fwd} = graphdb_attr:get_attribute(FwdNref),
 	{ok, Rev} = graphdb_attr:get_attribute(RevNref),
@@ -664,7 +783,7 @@ attribute_type_of_returns_kind(_Config) ->
 	{ok, NameNref} = graphdb_attr:create_name_attribute("AnyName"),
 	{ok, LitNref}  = graphdb_attr:create_literal_attribute("Mass", grams),
 	{ok, {FwdNref, _}} =
-		graphdb_attr:create_relationship_attribute("Owns", "OwnedBy",
+		graphdb_attr:create_relationship_attribute_pair("Owns", "OwnedBy",
 			instance),
 	{ok, BucketNref} = graphdb_attr:create_relationship_type("Custodial"),
 
