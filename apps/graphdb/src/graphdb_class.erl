@@ -554,6 +554,8 @@ template_rows(ClassNref, AVPs, InstAttr) ->
 %% is_marked_non_instantiable(AVPs, InstAttr) -> boolean()
 %%
 %% Returns true when AVPs contains #{attribute => InstAttr, value => false}.
+%% Deliberately duplicated in graphdb_instance (the two workers share no
+%% module); L9 avoids a shared util for one predicate (YAGNI).
 %%-----------------------------------------------------------------------------
 is_marked_non_instantiable(AVPs, InstAttr) ->
 	lists:any(fun
