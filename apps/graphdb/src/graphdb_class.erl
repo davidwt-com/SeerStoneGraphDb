@@ -106,6 +106,7 @@
 		start_link/0,
 		%% Creators
 		create_class/2,
+		create_class/3,
 		add_superclass/2,
 		add_qualifying_characteristic/2,
 		bind_qc_value/3,
@@ -156,7 +157,8 @@ start_link() ->
 
 
 %%-----------------------------------------------------------------------------
-%% create_class(Name, ParentClassNref) -> {ok, Nref} | {error, term()}
+%% create_class(Name, ParentClassNref)       -> {ok, Nref} | {error, term()}
+%% create_class(Name, ParentClassNref, AVPs) -> {ok, Nref} | {error, term()}
 %%
 %% Creates a new class node in the ontology.  ParentClassNref
 %% is either the Classes category (nref 3) for top-level classes or
@@ -165,13 +167,20 @@ start_link() ->
 %% template node (kind=template, parent=ClassNref, name "default"),
 %% and the compositional class -> template arc pair.
 %%
+%% The /3 form prepends AVPs (a list of attribute-value pair maps) to the
+%% class node's attribute_value_pairs, after the class-name AVP; /2 is the
+%% same with an empty AVP list.
+%%
 %% Class authors may later delete the default template to force
 %% explicit Template specification on subsequent Connection arcs
 %% involving instances of this class, or call add_template/2 to
 %% attach additional named templates as compositional children.
 %%-----------------------------------------------------------------------------
 create_class(Name, ParentClassNref) ->
-	gen_server:call(?MODULE, {create_class, Name, ParentClassNref}).
+	create_class(Name, ParentClassNref, []).
+
+create_class(Name, ParentClassNref, AVPs) when is_list(AVPs) ->
+	gen_server:call(?MODULE, {create_class, Name, ParentClassNref, AVPs}).
 
 
 %%-----------------------------------------------------------------------------
@@ -327,8 +336,8 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Creators
 %%-----------------------------------------------------------------------------
-handle_call({create_class, Name, ParentClassNref}, _From, State) ->
-	{reply, do_create_class(Name, ParentClassNref), State};
+handle_call({create_class, Name, ParentClassNref, AVPs}, _From, State) ->
+	{reply, do_create_class(Name, ParentClassNref, AVPs), State};
 
 handle_call({add_superclass, ClassNref, AdditionalParentNref}, _From, State) ->
 	{reply, do_add_superclass(ClassNref, AdditionalParentNref), State};
@@ -409,7 +418,7 @@ is_valid_parent_kind(_)        -> false.
 
 
 %%-----------------------------------------------------------------------------
-%% do_create_class(Name, ParentClassNref) ->
+%% do_create_class(Name, ParentClassNref, AVPs) ->
 %%     {ok, Nref} | {error, term()}
 %%
 %% Validates the parent, allocates nrefs OUTSIDE the Mnesia transaction
@@ -419,7 +428,7 @@ is_valid_parent_kind(_)        -> false.
 %%   - the default template node (kind=template, parent=class)
 %%   - compositional class -> template arc pair (kind=composition, char 26/25)
 %%-----------------------------------------------------------------------------
-do_create_class(Name, ParentClassNref) ->
+do_create_class(Name, ParentClassNref, AVPs) ->
 	case do_validate_parent(ParentClassNref) of
 		ok ->
 			ClassNref              = graphdb_nref:get_next(),
@@ -433,7 +442,7 @@ do_create_class(Name, ParentClassNref) ->
 				nref = ClassNref,
 				kind = class,
 				parents = [ParentClassNref],
-				attribute_value_pairs = [ClassNameAVP]
+				attribute_value_pairs = [ClassNameAVP | AVPs]
 			},
 			TemplateNode = #node{
 				nref = TemplateNref,
