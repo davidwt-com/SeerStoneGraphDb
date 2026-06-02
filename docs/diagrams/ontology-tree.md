@@ -67,6 +67,7 @@ graph LR
   NTK["target_kind<br/>(runtime, attribute)"]:::attr
   NRA["relationship_avp<br/>(runtime, attribute)"]:::attr
   NAT["attribute_type<br/>(runtime, attribute)"]:::attr
+  NIN["instantiable<br/>(runtime, attribute)"]:::attr
   NBL["base_language<br/>(runtime, attribute)"]:::attr
   NPL["project_language<br/>(runtime, attribute)"]:::attr
 
@@ -139,6 +140,7 @@ graph LR
   NAL ==> NTK
   NAL ==> NRA
   NAL ==> NAT
+  NAL ==> NIN
   NLL ==> NBL
   NLL ==> NPL
 

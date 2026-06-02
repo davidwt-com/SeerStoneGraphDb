@@ -840,6 +840,24 @@ P1 placement blocker by construction.
 
 ---
 
+### L9. Non-instantiable (abstract) classes — **RESOLVED** (2026-06-01)
+
+A class may be designated non-instantiable (abstract) by an
+`instantiable => false` marker AVP on the class node. `graphdb_attr`
+seeds the `instantiable` boolean marker literal attribute in the
+`Attribute Literals` sub-group. `graphdb_class:create_class/3` takes an
+initial AVP list (`/2` delegates with `[]`); a class created with the
+marker is born **without** a default template. `graphdb_class:is_instantiable/1`
+reports the flag. `graphdb_instance:create_instance/3` **and**
+`add_class_membership/2` refuse a non-instantiable class target with
+`{error, {class_not_instantiable, ClassNref}}`. Permissive by default —
+absence of the marker means instantiable. Design at
+`docs/designs/l9-non-instantiable-classes-design.md`. Prerequisite for
+F4 Phase A (Decision D15), which seeds the abstract `Rule` meta-class
+root.
+
+---
+
 ### Task 7. Wire `dictionary_server` and `term_server` to `dictionary_imp` — **RESOLVED** (2026-05-19)
 
 Both gen_servers delegate to `dictionary_imp` via `start_dictionary/stop_dictionary`

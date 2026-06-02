@@ -15,20 +15,20 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 ## 1. Status
 
-| Component           | State                                                                                                                                       |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Build               | Compiles clean — zero warnings (Erlang/OTP, the Open Telecom Platform, version 28 / rebar3 3.27)                                            |
-| `nref` subsystem    | Fully implemented; backed by DETS (Disk-based Erlang Term Storage); `set_floor/1` API                                                       |
-| `dictionary_imp`    | Implemented; not yet wired to `dictionary_server` / `term_server`                                                                           |
-| `graphdb_bootstrap` | Implemented — Mnesia schema, table creation, scaffold loader                                                                                |
-| `graphdb_mgr`       | Implemented — bootstrap startup, read API, category guard, cache audit/repair. Write-side delegation pending.                               |
-| `graphdb_attr`      | Implemented — attribute library (name, literal, relationship attributes)                                                                    |
-| `graphdb_class`     | Implemented — taxonomic hierarchy with multi-parent inheritance (BFS — breadth-first search — over a DAG, a directed acyclic graph; H3)     |
-| `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance with multi-class membership (H4) and ambiguity-detecting class resolver (H5) |
-| `graphdb_rules`     | Stub                                                                                                                                        |
-| `graphdb_language`  | Implemented — M6 multilingual overlay layer (label resolution, dialect chains, per-language Mnesia overlay tables)                          |
-| `graphdb_query`     | Implemented — F3 query language (Q1-Q6) with snapshot-semantics sessions and continuation-based bounded BFS                                 |
-| Tests               | 378 passing (277 Common Test + 101 EUnit)                                                                                                   |
+| Component           | State                                                                                                                                                                                                           |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Build               | Compiles clean — zero warnings (Erlang/OTP, the Open Telecom Platform, version 28 / rebar3 3.27)                                                                                                                |
+| `nref` subsystem    | Fully implemented; backed by DETS (Disk-based Erlang Term Storage); `set_floor/1` API                                                                                                                           |
+| `dictionary_imp`    | Implemented; not yet wired to `dictionary_server` / `term_server`                                                                                                                                               |
+| `graphdb_bootstrap` | Implemented — Mnesia schema, table creation, scaffold loader                                                                                                                                                    |
+| `graphdb_mgr`       | Implemented — bootstrap startup, read API, category guard, cache audit/repair. Write-side delegation pending.                                                                                                   |
+| `graphdb_attr`      | Implemented — attribute library (name, literal, relationship attributes)                                                                                                                                        |
+| `graphdb_class`     | Implemented — taxonomic hierarchy with multi-parent inheritance (BFS — breadth-first search — over a DAG, a directed acyclic graph; H3); abstract (non-instantiable) classes via the `instantiable` marker (L9) |
+| `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance with multi-class membership (H4) and ambiguity-detecting class resolver (H5); refuses instantiation/membership of abstract classes (L9)          |
+| `graphdb_rules`     | Stub                                                                                                                                                                                                            |
+| `graphdb_language`  | Implemented — M6 multilingual overlay layer (label resolution, dialect chains, per-language Mnesia overlay tables)                                                                                              |
+| `graphdb_query`     | Implemented — F3 query language (Q1-Q6) with snapshot-semantics sessions and continuation-based bounded BFS                                                                                                     |
+| Tests               | 393 passing (292 Common Test + 101 EUnit)                                                                                                                                                                       |
 
 The kernel is functional under multi-inheritance, multi-class-
 membership, and per-class template semantics.  Multilingual label

@@ -237,22 +237,24 @@ the ontology `nodes` Mnesia table with `kind = attribute`.
 - `create_relationship_attribute_pair/3,4` (name, reciprocal_name, target_kind [, parent_nref]) — reciprocal arc-label pair; `target_kind :: category | attribute | class | instance`; defaults parent to nref 8
 - All creators validate `parent_nref` (must be an existing `kind=attribute` node)
 - `get_attribute/1`, `list_attributes/0`, `list_relationship_types/0`
-- At bootstrap: seeds the `Attribute Literals` sub-group under the `Literals` subtree (nref 7), then seeds `literal_type`, `target_kind`, `relationship_avp`, and `attribute_type` literal attributes as children of that sub-group. Also stamps the `relationship_avp` marker AVP on the bootstrap Template node and retro-stamps `attribute_type` AVPs across the Attributes subtree.
+- At bootstrap: seeds the `Attribute Literals` sub-group under the `Literals` subtree (nref 7), then seeds `literal_type`, `target_kind`, `relationship_avp`, `attribute_type`, and `instantiable` literal attributes as children of that sub-group. Also stamps the `relationship_avp` marker AVP on the bootstrap Template node and retro-stamps `attribute_type` AVPs across the Attributes subtree. The `instantiable` marker (L9) is stamped on a class node as `instantiable => false` to make it abstract (non-instantiable).
 
 ### `graphdb_class` — Taxonomic Hierarchy
 
 Manages the "is a" hierarchy of class nodes in the ontology.
 
-- `create_class/2` (name, parent_class_nref)
+- `create_class/2,3` (name, parent_class_nref [, avps]) — the `/3` form prepends an initial AVP list to the class node; a class created with the `instantiable => false` marker AVP is **abstract** and is born without a default template (L9)
 - `add_qualifying_characteristic/2` (class_nref, attribute_nref)
+- `is_instantiable/1` (class_nref) — `false` iff the class carries the `instantiable => false` marker
 - `get_class/1`, `subclasses/1`, `ancestors/1`, `inherited_qcs/1`
 
 ### `graphdb_instance` — Instance & Compositional Hierarchy
 
 Creates and manages instance nodes in the project (instance space).
 
-- `create_instance/3` (name, class_nref, compositional_parent_nref) — atomically writes the node record AND the instance→class membership relationship pair (arc labels nref=29 and nref=30)
+- `create_instance/3` (name, class_nref, compositional_parent_nref) — atomically writes the node record AND the instance→class membership relationship pair (arc labels nref=29 and nref=30). Rejects a class marked non-instantiable with `{error, {class_not_instantiable, ClassNref}}` (L9)
 - `add_relationship/4` (source_nref, characterization_nref, target_nref, reciprocal_nref) — writes two directed rows atomically; IDs allocated via `get_nref()`
+- `add_class_membership/2` (instance_nref, class_nref) — adds a membership arc pair; also rejects a non-instantiable class target with `{error, {class_not_instantiable, ClassNref}}` (L9)
 - `get_instance/1`, `children/1`, `compositional_ancestors/1`, `resolve_value/2`
 
 ### `graphdb_rules` — Graph Rules
