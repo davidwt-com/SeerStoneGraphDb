@@ -14,12 +14,12 @@
 %%				arcs in the attribute subtree are kind=taxonomy --
 %%				refinement of kind, not part-whole).
 %%
-%%				On first startup, graphdb_attr seeds four runtime
+%%				On first startup, graphdb_attr seeds five runtime
 %%				literal attributes under the `Literals` subtree (nref
 %%				7): `literal_type`, `target_kind`, `relationship_avp`,
-%%				and `attribute_type`.  Subsequent startups detect the
-%%				existing seeds by name and cache their nrefs in the
-%%				gen_server state.
+%%				`attribute_type`, and `instantiable`.  Subsequent
+%%				startups detect the existing seeds by name and cache
+%%				their nrefs in the gen_server state.
 %%
 %%				`attribute_type` is stamped as an AVP on every
 %%				attribute node (value :: name | literal | relationship)
@@ -105,7 +105,8 @@
 	literal_type_nref,				%% integer() -- seeded literal attribute
 	target_kind_nref,				%% integer() -- seeded literal attribute
 	relationship_avp_nref,			%% integer() -- seeded literal attribute
-	attribute_type_nref				%% integer() -- seeded literal attribute (M8)
+	attribute_type_nref,			%% integer() -- seeded literal attribute (M8)
+	instantiable_nref				%% integer() -- seeded marker literal attribute (L9)
 }).
 
 
@@ -300,9 +301,10 @@ attribute_type_of(Nref) ->
 %%                          literal_type             => integer(),
 %%                          target_kind              => integer(),
 %%                          relationship_avp         => integer(),
-%%                          attribute_type           => integer()}}
+%%                          attribute_type           => integer(),
+%%                          instantiable             => integer()}}
 %%
-%% Returns the nrefs of the Attribute Literals sub-group and the four
+%% Returns the nrefs of the Attribute Literals sub-group and the five
 %% seeded runtime literal attributes.  Primarily intended for other
 %% graphdb workers and integration tests.
 %%-----------------------------------------------------------------------------
@@ -343,17 +345,18 @@ init([]) ->
 			literal_type_nref     = ensure_seed("literal_type", AttrLitNref),
 			target_kind_nref      = ensure_seed("target_kind", AttrLitNref),
 			relationship_avp_nref = ensure_seed("relationship_avp", AttrLitNref),
-			attribute_type_nref   = ensure_seed("attribute_type", AttrLitNref)
+			attribute_type_nref   = ensure_seed("attribute_type", AttrLitNref),
+			instantiable_nref     = ensure_seed("instantiable", AttrLitNref)
 		},
 		ok = ensure_template_avp_marker(State#state.relationship_avp_nref),
 		ok = retro_stamp_bootstrap_attribute_types(
 			State#state.attribute_type_nref),
 		logger:info("graphdb_attr: started (attribute_literals_group=~p, "
 			"literal_type=~p, target_kind=~p, relationship_avp=~p, "
-			"attribute_type=~p)",
+			"attribute_type=~p, instantiable=~p)",
 			[AttrLitNref, State#state.literal_type_nref,
 			 State#state.target_kind_nref, State#state.relationship_avp_nref,
-			 State#state.attribute_type_nref]),
+			 State#state.attribute_type_nref, State#state.instantiable_nref]),
 		{ok, State}
 	catch
 		throw:{error, Reason} ->
@@ -412,7 +415,8 @@ handle_call(seeded_nrefs, _From, State) ->
 		literal_type     => State#state.literal_type_nref,
 		target_kind      => State#state.target_kind_nref,
 		relationship_avp => State#state.relationship_avp_nref,
-		attribute_type   => State#state.attribute_type_nref
+		attribute_type   => State#state.attribute_type_nref,
+		instantiable     => State#state.instantiable_nref
 	}},
 	{reply, Reply, State};
 
