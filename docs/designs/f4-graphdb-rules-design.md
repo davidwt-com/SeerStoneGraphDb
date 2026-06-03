@@ -50,7 +50,8 @@ Phase A delivers:
 - Attachment mechanism: `applies_to` / `applied_by` arc pair from
   owning class to rule instance.
 - Public API: scope-aware create + retrieve.
-- Validation catalog with 11 named error atoms.
+- Validation catalog with 12 named error atoms (the original 11 plus
+  `owning_class_has_no_default_template`, the L9 abstract-owning-class guard).
 - CT coverage for creation, retrieval, validation, idempotent seeding.
 - Supervisor reorder: `graphdb_rules` becomes the last child of
   `graphdb_sup` so it can seed via `graphdb_attr` and `graphdb_class`
@@ -321,10 +322,25 @@ template.
 
 `Rule Literals` is seeded first as the sub-group parent for the six
 literal attributes. The relationship-attribute pair and the
-meta-class chain follow. `graphdb_attr:create_literal_attribute/3` is
-the /3 variant that takes an explicit parent nref (introduced by L7);
-in L7 `graphdb_attr` and `graphdb_language` already use the /3 form
-to seed under their own sub-groups.
+meta-class chain follow.
+
+> **Implementation note (as built).** The API calls in the table below
+> are *illustrative of intent*. Because the public `create_*` creators
+> are not find-first, `init/1` must be idempotent across reboots, so
+> `graphdb_rules` seeds via local ensure-helpers — exactly the
+> `graphdb_language:init/1` precedent: `ensure_seed/2` (a plain
+> `kind=attribute` child + taxonomy arc pair) for the sub-group and the
+> six literals, `ensure_rel_attr_pair/4` (find-first via
+> `graphdb_attr:find_attribute_by_name/2`, else
+> `create_relationship_attribute_pair/4`) for the arc-label pair, and
+> `ensure_meta_class/3` (find-first via a local `find_subclass_by_name/2`,
+> else `graphdb_class:create_class/3`) for the three meta-classes. The
+> per-literal value-type column (integer/atom/term) is informational —
+> Phase A validates `mode`/`multiplicity` directly in `graphdb_rules`,
+> not via a `literal_type` AVP — so the six literals are plain seeds that
+> receive `attribute_type => literal` through the shared
+> `graphdb_attr:retro_stamp_attribute_types/0` call at the end of
+> `init/1`. See the plan's Architecture Notes for the full rationale.
 
 | #   | Seeded entity                         | API call                                                                                                                                                             | Stored under                                                            |
 | --- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
@@ -517,6 +533,7 @@ All checks run inside the create transaction before any write.
 | --------------------------------- | ----------------------------------------------------------- |
 | `class_not_found`                 | Owning class (ParentClass / SourceClass) does not exist     |
 | `not_a_class`                     | Owning class exists but `kind ≠ class`                      |
+| `owning_class_has_no_default_template` | Owning class is abstract (L9 `instantiable=false`) or had its default template deleted, so the `applies_to` arc has no template to scope it |
 | `referenced_class_not_found`      | ChildClass / TargetClass does not exist                     |
 | `referenced_not_a_class`          | Referenced node exists but `kind ≠ class`                   |
 | `characterization_not_found`      | Characterization nref does not exist (ConnectionRule)       |

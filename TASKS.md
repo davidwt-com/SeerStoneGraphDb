@@ -608,9 +608,36 @@ scope; serial execution (F3 then F4) is a reasonable alternative.**
 **Spec:** §8 (rules as stored data), §9 (instantiation engine), §10
 (composition rules), §11 (reactive learning).
 
-**Evidence:** `apps/graphdb/src/graphdb_rules.erl` is a gen_server stub.
+The design splits E1 into six phases (A–F). See
+`docs/designs/f4-graphdb-rules-design.md`.
 
-**Scope:**
+### F4 Phase A — Rule data model — **RESOLVED** (2026-06-02)
+
+`graphdb_rules` replaced its stub with the Phase A data model: a
+runtime-seeded rule meta-ontology (`Rule` abstract class +
+`CompositionRule` / `ConnectionRule` under nref 3; `Rule Literals`
+sub-group + 6 literal attrs under nref 7; `applies_to` / `applied_by`
+relationship-attribute pair under nref 16), and a scope-aware
+create/retrieve API: `create_composition_rule/6,7`,
+`create_connection_rule/7,8`, `get_rule/2`, `rules_for_class/2`,
+`composition_rules_for_class/2`, `connection_rules_for_class/2`,
+`list_rules/1`, `seeded_nrefs/0`. Content AVPs live on the rule
+instance node; deployment AVPs (`mode`, `multiplicity`, `Template`) on
+the `applies_to` connection arc. Retrieval is direct-attachment only.
+`graphdb_rules` moved to the last child of `graphdb_sup`. 37 CT cases
+added (`graphdb_rules_SUITE`).
+
+### F4 Phases B–F — Rule-firing engine — OUTSTANDING
+
+The remaining phases build the engine that consumes the Phase A data
+model. Taxonomy-walking `effective_rules_for_class/2`, the
+instantiation engine, composition-rule firing at `create_instance`,
+and reactive learning are all Phase B+ work.
+
+**Evidence:** `apps/graphdb/src/graphdb_rules.erl` Phase A is
+implemented; no firing engine exists yet.
+
+**Scope (Phases B–F):**
 
 - **§10 Composition rules** — class declares natural-constituent
   component types and mandatory connections. Engine fires at
@@ -805,6 +832,29 @@ updated (nref floor now `>= 100002`; relationship IDs now start at 1). 4 CT test
 
 ---
 
+### L6. Multi-Project Sessions — **DEFERRED**
+
+Added to Engineering Hygiene by the F4 design
+(`docs/designs/f4-graphdb-rules-design.md` §9). The `Scope` argument on
+every M6, F3, and F4 public API is the forward-compatibility hook: APIs
+already accept `{project, _}`, but the gen_server handlers serve the
+`environment` scope only and reject or empty `{project, _}` requests.
+
+L6 is the home for:
+
+1. Session state carrying `[{ProjectId, AnchorNref}]` (a list, not a
+   singleton).
+2. Cross-project arc traversal — arcs whose target is a project nref
+   carry `target_kind` but not *which* project.
+3. Session-level priority resolution (env, then project A's rules, then
+   project B's rules — or a declared order).
+4. Project-scoped overlay tables for rule instances when project rules
+   are turned on.
+
+**Not blocked by, and does not block, F4 Phase A.**
+
+---
+
 ### L7. Literals subtree restructuring — **RESOLVED** (2026-05-25)
 
 Literals subtree (nref 7) partitioned by owning subsystem so each
@@ -855,6 +905,47 @@ absence of the marker means instantiable. Design at
 `docs/designs/l9-non-instantiable-classes-design.md`. Prerequisite for
 F4 Phase A (Decision D15), which seeds the abstract `Rule` meta-class
 root.
+
+---
+
+### L10. Transaction observability for the allocate-outside-txn pattern — **OPEN**
+
+Every write-path worker (`graphdb_attr`, `graphdb_class`,
+`graphdb_instance`, `graphdb_rules`) allocates node nrefs and
+relationship row IDs **outside** the `mnesia:transaction/1` that writes
+the rows, to keep the transaction fun free of side-effects on retry
+(Mnesia may re-run the fun on lock conflict). The deliberate cost is
+that an aborted transaction orphans the already-allocated nrefs/ids —
+harmless given the unbounded monotonic nref space (no contiguity
+invariant), but currently **unobservable**: nothing measures how often
+the abort/retry path actually fires.
+
+Mnesia exposes node-global cumulative counters via
+`mnesia:system_info/1` that make the real rate measurable:
+
+- `transaction_restarts` — fun re-runs (lock-conflict / deadlock retries)
+- `transaction_failures` — aborts
+- `transaction_commits`  — successful commits
+- `transaction_log_writes`
+
+These are node-global and cumulative (no reset, no per-table or
+per-callsite attribution), so a delta-snapshot helper is needed to make
+them useful for ad-hoc workload observation.
+
+Scope:
+
+1. Add a `dev_lib` helper that snapshots the four counters around a fun
+   and returns the deltas (commits / failures / restarts / log writes),
+   for ad-hoc observability during review and load checks.
+2. Decide whether the rule/attr/instance write paths warrant their own
+   `{atomic,_}` vs `{aborted,_}` counters for per-callsite leak-rate
+   attribution, or whether the global counters suffice. Document the
+   decision.
+3. Confirm the allocate-outside-txn rationale carries an inline comment
+   at each allocation site (present in `graphdb_attr` / `graphdb_instance`;
+   verify `graphdb_class` and `graphdb_rules`).
+
+Observability-only; no behavioural change to the write paths.
 
 ---
 

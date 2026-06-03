@@ -25,15 +25,16 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_attr`      | Implemented — attribute library (name, literal, relationship attributes)                                                                                                                                        |
 | `graphdb_class`     | Implemented — taxonomic hierarchy with multi-parent inheritance (BFS — breadth-first search — over a DAG, a directed acyclic graph; H3); abstract (non-instantiable) classes via the `instantiable` marker (L9) |
 | `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance with multi-class membership (H4) and ambiguity-detecting class resolver (H5); refuses instantiation/membership of abstract classes (L9)          |
-| `graphdb_rules`     | Stub                                                                                                                                                                                                            |
+| `graphdb_rules`     | Implemented — F4 Phase A: rule meta-ontology, applies_to attachment, scope-aware create/retrieve                                                                                                                |
 | `graphdb_language`  | Implemented — M6 multilingual overlay layer (label resolution, dialect chains, per-language Mnesia overlay tables)                                                                                              |
 | `graphdb_query`     | Implemented — F3 query language (Q1-Q6) with snapshot-semantics sessions and continuation-based bounded BFS                                                                                                     |
-| Tests               | 393 passing (292 Common Test + 101 EUnit)                                                                                                                                                                       |
+| Tests               | 430 passing (329 Common Test + 101 EUnit)                                                                                                                                                                       |
 
 The kernel is functional under multi-inheritance, multi-class-
 membership, and per-class template semantics.  Multilingual label
 overlay (M6, §10) and the F3 query language (§11) are landed.
-`graphdb_rules` is the only remaining gen_server stub.
+The `graphdb_rules` data model (F4 Phase A, §12) is landed; only its
+rule-firing engine (Phases B–F) remains.
 
 ---
 
@@ -229,9 +230,9 @@ graphdb (application — started after mnesia + nref)
         ├── graphdb_attr         — attribute library
         ├── graphdb_class        — taxonomic hierarchy
         ├── graphdb_instance     — compositional hierarchy + inheritance
-        ├── graphdb_rules        — rule storage/enforcement (stub)
         ├── graphdb_language     — multilingual label overlay (M6)
-        └── graphdb_query        — F3 query language gen_server
+        ├── graphdb_query        — F3 query language gen_server
+        └── graphdb_rules        — rule meta-ontology + create/retrieve (F4 Phase A)
 
 dictionary (application — started alongside graphdb)
   └── dictionary_sup
@@ -583,4 +584,39 @@ Architectural shape:
   `graphdb_class:ancestors/1`'s NREF_CLASSES filter.
 
 See `docs/designs/f3-graphdb-query-design.md` for the durable architectural
+contract.
+
+---
+
+## 12. Rules (`graphdb_rules`, F4 Phase A)
+
+`graphdb_rules` is the data model for graph rules. Phase A is storage and
+retrieval only — there is no rule-firing engine yet (Phases B–F remain,
+tracked in `TASKS.md`).
+
+Architectural shape:
+
+- A rule is a `kind = instance` node. Its class membership is one of two
+  seeded meta-classes, `CompositionRule` or `ConnectionRule`, both
+  subclasses of an abstract `Rule` root (non-instantiable via the L9
+  `instantiable` marker). The meta-ontology, a `Rule Literals` literal
+  sub-group, and the `applies_to`/`applied_by` relationship-attribute
+  pair are seeded idempotently at `init/1`; `graphdb_rules` is the last
+  child of `graphdb_sup` so `graphdb_attr` and `graphdb_class` are ready.
+- **Content vs deployment AVP split.** Rule *content* (child/target class,
+  characterization, optional template) lives in the rule instance node's
+  AVPs. Rule *deployment* (`mode`, `multiplicity`, and the owning class's
+  default `Template` at AVP index 0) lives on the forward `applies_to`
+  connection arc from the owning class to the rule instance.
+- **Attachment.** Each rule is written in one Mnesia transaction: the
+  instance node, its instance↔class membership pair (chars 29/30), and
+  the `applies_to`/`applied_by` connection pair between owning class and
+  rule. Retrieval is **direct-attachment only** — `rules_for_class/2`
+  reads the owning class's outgoing `applies_to` arcs. Taxonomy-walking
+  effective-rule resolution (`effective_rules_for_class/2`) is Phase B.
+- **Scope.** The API is scope-tagged (`environment` | `{project, _}`).
+  Phase A serves the `environment` scope; `{project, _}` creates are
+  rejected and `{project, _}` reads return empty.
+
+See `docs/designs/f4-graphdb-rules-design.md` for the durable architectural
 contract.

@@ -60,12 +60,12 @@ graphdb (application — started after mnesia + nref)
         │                      permanent phase during init, runtime phase after flip)
         ├── rel_id_server     (gen_server — arc row ID allocator)
         ├── graphdb_mgr       (gen_server — implemented: bootstrap init, read API, category guard)
-        ├── graphdb_rules     (gen_server — stub, implementation pending)
         ├── graphdb_attr      (gen_server — implemented: seeds + create/lookup API)
         ├── graphdb_class     (gen_server — implemented: taxonomic hierarchy, QC inheritance)
         ├── graphdb_instance  (gen_server — implemented: compositional hierarchy, inheritance)
         ├── graphdb_language  (gen_server — implemented: M6 multilingual overlay)
-        └── graphdb_query     (gen_server — implemented: F3 query language)
+        ├── graphdb_query     (gen_server — implemented: F3 query language)
+        └── graphdb_rules     (gen_server — implemented: F4 Phase A rule meta-ontology + create/retrieve)
 
 dictionary (application — started alongside graphdb)
   └── dictionary_sup (supervisor)
@@ -275,7 +275,7 @@ A logical bidirectional edge is two `relationship` rows written atomically (one 
 
 These are outstanding items — all previously known bugs have been fixed.
 
-- **graphdb worker modules** — `graphdb_rules` is the only remaining gen_server stub (TASKS.md F4)
+- **`graphdb_rules` rule-firing engine** — F4 Phase A (rule meta-ontology + create/retrieve data model) is implemented; the firing engine (Phases B–F) remains outstanding (TASKS.md F4)
 - **`graphdb_mgr` write operations** — `create_attribute/3`, `create_class/2`, `create_instance/3`, `add_relationship/4`, `delete_node/1`, `update_node_avps/2` return `{error, not_implemented}` pending L4 routing work
 - **`dictionary_server` and `term_server`** — stubs not yet wired to `dictionary_imp` (TASKS.md Task 7)
 - **`seerstone:start/2` and `nref:start/2`**, **`code_change/3`** — deferred (TASKS.md E2, E3)

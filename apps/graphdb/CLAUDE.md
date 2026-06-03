@@ -11,19 +11,19 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 ## Files
 
-| File                    | Description                                                                            |
-| ----------------------- | -------------------------------------------------------------------------------------- |
-| `graphdb.erl`           | OTP `application` behaviour callback module; performs permanent→runtime phase flip     |
-| `graphdb_sup.erl`       | OTP `supervisor` behaviour callback module                                             |
-| `graphdb_nref.erl`      | Switchable node-nref allocation facade gen_server (first child; permanent during init) |
-| `graphdb_bootstrap.erl` | Bootstrap file loader + Mnesia schema creator (implemented)                            |
-| `graphdb_mgr.erl`       | Primary coordinator gen_server (stub)                                                  |
-| `graphdb_rules.erl`     | Graph rules gen_server (stub)                                                          |
-| `graphdb_attr.erl`      | Attribute library gen_server (stub)                                                    |
-| `graphdb_class.erl`     | Taxonomic hierarchy gen_server (stub)                                                  |
-| `graphdb_instance.erl`  | Instance/compositional hierarchy gen_server (stub)                                     |
-| `graphdb_language.erl`  | M6 multilingual overlay layer (implemented)                                            |
-| `graphdb_query.erl`     | F3 query language gen_server (implemented)                                             |
+| File                    | Description                                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------------------- |
+| `graphdb.erl`           | OTP `application` behaviour callback module; performs permanent→runtime phase flip          |
+| `graphdb_sup.erl`       | OTP `supervisor` behaviour callback module                                                  |
+| `graphdb_nref.erl`      | Switchable node-nref allocation facade gen_server (first child; permanent during init)      |
+| `graphdb_bootstrap.erl` | Bootstrap file loader + Mnesia schema creator (implemented)                                 |
+| `graphdb_mgr.erl`       | Primary coordinator gen_server (implemented — bootstrap init, read API, category guard)     |
+| `graphdb_rules.erl`     | Graph rules gen_server (implemented — F4 Phase A: rule meta-ontology + create/retrieve API) |
+| `graphdb_attr.erl`      | Attribute library gen_server (implemented)                                                  |
+| `graphdb_class.erl`     | Taxonomic hierarchy gen_server (implemented)                                                |
+| `graphdb_instance.erl`  | Instance/compositional hierarchy gen_server (implemented)                                   |
+| `graphdb_language.erl`  | M6 multilingual overlay layer (implemented)                                                 |
+| `graphdb_query.erl`     | F3 query language gen_server (implemented)                                                  |
 
 `apps/graphdb/priv/bootstrap.terms` — Erlang Terms file fully written; contains 38 nodes
 (nrefs 1–35 scaffold, nref 10000 English, 2 atom-labeled nodes) and hierarchy relationship pairs. Loaded at first ontology startup. Tier boundaries are macros in `graphdb_nrefs.hrl` — no `{nref_start}` or `{label_start}` directives.
@@ -257,11 +257,24 @@ Creates and manages instance nodes in the project (instance space).
 - `add_class_membership/2` (instance_nref, class_nref) — adds a membership arc pair; also rejects a non-instantiable class target with `{error, {class_not_instantiable, ClassNref}}` (L9)
 - `get_instance/1`, `children/1`, `compositional_ancestors/1`, `resolve_value/2`
 
-### `graphdb_rules` — Graph Rules
+### `graphdb_rules` — Graph Rules (F4 Phase A)
 
-Stores and enforces graph rules; enables pattern recognition.
+Stores composition and connection rules as instances of a seeded rule
+meta-ontology. Phase A is the data model only — there is no rule-firing
+engine yet (Phases B–F are tracked in `TASKS.md`).
 
-- `create_rule/2`, `check_rule/2`, `suggest_relationships/1`
+- `create_composition_rule/6,7` (scope, name, parent_class, child_class, mode, multiplicity [, template_nref])
+- `create_connection_rule/7,8` (scope, name, source_class, characterization, target_class, mode, multiplicity [, template_nref])
+- `get_rule/2`, `rules_for_class/2`, `composition_rules_for_class/2`, `connection_rules_for_class/2`, `list_rules/1`
+- `seeded_nrefs/0`
+- At bootstrap: seeds the `Rule Literals` sub-group under the `Literals`
+  subtree (nref 7) with 6 literal attributes (`child_class_nref`,
+  `target_class_nref`, `template_nref`, `characterization_nref`, `mode`,
+  `multiplicity`), the `applies_to`/`applied_by` relationship-attribute
+  pair under Instance Relationships (nref 16), and the `Rule` (abstract)
+  → `CompositionRule` / `ConnectionRule` meta-class chain under Classes
+  (nref 3). `graphdb_rules` is the last child of `graphdb_sup` so the
+  attribute and class workers are available when its `init/1` seeds.
 
 ### `graphdb_language` — Multilingual Overlay Layer (M6)
 
@@ -317,10 +330,11 @@ The following callbacks in `graphdb.erl` return `ok` (no-op stubs correct for cu
 - `stop/1` — post-shutdown cleanup
 - `config_change/3` — runtime config change notification
 
-`graphdb_rules` is the only remaining empty gen_server stub.
-`graphdb_bootstrap`, `graphdb_mgr`, `graphdb_attr`, `graphdb_class`,
-`graphdb_instance`, `graphdb_language` (M6), and `graphdb_query` (F3)
-are all fully implemented.
+There are no remaining empty gen_server stubs. `graphdb_bootstrap`,
+`graphdb_mgr`, `graphdb_attr`, `graphdb_class`, `graphdb_instance`,
+`graphdb_language` (M6), `graphdb_query` (F3), and `graphdb_rules`
+(F4 Phase A data model) are all implemented. The `graphdb_rules`
+rule-firing engine (Phases B–F) remains, tracked in `TASKS.md`.
 
 ## Key Design Notes
 

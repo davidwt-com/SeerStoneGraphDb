@@ -1,15 +1,21 @@
 # Ontology Tree — Bootstrap + Runtime Init Seeds
 
-**Status:** current as of 2026-05-26 (post L7 — PR #27).
+**Status:** current as of 2026-06-02 (post F4 Phase A).
 
 This diagram is the **organisational shape of the environment ontology**
 immediately after `application:start(database)` finishes. It captures:
 
 - The bootstrap tree from `apps/graphdb/priv/bootstrap.terms` (nrefs 1–35
   plus the seeded English instance at nref 10000).
-- Runtime sub-group nodes seeded by `graphdb_attr:init/1` and
-  `graphdb_language:init/1` (the L7 Attribute Literals and Language
-  Literals sub-groups, plus their child literal-attribute nodes).
+- Runtime sub-group nodes seeded by `graphdb_attr:init/1`,
+  `graphdb_language:init/1`, and `graphdb_rules:init/1` (the L7
+  Attribute Literals, Language Literals, and Rule Literals sub-groups,
+  plus their child literal-attribute nodes).
+- The F4 Phase A rule meta-ontology seeded by `graphdb_rules:init/1`:
+  the `Rule` (abstract) / `CompositionRule` / `ConnectionRule`
+  meta-classes under Classes (nref 3), and the `applies_to` /
+  `applied_by` relationship-attribute pair under Instance
+  Relationships (nref 16).
 
 It does **not** show:
 
@@ -17,7 +23,10 @@ It does **not** show:
   those live in the project DB, not the environment.
 - Connection arcs (kind=connection) — same reason.
 - Class→Template composition arcs auto-created by
-  `graphdb_class:create_class/2` — none exist at the end of bootstrap.
+  `graphdb_class:create_class/2`. The `CompositionRule` and
+  `ConnectionRule` meta-classes (both instantiable) each carry an
+  auto-created default Template; these template nodes and arcs are not
+  drawn here.
 
 ## How to view
 
@@ -35,6 +44,7 @@ graph LR
   classDef attr  fill:#cfe2ff,stroke:#0066cc,color:#000
   classDef inst  fill:#d4edda,stroke:#28a745,color:#000
   classDef group fill:#e2d4f5,stroke:#6f42c1,color:#000
+  classDef cls fill:#ffd6e7,stroke:#c2185b,color:#000
 
   %% --- Root ---
   N1["Root<br/>(1, category)"]:::cat
@@ -62,6 +72,7 @@ graph LR
   %% --- Literals sub-tree (L7 sub-groups) ---
   NAL["Attribute Literals<br/>(runtime, sub-group)"]:::group
   NLL["Language Literals<br/>(runtime, sub-group)"]:::group
+  NRL["Rule Literals<br/>(runtime, sub-group)"]:::group
 
   NLT["literal_type<br/>(runtime, attribute)"]:::attr
   NTK["target_kind<br/>(runtime, attribute)"]:::attr
@@ -70,6 +81,12 @@ graph LR
   NIN["instantiable<br/>(runtime, attribute)"]:::attr
   NBL["base_language<br/>(runtime, attribute)"]:::attr
   NPL["project_language<br/>(runtime, attribute)"]:::attr
+  NRCC["child_class_nref<br/>(runtime, attribute)"]:::attr
+  NRTC["target_class_nref<br/>(runtime, attribute)"]:::attr
+  NRTN["template_nref<br/>(runtime, attribute)"]:::attr
+  NRCH["characterization_nref<br/>(runtime, attribute)"]:::attr
+  NRMO["mode<br/>(runtime, attribute)"]:::attr
+  NRMU["multiplicity<br/>(runtime, attribute)"]:::attr
 
   %% --- Relationships sub-tree ---
   N13["Category Relationships<br/>(13, attribute)"]:::attr
@@ -88,6 +105,13 @@ graph LR
   N29["Class (inst&rarr;class)<br/>(29, attribute)"]:::attr
   N30["Instance (class&rarr;inst)<br/>(30, attribute)"]:::attr
   N31["Template (avp marker)<br/>(31, attribute)"]:::attr
+  NRAT["applies_to (rule arc)<br/>(runtime, attribute)"]:::attr
+  NRAB["applied_by (rule arc)<br/>(runtime, attribute)"]:::attr
+
+  %% --- Classes sub-tree (F4 Phase A rule meta-ontology) ---
+  NRULE["Rule (abstract)<br/>(runtime, class)"]:::cls
+  NCMPR["CompositionRule<br/>(runtime, class)"]:::cls
+  NCONR["ConnectionRule<br/>(runtime, class)"]:::cls
 
   %% --- Languages sub-tree ---
   N32["Human Languages<br/>(32, category)"]:::cat
@@ -136,6 +160,7 @@ graph LR
   %% --- Taxonomy: Literals + L7 sub-groups ---
   N7 ==> NAL
   N7 ==> NLL
+  N7 ==> NRL
   NAL ==> NLT
   NAL ==> NTK
   NAL ==> NRA
@@ -143,6 +168,12 @@ graph LR
   NAL ==> NIN
   NLL ==> NBL
   NLL ==> NPL
+  NRL ==> NRCC
+  NRL ==> NRTC
+  NRL ==> NRTN
+  NRL ==> NRCH
+  NRL ==> NRMO
+  NRL ==> NRMU
 
   %% --- Taxonomy: Relationships sub-tree ---
   N8 ==> N13
@@ -160,59 +191,71 @@ graph LR
   N16 ==> N29
   N16 ==> N30
   N16 ==> N31
+  N16 ==> NRAT
+  N16 ==> NRAB
+
+  %% --- Taxonomy: Classes — F4 Phase A rule meta-ontology ---
+  N3 ==> NRULE
+  NRULE ==> NCMPR
+  NRULE ==> NCONR
 ```
 
 ## Legend
 
-| Colour            | Kind                                         |
-|-------------------|----------------------------------------------|
-| Orange            | Category node                                |
-| Blue              | Attribute node                               |
-| Purple            | Attribute sub-group node (runtime-seeded)    |
-| Green             | Instance node                                |
+| Colour | Kind                                      |
+| ------ | ----------------------------------------- |
+| Orange | Category node                             |
+| Blue   | Attribute node                            |
+| Purple | Attribute sub-group node (runtime-seeded) |
+| Green  | Instance node                             |
+| Pink   | Class node (runtime-seeded)               |
 
 Edges are parent → child arcs, styled by **arc kind** (not by colour):
 
-| Line style       | Arc kind        | Meaning                          |
-|------------------|-----------------|----------------------------------|
-| `-->` solid      | `composition`   | organisational / part-of         |
-| `==>` thick      | `taxonomy`      | refinement / is-a-kind-of        |
-| `-.->` dotted    | `instantiation` | (reserved; not in this subtree)  |
+| Line style    | Arc kind        | Meaning                         |
+| ------------- | --------------- | ------------------------------- |
+| `-->` solid   | `composition`   | organisational / part-of        |
+| `==>` thick   | `taxonomy`      | refinement / is-a-kind-of       |
+| `-.->` dotted | `instantiation` | (reserved; not in this subtree) |
 
 Subtree → arc kind:
 
-| Subtree                       | Arc kind         | Char nrefs (Parent / Child)   |
-|-------------------------------|------------------|-------------------------------|
-| Category scaffold (1, 2-5)    | `composition`    | 21 / 22                       |
-| Attribute taxonomy (6-31)     | `taxonomy`       | 23 / 24                       |
-| Languages (4 → 32-35 → 10000) | `composition`    | 21 / 22 (cat), 27 / 28 (inst) |
+| Subtree                       | Arc kind      | Char nrefs (Parent / Child)   |
+| ----------------------------- | ------------- | ----------------------------- |
+| Category scaffold (1, 2-5)    | `composition` | 21 / 22                       |
+| Attribute taxonomy (6-31)     | `taxonomy`    | 23 / 24                       |
+| Languages (4 → 32-35 → 10000) | `composition` | 21 / 22 (cat), 27 / 28 (inst) |
 
 ## Quick-reference
 
-| Nref  | Kind      | Role                                                                                                 |
-|-------|-----------|------------------------------------------------------------------------------------------------------|
-| 1     | category  | Root                                                                                                 |
-| 2-5   | category  | Top-level scaffold (Attributes, Classes, Languages, Projects)                                        |
-| 6-8   | attribute | Attribute-library groupings (Names, Literals, Relationships)                                         |
-| 9-12  | attribute | Name-attribute sub-groups (one per Kind)                                                             |
-| 13-16 | attribute | Relationship sub-groups (one per Kind)                                                               |
-| 17-20 | attribute | Concrete name attributes (one per Kind)                                                              |
-| 21-31 | attribute | Concrete arc-label nodes (Parent/Child per Kind, plus Class/Instance/Template for instances)         |
-| 32-35 | category  | Language subcategories (Human, Formal, Diagram, Renderers)                                           |
-| 10000 | instance  | English (member of Human Languages)                                                                  |
+| Nref  | Kind      | Role                                                                                         |
+| ----- | --------- | -------------------------------------------------------------------------------------------- |
+| 1     | category  | Root                                                                                         |
+| 2-5   | category  | Top-level scaffold (Attributes, Classes, Languages, Projects)                                |
+| 6-8   | attribute | Attribute-library groupings (Names, Literals, Relationships)                                 |
+| 9-12  | attribute | Name-attribute sub-groups (one per Kind)                                                     |
+| 13-16 | attribute | Relationship sub-groups (one per Kind)                                                       |
+| 17-20 | attribute | Concrete name attributes (one per Kind)                                                      |
+| 21-31 | attribute | Concrete arc-label nodes (Parent/Child per Kind, plus Class/Instance/Template for instances) |
+| 32-35 | category  | Language subcategories (Human, Formal, Diagram, Renderers)                                   |
+| 10000 | instance  | English (member of Human Languages)                                                          |
 
-Runtime sub-group / attribute nrefs sit at 10000+ and are not enumerated
-here (they shift between sessions); the L7 Attribute Literals and
-Language Literals sub-groups are seeded by `graphdb_attr:init/1` and
-`graphdb_language:init/1` respectively.
+Runtime sub-group / attribute / class nrefs sit at 10000+ and are not
+enumerated here (they shift between sessions); the L7 Attribute
+Literals and Language Literals sub-groups are seeded by
+`graphdb_attr:init/1` and `graphdb_language:init/1`, and the F4 Phase A
+Rule Literals sub-group plus the `Rule` / `CompositionRule` /
+`ConnectionRule` meta-classes and the `applies_to` / `applied_by` pair
+are seeded by `graphdb_rules:init/1`.
 
 ## Maintenance
 
 This file is hand-maintained. Update it in the same commit whenever:
 
 - `apps/graphdb/priv/bootstrap.terms` adds/removes/reparents a node.
-- Any `init/1` in `graphdb_attr`, `graphdb_class`, `graphdb_instance`, or
-  `graphdb_language` adds/removes/reparents a runtime-seeded node.
+- Any `init/1` in `graphdb_attr`, `graphdb_class`, `graphdb_instance`,
+  `graphdb_language`, or `graphdb_rules` adds/removes/reparents a
+  runtime-seeded node.
 - A new `graphdb_*` worker is added that seeds at startup.
 
 If hand-maintenance becomes lossy as runtime seeds grow (F4, F5+), swap
