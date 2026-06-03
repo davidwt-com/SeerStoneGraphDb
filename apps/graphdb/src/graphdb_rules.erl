@@ -17,6 +17,13 @@
 %% Rev A Date: *** 2008 Author: Dallas Noyes (dallas.noyes@gmail.com)
 %%
 %%---------------------------------------------------------------------
+%% Rev A Date: June 2026 Author: David W. Thomas (david@davidwt.com)
+%% F4 Phase A: rule meta-ontology seeding (Rule / CompositionRule /
+%% ConnectionRule), Rule Literals sub-group, applies_to/applied_by
+%% relationship-attribute pair, and seeded_nrefs/0.  Idempotent init/1
+%% mirrors graphdb_language.  Rule create/retrieve/validation land in
+%% later F4 Phase A tasks.
+%%---------------------------------------------------------------------
 -module(graphdb_rules).
 -behaviour(gen_server).
 
@@ -24,16 +31,37 @@
 %%---------------------------------------------------------------------
 %% Module Attributes
 %%---------------------------------------------------------------------
--revision('Revision: PA1 ').
+-revision('Revision: A ').
 -created('Date: *** 2008').
 -created_by('dallas.noyes@gmail.com').
-%%-modified('Date: Month Day, Year 10:50:00').
-%%-modified_by('dallas.noyes@gmail.com').
+-modified('Date: June 2026').
+-modified_by('david@davidwt.com').
 
 
 %%---------------------------------------------------------------------
 %% Include files
 %%---------------------------------------------------------------------
+-include("graphdb_nrefs.hrl").
+
+%% node/relationship records are defined inline in every worker (no shared
+%% header) -- copied verbatim from graphdb_instance.erl.
+-record(node, {
+	nref,					%% integer() -- primary key
+	kind,					%% category | attribute | class | instance | template
+	parents = [],			%% [integer()] -- cache of parent arcs
+	classes = [],			%% [integer()] -- cache of instantiation arcs
+	attribute_value_pairs	%% [#{attribute => Nref, value => term()}]
+}).
+
+-record(relationship, {
+	id,						%% integer() -- primary key
+	kind,					%% taxonomy | composition | connection | instantiation
+	source_nref,			%% integer() -- arc origin
+	characterization,		%% integer() -- arc label (an attribute nref)
+	target_nref,			%% integer() -- arc target
+	reciprocal,				%% integer() -- arc label as seen from target back
+	avps					%% [#{attribute => Nref, value => term()}]
+}).
 
 %%---------------------------------------------------------------------
 %% Macro Functions
@@ -62,7 +90,8 @@
 %% Exports External API
 %%---------------------------------------------------------------------
 -export([
-		start_link/0
+		start_link/0,
+		seeded_nrefs/0
 		]).
 
 %%---------------------------------------------------------------------
@@ -79,11 +108,39 @@
 
 
 %%---------------------------------------------------------------------
+%% State
+%%---------------------------------------------------------------------
+-record(state, {
+	rule_nref,
+	composition_rule_nref,
+	connection_rule_nref,
+	applies_to_nref,
+	applied_by_nref,
+	rule_literals_group_nref,
+	child_class_nref_attr,
+	target_class_nref_attr,
+	template_nref_attr,
+	characterization_nref_attr,
+	mode_attr,
+	multiplicity_attr
+}).
+
+
+%%---------------------------------------------------------------------
 %% Exported External API Functions
 %%---------------------------------------------------------------------
 
 start_link() ->
 	gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+%%-----------------------------------------------------------------------------
+%% seeded_nrefs() -> {ok, #{rule => integer(), ...}}
+%%
+%% Returns the twelve nrefs this worker seeded/located at init/1, keyed
+%% by stable atom names shared with the design and the test suite.
+%%-----------------------------------------------------------------------------
+seeded_nrefs() ->
+	gen_server:call(?MODULE, seeded_nrefs).
 
 
 %%---------------------------------------------------------------------
@@ -91,8 +148,66 @@ start_link() ->
 %%---------------------------------------------------------------------
 
 init([]) ->
-	{ok, []}.
+	try
+		RuleLitGrp     = ensure_seed("Rule Literals",         ?NREF_LITERALS),
+		ChildClassAttr = ensure_seed("child_class_nref",      RuleLitGrp),
+		TargetClassAttr= ensure_seed("target_class_nref",     RuleLitGrp),
+		TemplateAttr   = ensure_seed("template_nref",         RuleLitGrp),
+		CharAttr       = ensure_seed("characterization_nref", RuleLitGrp),
+		ModeAttr       = ensure_seed("mode",                  RuleLitGrp),
+		MultAttr       = ensure_seed("multiplicity",          RuleLitGrp),
+		{AppliesTo, AppliedBy} =
+			ensure_rel_attr_pair("applies_to", "applied_by",
+								 instance, ?NREF_INST_REL_ATTRS),
+		InstAttr = instantiable_marker_nref(),
+		RuleNref = ensure_meta_class("Rule", ?NREF_CLASSES,
+					   [#{attribute => InstAttr, value => false}]),
+		CompNref = ensure_meta_class("CompositionRule", RuleNref, []),
+		ConnNref = ensure_meta_class("ConnectionRule",  RuleNref, []),
+		ok = graphdb_attr:retro_stamp_attribute_types(),
+		logger:info("graphdb_rules: started (rule=~p, composition_rule=~p, "
+			"connection_rule=~p, applies_to=~p, applied_by=~p, "
+			"rule_literals_group=~p)",
+			[RuleNref, CompNref, ConnNref, AppliesTo, AppliedBy, RuleLitGrp]),
+		{ok, #state{
+			rule_nref                  = RuleNref,
+			composition_rule_nref      = CompNref,
+			connection_rule_nref       = ConnNref,
+			applies_to_nref            = AppliesTo,
+			applied_by_nref            = AppliedBy,
+			rule_literals_group_nref   = RuleLitGrp,
+			child_class_nref_attr      = ChildClassAttr,
+			target_class_nref_attr     = TargetClassAttr,
+			template_nref_attr         = TemplateAttr,
+			characterization_nref_attr = CharAttr,
+			mode_attr                  = ModeAttr,
+			multiplicity_attr          = MultAttr
+		}}
+	catch
+		throw:{error, Reason} ->
+			logger:error("graphdb_rules: init failed: ~p", [Reason]),
+			{stop, {init_failed, Reason}};
+		_Class:Reason:Stack ->
+			logger:error("graphdb_rules: init crashed: ~p ~p",
+				[Reason, Stack]),
+			{stop, {init_failed, Reason}}
+	end.
 
+handle_call(seeded_nrefs, _From, State) ->
+	{reply, {ok, #{
+		rule                       => State#state.rule_nref,
+		composition_rule           => State#state.composition_rule_nref,
+		connection_rule            => State#state.connection_rule_nref,
+		applies_to                 => State#state.applies_to_nref,
+		applied_by                 => State#state.applied_by_nref,
+		rule_literals_group        => State#state.rule_literals_group_nref,
+		child_class_nref_attr      => State#state.child_class_nref_attr,
+		target_class_nref_attr     => State#state.target_class_nref_attr,
+		template_nref_attr         => State#state.template_nref_attr,
+		characterization_nref_attr => State#state.characterization_nref_attr,
+		mode_attr                  => State#state.mode_attr,
+		multiplicity_attr          => State#state.multiplicity_attr
+	}}, State};
 handle_call(Request, From, State) ->
 	?UEM(handle_call, {Request, From, State}),
 	{noreply, State}.
@@ -109,5 +224,100 @@ terminate(_Reason, _State) ->
 	ok.
 
 code_change(_OldVsn, State, _Extra) ->
-	?NYI(code_change),
 	{ok, State}.
+
+
+%%---------------------------------------------------------------------
+%% Seeding helpers (idempotent -- see F4 Phase A plan Architecture Notes)
+%%---------------------------------------------------------------------
+
+%% ensure_seed(Name, ParentNref) -> Nref
+%% Plain attribute child of ParentNref (taxonomy arc pair).  Find-first
+%% via the public graphdb_attr:find_attribute_by_name/2; otherwise writes
+%% the node + arc pair in one transaction.  Mirrors
+%% graphdb_language:ensure_literal_seed/2.
+ensure_seed(Name, ParentNref) ->
+	case graphdb_attr:find_attribute_by_name(ParentNref, Name) of
+		{ok, Nref} -> Nref;
+		not_found ->
+			Nref = graphdb_nref:get_next(),
+			NameAVP = #{attribute => ?NAME_ATTR_ATTRIBUTE, value => Name},
+			Node = #node{nref = Nref, kind = attribute,
+						 parents = [ParentNref],
+						 attribute_value_pairs = [NameAVP]},
+			{Id1, Id2} = rel_id_server:get_id_pair(),
+			P2C = #relationship{id = Id1, kind = taxonomy,
+				source_nref = ParentNref, characterization = ?ARC_ATTR_CHILD,
+				target_nref = Nref, reciprocal = ?ARC_ATTR_PARENT, avps = []},
+			C2P = #relationship{id = Id2, kind = taxonomy,
+				source_nref = Nref, characterization = ?ARC_ATTR_PARENT,
+				target_nref = ParentNref, reciprocal = ?ARC_ATTR_CHILD,
+				avps = []},
+			F = fun() ->
+				ok = mnesia:write(nodes, Node, write),
+				ok = mnesia:write(relationships, P2C, write),
+				ok = mnesia:write(relationships, C2P, write)
+			end,
+			case mnesia:transaction(F) of
+				{atomic, ok}      -> Nref;
+				{aborted, Reason} -> throw({error, Reason})
+			end
+	end.
+
+%% ensure_rel_attr_pair/4 -> {AppliesToNref, AppliedByNref}
+%% Find-first on the forward name; otherwise create the reciprocal pair
+%% via the public graphdb_attr API.
+ensure_rel_attr_pair(Name, RecipName, TargetKind, ParentNref) ->
+	case graphdb_attr:find_attribute_by_name(ParentNref, Name) of
+		{ok, FwdNref} ->
+			{ok, RevNref} = graphdb_attr:find_attribute_by_name(ParentNref,
+																RecipName),
+			{FwdNref, RevNref};
+		not_found ->
+			case graphdb_attr:create_relationship_attribute_pair(
+					 Name, RecipName, TargetKind, ParentNref) of
+				{ok, {FwdNref, RevNref}} -> {FwdNref, RevNref};
+				{error, Reason}          -> throw({error, Reason})
+			end
+	end.
+
+%% ensure_meta_class/3 -> ClassNref (find-first, else create_class/3)
+ensure_meta_class(Name, ParentNref, AVPs) ->
+	case find_subclass_by_name(ParentNref, Name) of
+		{ok, Nref} -> Nref;
+		not_found ->
+			case graphdb_class:create_class(Name, ParentNref, AVPs) of
+				{ok, Nref}      -> Nref;
+				{error, Reason} -> throw({error, Reason})
+			end
+	end.
+
+%% find_subclass_by_name/2 -> {ok, Nref} | not_found
+%% Taxonomy children of ParentNref whose class-name AVP matches Name.
+find_subclass_by_name(ParentNref, Name) ->
+	F = fun() ->
+		Arcs = mnesia:index_read(relationships, ParentNref,
+								 #relationship.source_nref),
+		Nrefs = [A#relationship.target_nref || A <- Arcs,
+				 A#relationship.kind =:= taxonomy,
+				 A#relationship.characterization =:= ?ARC_CLS_CHILD],
+		Nodes = lists:flatmap(fun(N) -> mnesia:read(nodes, N) end, Nrefs),
+		lists:search(fun(N) -> class_has_name(N, Name) end, Nodes)
+	end,
+	case mnesia:transaction(F) of
+		{atomic, {value, #node{nref = Nref}}} -> {ok, Nref};
+		{atomic, false}                       -> not_found;
+		{aborted, Reason}                     -> throw({error, Reason})
+	end.
+
+class_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
+	lists:any(fun
+		(#{attribute := ?NAME_ATTR_CLASS, value := V}) -> V =:= Name;
+		(_) -> false
+	end, AVPs).
+
+%% instantiable_marker_nref/0 -> InstAttrNref
+%% Reads the seeded `instantiable' marker nref from graphdb_attr (L9).
+instantiable_marker_nref() ->
+	{ok, #{instantiable := InstAttr}} = graphdb_attr:seeded_nrefs(),
+	InstAttr.
