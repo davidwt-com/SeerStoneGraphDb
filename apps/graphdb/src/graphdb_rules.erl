@@ -93,7 +93,9 @@
 		start_link/0,
 		seeded_nrefs/0,
 		create_composition_rule/6,
-		create_composition_rule/7
+		create_composition_rule/7,
+		create_connection_rule/7,
+		create_connection_rule/8
 		]).
 
 %%---------------------------------------------------------------------
@@ -165,6 +167,32 @@ create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult,
 						TemplateNref) ->
 	gen_server:call(?MODULE,
 		{create_composition_rule, Scope, Name, ParentClass, ChildClass,
+		 Mode, Mult, TemplateNref}).
+
+%%-----------------------------------------------------------------------------
+%% create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
+%%                        Mult)
+%% create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
+%%                        Mult, TemplateNref)
+%%     -> {ok, RuleNref} | {error, term()}
+%%
+%% Creates a connection rule: a kind=instance node whose class membership is
+%% the seeded ConnectionRule meta-class.  Rule content (characterization_nref,
+%% target_class_nref, optional template_nref) lives on the node; rule
+%% deployment (Template, mode, multiplicity) lives on the applies_to
+%% connection arc from the owning (source) class to the rule instance.  Scope
+%% environment writes to the shared ontology; {project, _} is not yet
+%% supported.
+%%-----------------------------------------------------------------------------
+create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
+					   Mult) ->
+	create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
+						   Mult, undefined).
+
+create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
+					   Mult, TemplateNref) ->
+	gen_server:call(?MODULE,
+		{create_connection_rule, Scope, Name, SourceClass, Char, TargetClass,
 		 Mode, Mult, TemplateNref}).
 
 
@@ -242,6 +270,19 @@ handle_call({create_composition_rule, environment, Name, ParentClass,
 				ParentClass, ContentAVPs, Mode, Mult, State),
 	{reply, Reply, State};
 handle_call({create_composition_rule, {project, _}, _, _, _, _, _, _},
+			_From, State) ->
+	{reply, {error, project_rules_not_yet_supported}, State};
+handle_call({create_connection_rule, environment, Name, SourceClass, Char,
+			 TargetClass, Mode, Mult, TemplateNref}, _From, State) ->
+	ContentAVPs = [#{attribute => State#state.characterization_nref_attr,
+					 value => Char},
+				   #{attribute => State#state.target_class_nref_attr,
+					 value => TargetClass}
+				   | optional_template_avp(TemplateNref, State)],
+	Reply = do_create_rule(State#state.connection_rule_nref, Name,
+				SourceClass, ContentAVPs, Mode, Mult, State),
+	{reply, Reply, State};
+handle_call({create_connection_rule, {project, _}, _, _, _, _, _, _, _},
 			_From, State) ->
 	{reply, {error, project_rules_not_yet_supported}, State};
 handle_call(Request, From, State) ->

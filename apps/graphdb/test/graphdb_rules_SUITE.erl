@@ -71,7 +71,11 @@
 	creates_composition_rule_with_template/1,
 	applies_to_arc_pair_written/1,
 	instance_to_class_membership_written/1,
-	avps_present_and_correct/1
+	avps_present_and_correct/1,
+	%% connection
+	creates_connection_rule_minimal/1,
+	creates_connection_rule_with_template/1,
+	instance_to_class_membership_to_connection_rule/1
 ]).
 
 
@@ -83,7 +87,7 @@ suite() ->
 	[{timetrap, {seconds, 30}}].
 
 all() ->
-	[{group, seeding}, {group, composition}].
+	[{group, seeding}, {group, composition}, {group, connection}].
 
 groups() ->
 	[
@@ -100,6 +104,11 @@ groups() ->
 			applies_to_arc_pair_written,
 			instance_to_class_membership_written,
 			avps_present_and_correct
+		]},
+		{connection, [], [
+			creates_connection_rule_minimal,
+			creates_connection_rule_with_template,
+			instance_to_class_membership_to_connection_rule
 		]}
 	].
 
@@ -340,6 +349,52 @@ avps_present_and_correct(_Config) ->
 
 
 %%=============================================================================
+%% Connection Tests
+%%=============================================================================
+
+creates_connection_rule_minimal(_Config) ->
+	Source = make_class("Order"),
+	Target = make_class("Customer"),
+	Char   = make_rel_char("placed_by", "placed"),
+	{ok, RuleNref} = graphdb_rules:create_connection_rule(
+		environment, "order-placed-by-customer", Source, Char, Target,
+		mandatory, 1),
+	{ok, S} = graphdb_rules:seeded_nrefs(),
+	CharAttr   = maps:get(characterization_nref_attr, S),
+	TargetAttr = maps:get(target_class_nref_attr, S),
+	{ok, #node{kind = instance, classes = Classes,
+			   attribute_value_pairs = AVPs}} = node_read2(RuleNref),
+	?assertEqual([maps:get(connection_rule, S)], Classes),
+	?assert(lists:member(#{attribute => CharAttr, value => Char}, AVPs)),
+	?assert(lists:member(#{attribute => TargetAttr, value => Target}, AVPs)).
+
+creates_connection_rule_with_template(_Config) ->
+	Source = make_class("Order"),
+	Target = make_class("Customer"),
+	Char   = make_rel_char("placed_by", "placed"),
+	{ok, DT} = graphdb_class:default_template(Source),
+	{ok, RuleNref} = graphdb_rules:create_connection_rule(
+		environment, "order-placed-by-customer", Source, Char, Target,
+		propose, unbounded, DT),
+	{ok, S} = graphdb_rules:seeded_nrefs(),
+	TemplateAttr = maps:get(template_nref_attr, S),
+	{ok, #node{attribute_value_pairs = AVPs}} = node_read2(RuleNref),
+	?assert(lists:member(#{attribute => TemplateAttr, value => DT}, AVPs)).
+
+instance_to_class_membership_to_connection_rule(_Config) ->
+	Source = make_class("Order"),
+	Target = make_class("Customer"),
+	Char   = make_rel_char("placed_by", "placed"),
+	{ok, RuleNref} = graphdb_rules:create_connection_rule(
+		environment, "order-placed-by-customer", Source, Char, Target,
+		mandatory, 1),
+	{ok, S} = graphdb_rules:seeded_nrefs(),
+	Conn = maps:get(connection_rule, S),
+	I2C = read_arc(RuleNref, ?ARC_INST_TO_CLASS, Conn),
+	?assertEqual(instantiation, I2C#relationship.kind).
+
+
+%%=============================================================================
 %% Local test helpers
 %%=============================================================================
 
@@ -348,6 +403,14 @@ avps_present_and_correct(_Config) ->
 make_class(Name) ->
 	{ok, Nref} = graphdb_class:create_class(Name, ?NREF_CLASSES),
 	Nref.
+
+%% make_rel_char(Name, Recip) -> CharNref
+%% Creates a reciprocal relationship-attribute pair and returns the forward
+%% characterization nref (a valid, non-abstract connection-arc label).
+make_rel_char(Name, Recip) ->
+	{ok, {Fwd, _Rev}} =
+		graphdb_attr:create_relationship_attribute_pair(Name, Recip, class),
+	Fwd.
 
 %% node_read2(Nref) -> {ok, #node{}} | not_found
 node_read2(Nref) ->
