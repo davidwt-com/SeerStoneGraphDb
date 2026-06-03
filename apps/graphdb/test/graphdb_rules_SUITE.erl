@@ -75,7 +75,20 @@
 	%% connection
 	creates_connection_rule_minimal/1,
 	creates_connection_rule_with_template/1,
-	instance_to_class_membership_to_connection_rule/1
+	instance_to_class_membership_to_connection_rule/1,
+	%% validation
+	class_not_found_rejected/1,
+	not_a_class_rejected/1,
+	abstract_owning_class_rejected/1,
+	referenced_class_not_found_rejected/1,
+	referenced_not_a_class_rejected/1,
+	characterization_not_found_rejected/1,
+	not_a_relationship_attribute_rejected/1,
+	template_not_found_rejected/1,
+	not_a_template_rejected/1,
+	invalid_mode_rejected/1,
+	invalid_multiplicity_rejected/1,
+	failed_validation_consumes_no_nref/1
 ]).
 
 
@@ -87,7 +100,8 @@ suite() ->
 	[{timetrap, {seconds, 30}}].
 
 all() ->
-	[{group, seeding}, {group, composition}, {group, connection}].
+	[{group, seeding}, {group, composition}, {group, connection},
+	 {group, validation}].
 
 groups() ->
 	[
@@ -109,6 +123,20 @@ groups() ->
 			creates_connection_rule_minimal,
 			creates_connection_rule_with_template,
 			instance_to_class_membership_to_connection_rule
+		]},
+		{validation, [], [
+			class_not_found_rejected,
+			not_a_class_rejected,
+			abstract_owning_class_rejected,
+			referenced_class_not_found_rejected,
+			referenced_not_a_class_rejected,
+			characterization_not_found_rejected,
+			not_a_relationship_attribute_rejected,
+			template_not_found_rejected,
+			not_a_template_rejected,
+			invalid_mode_rejected,
+			invalid_multiplicity_rejected,
+			failed_validation_consumes_no_nref
 		]}
 	].
 
@@ -395,6 +423,131 @@ instance_to_class_membership_to_connection_rule(_Config) ->
 
 
 %%=============================================================================
+%% Validation Tests
+%%=============================================================================
+%% Validation runs entirely BEFORE do_create_rule allocates any nref, so a
+%% rejected create writes nothing.  Each case asserts the specific error atom
+%% AND that the nodes table is unchanged (compare table_size/1 before/after).
+
+class_not_found_rejected(_Config) ->
+	Child = make_class("Engine"),
+	Before = table_size(nodes),
+	?assertEqual({error, class_not_found},
+		graphdb_rules:create_composition_rule(
+			environment, "x", 999999, Child, mandatory, 1)),
+	?assertEqual(Before, table_size(nodes)).
+
+not_a_class_rejected(_Config) ->
+	Child = make_class("Engine"),
+	%% nref 6 (Names) is an attribute, not a class
+	Before = table_size(nodes),
+	?assertEqual({error, not_a_class},
+		graphdb_rules:create_composition_rule(
+			environment, "x", ?NREF_NAMES, Child, mandatory, 1)),
+	?assertEqual(Before, table_size(nodes)).
+
+abstract_owning_class_rejected(_Config) ->
+	Abstract = make_abstract_class("AbstractCar"),
+	Child    = make_class("Engine"),
+	Before   = table_size(nodes),
+	?assertEqual({error, owning_class_has_no_default_template},
+		graphdb_rules:create_composition_rule(
+			environment, "x", Abstract, Child, mandatory, 1)),
+	?assertEqual(Before, table_size(nodes)).
+
+referenced_class_not_found_rejected(_Config) ->
+	Parent = make_class("Car"),
+	Before = table_size(nodes),
+	?assertEqual({error, referenced_class_not_found},
+		graphdb_rules:create_composition_rule(
+			environment, "x", Parent, 999999, mandatory, 1)),
+	?assertEqual(Before, table_size(nodes)).
+
+referenced_not_a_class_rejected(_Config) ->
+	Parent = make_class("Car"),
+	Before = table_size(nodes),
+	?assertEqual({error, referenced_not_a_class},
+		graphdb_rules:create_composition_rule(
+			environment, "x", Parent, ?NREF_NAMES, mandatory, 1)),
+	?assertEqual(Before, table_size(nodes)).
+
+characterization_not_found_rejected(_Config) ->
+	Source = make_class("Order"),
+	Target = make_class("Customer"),
+	Before = table_size(nodes),
+	?assertEqual({error, characterization_not_found},
+		graphdb_rules:create_connection_rule(
+			environment, "x", Source, 999999, Target, mandatory, 1)),
+	?assertEqual(Before, table_size(nodes)).
+
+not_a_relationship_attribute_rejected(_Config) ->
+	Source = make_class("Order"),
+	Target = make_class("Customer"),
+	%% a literal attribute, not a relationship attribute
+	{ok, Lit} = graphdb_attr:create_literal_attribute("weight", integer),
+	Before = table_size(nodes),
+	?assertEqual({error, not_a_relationship_attribute},
+		graphdb_rules:create_connection_rule(
+			environment, "x", Source, Lit, Target, mandatory, 1)),
+	?assertEqual(Before, table_size(nodes)).
+
+template_not_found_rejected(_Config) ->
+	Parent = make_class("Car"),
+	Child  = make_class("Engine"),
+	Before = table_size(nodes),
+	?assertEqual({error, template_not_found},
+		graphdb_rules:create_composition_rule(
+			environment, "x", Parent, Child, mandatory, 1, 999999)),
+	?assertEqual(Before, table_size(nodes)).
+
+not_a_template_rejected(_Config) ->
+	Parent = make_class("Car"),
+	Child  = make_class("Engine"),
+	%% Child is a class, not a template
+	Before = table_size(nodes),
+	?assertEqual({error, not_a_template},
+		graphdb_rules:create_composition_rule(
+			environment, "x", Parent, Child, mandatory, 1, Child)),
+	?assertEqual(Before, table_size(nodes)).
+
+invalid_mode_rejected(_Config) ->
+	Parent = make_class("Car"),
+	Child  = make_class("Engine"),
+	Before = table_size(nodes),
+	?assertEqual({error, invalid_mode},
+		graphdb_rules:create_composition_rule(
+			environment, "x", Parent, Child, bogus, 1)),
+	?assertEqual(Before, table_size(nodes)).
+
+invalid_multiplicity_rejected(_Config) ->
+	Parent = make_class("Car"),
+	Child  = make_class("Engine"),
+	Before = table_size(nodes),
+	?assertEqual({error, invalid_multiplicity},
+		graphdb_rules:create_composition_rule(
+			environment, "x", Parent, Child, mandatory, 0)),
+	?assertEqual({error, invalid_multiplicity},
+		graphdb_rules:create_composition_rule(
+			environment, "x", Parent, Child, mandatory, "lots")),
+	?assertEqual(Before, table_size(nodes)).
+
+failed_validation_consumes_no_nref(_Config) ->
+	Parent = make_class("Car"),
+	Child  = make_class("Engine"),
+	%% graphdb_nref has no peek API (only get_next/0); assert no node was
+	%% written, which proves the write path never ran and consumed no nref.
+	%% Use a LATE-validator rejection (template_not_found, after the pure
+	%% mode/multiplicity and the owning/referenced-class checks) so the
+	%% no-write invariant is exercised deeper in the chain than the
+	%% earliest validator covers.
+	Before = table_size(nodes),
+	?assertEqual({error, template_not_found},
+		graphdb_rules:create_composition_rule(
+			environment, "x", Parent, Child, mandatory, 1, 999999)),
+	?assertEqual(Before, table_size(nodes)).
+
+
+%%=============================================================================
 %% Local test helpers
 %%=============================================================================
 
@@ -403,6 +556,20 @@ instance_to_class_membership_to_connection_rule(_Config) ->
 make_class(Name) ->
 	{ok, Nref} = graphdb_class:create_class(Name, ?NREF_CLASSES),
 	Nref.
+
+%% make_abstract_class(Name) -> Nref
+%% Creates an abstract class (L9 instantiable=false marker) under
+%% ?NREF_CLASSES.  An abstract class is born without a default template,
+%% so it must be rejected as a rule owning class.
+make_abstract_class(Name) ->
+	{ok, #{instantiable := InstAttr}} = graphdb_attr:seeded_nrefs(),
+	Marker = #{attribute => InstAttr, value => false},
+	{ok, Nref} = graphdb_class:create_class(Name, ?NREF_CLASSES, [Marker]),
+	Nref.
+
+%% table_size(Tab) -> integer()
+table_size(Tab) ->
+	mnesia:table_info(Tab, size).
 
 %% make_rel_char(Name, Recip) -> CharNref
 %% Creates a reciprocal relationship-attribute pair and returns the forward

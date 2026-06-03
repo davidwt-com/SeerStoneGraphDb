@@ -263,24 +263,36 @@ handle_call(seeded_nrefs, _From, State) ->
 	}}, State};
 handle_call({create_composition_rule, environment, Name, ParentClass,
 			 ChildClass, Mode, Mult, TemplateNref}, _From, State) ->
-	ContentAVPs = [#{attribute => State#state.child_class_nref_attr,
-					 value => ChildClass}
-				   | optional_template_avp(TemplateNref, State)],
-	Reply = do_create_rule(State#state.composition_rule_nref, Name,
-				ParentClass, ContentAVPs, Mode, Mult, State),
+	Reply = case validate_composition(ParentClass, ChildClass, Mode, Mult,
+									  TemplateNref) of
+		ok ->
+			ContentAVPs = [#{attribute => State#state.child_class_nref_attr,
+							 value => ChildClass}
+						   | optional_template_avp(TemplateNref, State)],
+			do_create_rule(State#state.composition_rule_nref, Name,
+				ParentClass, ContentAVPs, Mode, Mult, State);
+		{error, _} = Err ->
+			Err
+	end,
 	{reply, Reply, State};
 handle_call({create_composition_rule, {project, _}, _, _, _, _, _, _},
 			_From, State) ->
 	{reply, {error, project_rules_not_yet_supported}, State};
 handle_call({create_connection_rule, environment, Name, SourceClass, Char,
 			 TargetClass, Mode, Mult, TemplateNref}, _From, State) ->
-	ContentAVPs = [#{attribute => State#state.characterization_nref_attr,
-					 value => Char},
-				   #{attribute => State#state.target_class_nref_attr,
-					 value => TargetClass}
-				   | optional_template_avp(TemplateNref, State)],
-	Reply = do_create_rule(State#state.connection_rule_nref, Name,
-				SourceClass, ContentAVPs, Mode, Mult, State),
+	Reply = case validate_connection(SourceClass, Char, TargetClass, Mode,
+									 Mult, TemplateNref) of
+		ok ->
+			ContentAVPs = [#{attribute => State#state.characterization_nref_attr,
+							 value => Char},
+						   #{attribute => State#state.target_class_nref_attr,
+							 value => TargetClass}
+						   | optional_template_avp(TemplateNref, State)],
+			do_create_rule(State#state.connection_rule_nref, Name,
+				SourceClass, ContentAVPs, Mode, Mult, State);
+		{error, _} = Err ->
+			Err
+	end,
 	{reply, Reply, State};
 handle_call({create_connection_rule, {project, _}, _, _, _, _, _, _, _},
 			_From, State) ->
@@ -401,6 +413,112 @@ instantiable_marker_nref() ->
 
 
 %%---------------------------------------------------------------------
+%% Validation (runs BEFORE do_create_rule allocates any nref)
+%%---------------------------------------------------------------------
+%% Validators run in order, first error wins.  mode/multiplicity are
+%% validated first (pure), then the class/reference/characterization/
+%% template lookups via mnesia:dirty_read.  A rejected create writes
+%% nothing -- validation never reaches the writer's nref allocation.
+
+%% validate_composition(ParentClass, ChildClass, Mode, Mult, TemplateNref)
+%%     -> ok | {error, atom()}
+validate_composition(ParentClass, ChildClass, Mode, Mult, TemplateNref) ->
+	chain([
+		fun() -> validate_mode(Mode) end,
+		fun() -> validate_multiplicity(Mult) end,
+		fun() -> validate_owning_class(ParentClass) end,
+		fun() -> validate_referenced_class(ChildClass) end,
+		fun() -> validate_template(TemplateNref) end
+	]).
+
+%% validate_connection(SourceClass, Char, TargetClass, Mode, Mult,
+%%                     TemplateNref) -> ok | {error, atom()}
+validate_connection(SourceClass, Char, TargetClass, Mode, Mult, TemplateNref) ->
+	chain([
+		fun() -> validate_mode(Mode) end,
+		fun() -> validate_multiplicity(Mult) end,
+		fun() -> validate_owning_class(SourceClass) end,
+		fun() -> validate_referenced_class(TargetClass) end,
+		fun() -> validate_characterization(Char) end,
+		fun() -> validate_template(TemplateNref) end
+	]).
+
+%% chain(Funs) -> ok | {error, term()}
+%% Runs each zero-arg validator in order; first error wins.
+chain([]) ->
+	ok;
+chain([F | Rest]) ->
+	case F() of
+		ok               -> chain(Rest);
+		{error, _} = Err -> Err
+	end.
+
+validate_mode(M) when M =:= mandatory; M =:= auto; M =:= propose ->
+	ok;
+validate_mode(_) ->
+	{error, invalid_mode}.
+
+validate_multiplicity(unbounded) ->
+	ok;
+validate_multiplicity(N) when is_integer(N), N >= 1 ->
+	ok;
+validate_multiplicity(_) ->
+	{error, invalid_multiplicity}.
+
+%% validate_owning_class(Nref) -> ok | {error, atom()}
+%% The owning class must exist, be a class, and have a default template --
+%% the applies_to arc stamps the default template as deployment AVP index 0.
+%% An abstract class (L9 instantiable=false) or a class whose default
+%% template was deleted ("forced disambiguation") has none; reject cleanly
+%% rather than let do_create_rule badmatch.
+validate_owning_class(Nref) ->
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = class}] ->
+			case graphdb_class:default_template(Nref) of
+				{ok, _}   -> ok;
+				not_found -> {error, owning_class_has_no_default_template}
+			end;
+		[#node{}] ->
+			{error, not_a_class};
+		[] ->
+			{error, class_not_found}
+	end.
+
+%% validate_referenced_class(Nref) -> ok | {error, atom()}
+validate_referenced_class(Nref) ->
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = class}] -> ok;
+		[#node{}]             -> {error, referenced_not_a_class};
+		[]                    -> {error, referenced_class_not_found}
+	end.
+
+%% validate_characterization(Nref) -> ok | {error, atom()}
+%% The characterization must exist and be a relationship attribute.
+validate_characterization(Nref) ->
+	case mnesia:dirty_read(nodes, Nref) of
+		[] ->
+			{error, characterization_not_found};
+		[#node{}] ->
+			case graphdb_attr:attribute_type_of(Nref) of
+				{ok, relationship} -> ok;
+				_                  -> {error, not_a_relationship_attribute}
+			end
+	end.
+
+%% validate_template(TemplateNref) -> ok | {error, atom()}
+%% undefined means "no explicit template"; otherwise the nref must be a
+%% kind=template node.
+validate_template(undefined) ->
+	ok;
+validate_template(Nref) ->
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = template}] -> ok;
+		[#node{}]                -> {error, not_a_template};
+		[]                       -> {error, template_not_found}
+	end.
+
+
+%%---------------------------------------------------------------------
 %% Rule write path (shared by composition and connection rules)
 %%---------------------------------------------------------------------
 
@@ -416,43 +534,54 @@ instantiable_marker_nref() ->
 %% directly.)
 do_create_rule(MetaClassNref, Name, OwningClass, ContentAVPs, Mode, Mult,
 			   State) ->
-	{ok, DefaultTemplate} = graphdb_class:default_template(OwningClass),
-	RuleNref = graphdb_nref:get_next(),
-	{MembId1, MembId2} = rel_id_server:get_id_pair(),
-	{ConnId1, ConnId2} = rel_id_server:get_id_pair(),
-	NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
-	Node = #node{nref = RuleNref, kind = instance, parents = [],
-				 classes = [MetaClassNref],
-				 attribute_value_pairs = [NameAVP | ContentAVPs]},
-	I2C = #relationship{id = MembId1, kind = instantiation,
-		source_nref = RuleNref, characterization = ?ARC_INST_TO_CLASS,
-		target_nref = MetaClassNref, reciprocal = ?ARC_CLASS_TO_INST,
-		avps = []},
-	C2I = #relationship{id = MembId2, kind = instantiation,
-		source_nref = MetaClassNref, characterization = ?ARC_CLASS_TO_INST,
-		target_nref = RuleNref, reciprocal = ?ARC_INST_TO_CLASS, avps = []},
-	DeployAVPs = [#{attribute => ?ARC_TEMPLATE, value => DefaultTemplate},
-				  #{attribute => State#state.mode_attr, value => Mode},
-				  #{attribute => State#state.multiplicity_attr, value => Mult}],
-	AppliesTo = #relationship{id = ConnId1, kind = connection,
-		source_nref = OwningClass,
-		characterization = State#state.applies_to_nref,
-		target_nref = RuleNref, reciprocal = State#state.applied_by_nref,
-		avps = DeployAVPs},
-	AppliedBy = #relationship{id = ConnId2, kind = connection,
-		source_nref = RuleNref, characterization = State#state.applied_by_nref,
-		target_nref = OwningClass, reciprocal = State#state.applies_to_nref,
-		avps = []},
-	Txn = fun() ->
-		ok = mnesia:write(nodes, Node, write),
-		ok = mnesia:write(relationships, I2C, write),
-		ok = mnesia:write(relationships, C2I, write),
-		ok = mnesia:write(relationships, AppliesTo, write),
-		ok = mnesia:write(relationships, AppliedBy, write)
-	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}      -> {ok, RuleNref};
-		{aborted, Reason} -> {error, Reason}
+	%% Defense-in-depth: validate_owning_class/1 already rejects an owning
+	%% class with no default template before this writer runs, so the
+	%% not_found branch is unreachable in practice -- but a `case` keeps a
+	%% future caller path from badmatching here.
+	case graphdb_class:default_template(OwningClass) of
+		not_found ->
+			{error, owning_class_has_no_default_template};
+		{ok, DefaultTemplate} ->
+			RuleNref = graphdb_nref:get_next(),
+			{MembId1, MembId2} = rel_id_server:get_id_pair(),
+			{ConnId1, ConnId2} = rel_id_server:get_id_pair(),
+			NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
+			Node = #node{nref = RuleNref, kind = instance, parents = [],
+						 classes = [MetaClassNref],
+						 attribute_value_pairs = [NameAVP | ContentAVPs]},
+			I2C = #relationship{id = MembId1, kind = instantiation,
+				source_nref = RuleNref, characterization = ?ARC_INST_TO_CLASS,
+				target_nref = MetaClassNref, reciprocal = ?ARC_CLASS_TO_INST,
+				avps = []},
+			C2I = #relationship{id = MembId2, kind = instantiation,
+				source_nref = MetaClassNref, characterization = ?ARC_CLASS_TO_INST,
+				target_nref = RuleNref, reciprocal = ?ARC_INST_TO_CLASS,
+				avps = []},
+			DeployAVPs = [#{attribute => ?ARC_TEMPLATE, value => DefaultTemplate},
+						  #{attribute => State#state.mode_attr, value => Mode},
+						  #{attribute => State#state.multiplicity_attr,
+							value => Mult}],
+			AppliesTo = #relationship{id = ConnId1, kind = connection,
+				source_nref = OwningClass,
+				characterization = State#state.applies_to_nref,
+				target_nref = RuleNref, reciprocal = State#state.applied_by_nref,
+				avps = DeployAVPs},
+			AppliedBy = #relationship{id = ConnId2, kind = connection,
+				source_nref = RuleNref,
+				characterization = State#state.applied_by_nref,
+				target_nref = OwningClass, reciprocal = State#state.applies_to_nref,
+				avps = []},
+			Txn = fun() ->
+				ok = mnesia:write(nodes, Node, write),
+				ok = mnesia:write(relationships, I2C, write),
+				ok = mnesia:write(relationships, C2I, write),
+				ok = mnesia:write(relationships, AppliesTo, write),
+				ok = mnesia:write(relationships, AppliedBy, write)
+			end,
+			case mnesia:transaction(Txn) of
+				{atomic, ok}      -> {ok, RuleNref};
+				{aborted, Reason} -> {error, Reason}
+			end
 	end.
 
 %% optional_template_avp(TemplateNref, State) -> [AVP] | []
