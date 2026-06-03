@@ -870,6 +870,7 @@ asserts the specific error atom AND that nothing was written (compare
 {validation, [], [
     class_not_found_rejected,
     not_a_class_rejected,
+    abstract_owning_class_rejected,
     referenced_class_not_found_rejected,
     referenced_not_a_class_rejected,
     characterization_not_found_rejected,
@@ -882,6 +883,24 @@ asserts the specific error atom AND that nothing was written (compare
 ]}
 
 table_size(Tab) -> mnesia:table_info(Tab, size).
+
+%% An abstract owning class (L9 instantiable=false) has no default template
+%% to scope the applies_to arc, so it must be rejected — not badmatch in
+%% do_create_rule. make_abstract_class/1 stamps the instantiable=false marker.
+make_abstract_class(Name) ->
+    {ok, #{instantiable := InstAttr}} = graphdb_attr:seeded_nrefs(),
+    {ok, Nref} = graphdb_class:create_class(Name, ?NREF_CLASSES,
+                     [#{attribute => InstAttr, value => false}]),
+    Nref.
+
+abstract_owning_class_rejected(_Config) ->
+    Abstract = make_abstract_class("AbstractCar"),
+    Child    = make_class("Engine"),
+    Before   = table_size(nodes),
+    ?assertEqual({error, owning_class_has_no_default_template},
+        graphdb_rules:create_composition_rule(
+            environment, "x", Abstract, Child, mandatory, 1)),
+    ?assertEqual(Before, table_size(nodes)).
 
 class_not_found_rejected(_Config) ->
     Child = make_class("Engine"),
@@ -986,6 +1005,24 @@ first (pure), then class/reference/template lookups via `mnesia:dirty_read`.
 Use `graphdb_attr:attribute_type_of/1` to confirm a characterization is a
 relationship attribute.
 
+**Also harden `do_create_rule/7` (defense-in-depth).** Task 2 wrote it with a
+hard match `{ok, DefaultTemplate} = graphdb_class:default_template(OwningClass)`.
+`validate_owning_class/1` now rejects an owning class with no default template
+*before* the writer runs, so the writer never sees `not_found` in practice —
+but change the hard match to a `case` so a future caller path can't badmatch:
+
+```erlang
+do_create_rule(MetaClassNref, Name, OwningClass, ContentAVPs, Mode, Mult,
+               State) ->
+    case graphdb_class:default_template(OwningClass) of
+        not_found ->
+            {error, owning_class_has_no_default_template};
+        {ok, DefaultTemplate} ->
+            %% ... unchanged body: allocate nrefs/ids, build records,
+            %%     write node + 29/30 pair + applies_to/applied_by pair ...
+    end.
+```
+
 ```erlang
 %% Composition create clause becomes:
 handle_call({create_composition_rule, environment, Name, ParentClass,
@@ -1056,7 +1093,15 @@ validate_multiplicity(_) -> {error, invalid_multiplicity}.
 
 validate_owning_class(Nref) ->
     case mnesia:dirty_read(nodes, Nref) of
-        [#node{kind = class}] -> ok;
+        [#node{kind = class}] ->
+            %% The applies_to arc stamps the owning class's default template
+            %% (deployment AVP index 0). An abstract class (L9 marker) or a
+            %% class whose default was deleted ("forced disambiguation") has
+            %% none — reject rather than let do_create_rule badmatch.
+            case graphdb_class:default_template(Nref) of
+                {ok, _}   -> ok;
+                not_found -> {error, owning_class_has_no_default_template}
+            end;
         [#node{}]             -> {error, not_a_class};
         []                    -> {error, class_not_found}
     end.
@@ -1090,7 +1135,7 @@ validate_template(Nref) ->
 - [ ] **Step 4: Run the validation group + the prior groups to verify all pass**
 
 Run: `./rebar3 ct --suite apps/graphdb/test/graphdb_rules_SUITE --group validation`
-Expected: PASS (11 cases).
+Expected: PASS (12 cases — the original 11 plus `abstract_owning_class_rejected`).
 
 Run: `./rebar3 ct --suite apps/graphdb/test/graphdb_rules_SUITE`
 Expected: PASS — seeding + composition + connection + validation all green.
@@ -1567,7 +1612,8 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 1. **Spec coverage:** every Phase A deliverable in design §1.1 maps to a task —
    meta-ontology (T1), non-instantiable Rule root via L9 marker (T1),
    AVP schemas (T2/T3/T4), attachment mechanism (T2), public API (T2/T3/T5),
-   validation catalog 11 atoms (T4), CT coverage (T1–T7), supervisor reorder
+   validation catalog 12 atoms incl. owning_class_has_no_default_template
+   (T4), CT coverage (T1–T7), supervisor reorder
    (T1).
 2. **`seeded_nrefs/0` 12 keys** identical in: state record (T1), handler (T1),
    `seeded_nrefs_returns_all_twelve` (T1), and every retrieval/creation test
