@@ -94,10 +94,11 @@
 }).
 
 -record(state, {
-	target_kind_avp_nref	%% integer() -- nref of the seeded `target_kind`
+	target_kind_avp_nref,	%% integer() -- nref of the seeded `target_kind`
 							%% literal-attribute, cached from graphdb_attr
 							%% at init time and used by add_relationship
 							%% validation (M3).
+	instantiable_nref		%% integer() -- seeded `instantiable` marker (L9)
 }).
 
 
@@ -326,17 +327,23 @@ init([]) ->
 	%% Cache the seeded `target_kind` literal-attribute nref from
 	%% graphdb_attr.  Used by add_relationship validation (M3) to check
 	%% that an arc's target node has the kind declared on the
-	%% characterization.  graphdb_attr is started before graphdb_instance
-	%% by graphdb_sup, so this call is safe at init time.
-	{ok, #{target_kind := TkAttr}} = graphdb_attr:seeded_nrefs(),
-	{ok, #state{target_kind_avp_nref = TkAttr}}.
+	%% characterization.  Also cache `instantiable` (L9) to check at
+	%% create_instance time that the class is not marked non-instantiable.
+	%% graphdb_attr is started before graphdb_instance by graphdb_sup,
+	%% so this call is safe at init time.
+	{ok, #{target_kind := TkAttr, instantiable := InstAttr}} =
+		graphdb_attr:seeded_nrefs(),
+	{ok, #state{target_kind_avp_nref = TkAttr,
+				instantiable_nref = InstAttr}}.
 
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Creators
 %%-----------------------------------------------------------------------------
-handle_call({create_instance, Name, ClassNref, ParentNref}, _From, State) ->
-	{reply, do_create_instance(Name, ClassNref, ParentNref), State};
+handle_call({create_instance, Name, ClassNref, ParentNref}, _From,
+		#state{instantiable_nref = InstAttr} = State) ->
+	{reply, do_create_instance(Name, ClassNref, ParentNref, InstAttr),
+		State};
 
 handle_call({add_relationship, S, C, T, R, TemplateSpec, AVPSpec},
 		_From, State) ->
@@ -344,8 +351,10 @@ handle_call({add_relationship, S, C, T, R, TemplateSpec, AVPSpec},
 		do_add_relationship(S, C, T, R, TemplateSpec, AVPSpec, State),
 		State};
 
-handle_call({add_class_membership, InstanceNref, ClassNref}, _From, State) ->
-	{reply, do_add_class_membership(InstanceNref, ClassNref), State};
+handle_call({add_class_membership, InstanceNref, ClassNref}, _From,
+		#state{instantiable_nref = InstAttr} = State) ->
+	{reply, do_add_class_membership(InstanceNref, ClassNref, InstAttr),
+		State};
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Lookups
@@ -419,15 +428,16 @@ find_avp_value([_ | Rest], AttrNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_create_instance(Name, ClassNref, ParentNref) ->
+%% do_create_instance(Name, ClassNref, ParentNref, InstAttr) ->
 %%     {ok, Nref} | {error, term()}
 %%
-%% Validates the class (must be kind=class) and parent (must exist),
-%% allocates nrefs outside the Mnesia transaction, then atomically
-%% writes the node record, membership arcs, and compositional arcs.
+%% Validates the class (must be kind=class and instantiable) and parent
+%% (must exist), allocates nrefs outside the Mnesia transaction, then
+%% atomically writes the node record, membership arcs, and compositional
+%% arcs.
 %%-----------------------------------------------------------------------------
-do_create_instance(Name, ClassNref, ParentNref) ->
-	case do_validate_class(ClassNref) of
+do_create_instance(Name, ClassNref, ParentNref, InstAttr) ->
+	case do_validate_class(ClassNref, InstAttr) of
 		ok ->
 			case do_validate_parent(ParentNref) of
 				ok ->
@@ -506,14 +516,36 @@ do_write_instance(Name, ClassNref, ParentNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_validate_class(ClassNref) -> ok | {error, term()}
+%% do_validate_class(ClassNref, InstAttr) -> ok | {error, term()}
+%%
+%% Validates that ClassNref is an existing kind=class node and is not
+%% marked non-instantiable (instantiable => false AVP under InstAttr).
+%% Absence of the marker is permissive — only classes explicitly stamped
+%% with `instantiable => false` are blocked.
 %%-----------------------------------------------------------------------------
-do_validate_class(ClassNref) ->
+do_validate_class(ClassNref, InstAttr) ->
 	case mnesia:dirty_read(nodes, ClassNref) of
-		[#node{kind = class}]          -> ok;
-		[#node{kind = Kind}]           -> {error, {not_a_class, Kind}};
-		[]                             -> {error, class_not_found}
+		[#node{kind = class, attribute_value_pairs = AVPs}] ->
+			case is_marked_non_instantiable(AVPs, InstAttr) of
+				true  -> {error, {class_not_instantiable, ClassNref}};
+				false -> ok
+			end;
+		[#node{kind = Kind}] -> {error, {not_a_class, Kind}};
+		[]                   -> {error, class_not_found}
 	end.
+
+%% is_marked_non_instantiable(AVPs, InstAttr) -> boolean()
+%%
+%% Returns true only when the AVP list contains an entry
+%% #{attribute => InstAttr, value => false}.  Absence = permissive.
+%% The duplication of this helper in graphdb_class is intentional — the
+%% two workers do not share a module, and L9 deliberately does NOT
+%% introduce a shared util module for one small predicate (YAGNI).
+is_marked_non_instantiable(AVPs, InstAttr) ->
+	lists:any(fun
+		(#{attribute := A, value := false}) when A =:= InstAttr -> true;
+		(_) -> false
+	end, AVPs).
 
 
 %%-----------------------------------------------------------------------------
@@ -717,17 +749,17 @@ write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
 
 
 %%-----------------------------------------------------------------------------
-%% do_add_class_membership(InstanceNref, ClassNref) ->
+%% do_add_class_membership(InstanceNref, ClassNref, InstAttr) ->
 %%     ok | {error, term()}
 %%
 %% Validates the subject (must be an instance) and the target (must be
-%% a class), then atomically writes the 29/30 arc pair and appends
-%% ClassNref to the instance's classes cache.  Idempotent.
+%% a class and instantiable), then atomically writes the 29/30 arc pair
+%% and appends ClassNref to the instance's classes cache.  Idempotent.
 %%-----------------------------------------------------------------------------
-do_add_class_membership(InstanceNref, ClassNref) ->
+do_add_class_membership(InstanceNref, ClassNref, InstAttr) ->
 	case do_get_instance(InstanceNref) of
 		{ok, _} ->
-			case do_validate_class(ClassNref) of
+			case do_validate_class(ClassNref, InstAttr) of
 				ok               -> do_write_class_membership(InstanceNref,
 									ClassNref);
 				{error, _} = Err -> Err

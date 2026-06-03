@@ -65,6 +65,7 @@
 	template_avp_marker_idempotent/1,
 	seeds_attribute_literals_subgroup/1,
 	attr_literal_seeds_parented_under_subgroup/1,
+	seeds_instantiable_marker/1,
 	%% Creators
 	create_name_attribute_basic/1,
 	create_literal_attribute_stores_type/1,
@@ -120,7 +121,8 @@ groups() ->
 			template_avp_marker_stamped,
 			template_avp_marker_idempotent,
 			seeds_attribute_literals_subgroup,
-			attr_literal_seeds_parented_under_subgroup
+			attr_literal_seeds_parented_under_subgroup,
+			seeds_instantiable_marker
 		]},
 		{creators, [], [
 			create_name_attribute_basic,
@@ -372,6 +374,28 @@ attr_literal_seeds_parented_under_subgroup(_Config) ->
 			?assertEqual([AttrLitNref], Node#node.parents)
 		end,
 		[Lt, Tk, Ra, At]).
+
+
+%%-----------------------------------------------------------------------------
+%% After init, `instantiable` is seeded as an attribute-kind node named
+%% "instantiable" under the Attribute Literals sub-group, exposed via
+%% seeded_nrefs/0, in the permanent tier, carrying an attribute_type AVP.
+%%-----------------------------------------------------------------------------
+seeds_instantiable_marker(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{instantiable := InstNref,
+		   attribute_literals_group := AttrLitNref,
+		   attribute_type := AtNref}} =
+		graphdb_attr:seeded_nrefs(),
+	?assert(is_integer(InstNref)),
+	?assert(InstNref > ?NREF_ENGLISH andalso InstNref < ?NREF_START),
+	{ok, Node} = graphdb_attr:get_attribute(InstNref),
+	?assertEqual(attribute, Node#node.kind),
+	?assertEqual([AttrLitNref], Node#node.parents),
+	?assert(lists:member(#{attribute => ?NAME_ATTR_ATTRIBUTE,
+		value => "instantiable"}, Node#node.attribute_value_pairs)),
+	?assert(lists:member(#{attribute => AtNref, value => literal},
+		Node#node.attribute_value_pairs)).
 
 
 %%=============================================================================
@@ -675,8 +699,8 @@ list_attributes_includes_bootstrap_and_runtime(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, Before} = graphdb_attr:list_attributes(),
 	%% Bootstrap has 27 attribute nodes (nrefs 6-31 = 26, plus lang_code);
-	%% seeding adds the Attribute Literals sub-group + 4 literal attrs = 5
-	?assertEqual(27 + 5, length(Before)),
+	%% seeding adds the Attribute Literals sub-group + 5 literal attrs = 6
+	?assertEqual(27 + 6, length(Before)),
 
 	{ok, _} = graphdb_attr:create_name_attribute("One"),
 	{ok, _} = graphdb_attr:create_name_attribute("Two"),

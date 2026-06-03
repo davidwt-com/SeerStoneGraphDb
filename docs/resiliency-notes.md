@@ -47,13 +47,16 @@ the small commit can land under either framing.
 These were rephrased questions queued at the end of the seeding
 brainstorm but never answered. Most are smaller than (A)-vs-(B):
 
-- **R1.** Bump `nref_start` from 10_000 to 1_000_000? (Leaning yes —
-  leaves a much larger gap between bootstrap and runtime regions,
-  easier to spot region violations at a glance.)
-- **R2.** Where do `applies_to` / `applied_by` arc-label nodes land?
-  Three candidates from the F4 Phase A pinned question (P1) are
-  still live: (a) Relationships > Instance Relationships, (b) a new
-  Rule Relationships sub-group, (c) under Classes.
+- **R1.** ~~Bump `nref_start` from 10_000 to 1_000_000?~~ **Resolved:
+  bumped to 1_000_000.** Permanent tier is now `[10001, 1000000)`,
+  runtime allocations `>= 1000000` — a much larger gap between the
+  bootstrap/permanent and runtime regions, easier to spot region
+  violations at a glance.
+- **R2.** ~~Where do `applies_to` / `applied_by` arc-label nodes
+  land?~~ **Resolved 2026-06-01:** under **nref 16** (Relationships >
+  Instance Relationships, `?NREF_INST_REL_ATTRS`) — candidate (a). No
+  dedicated Rule Relationships sub-bucket. Recorded as F4 design D13 /
+  §10.1 P1 RESOLVED.
 - **R2b.** ~~Should `create_relationship_attribute/3` be fixed to honor
   kind sub-categories (13–16) instead of dropping new arc-labels
   directly under nref 8?~~ **Resolved by L8 (2026-05-31):**
@@ -62,7 +65,14 @@ brainstorm but never answered. Most are smaller than (A)-vs-(B):
   attribute parent); the `/3` arity keeps the nref-8 default.
 - **R3.** Default Templates — show them in `ontology-tree.md`?
   Currently no Templates exist at end of bootstrap, so the diagram
-  is clean. Decision pending first runtime Template seed.
+  is clean. Decision pending first runtime Template seed. **Update
+  2026-06-01:** the `create_class/2` auto-default-template behavior is
+  reviewed and **kept** per-class (F4 design D14 — singleton/removal
+  both rejected). So once F4 Phase A lands, the two *instantiable*
+  meta-classes (`CompositionRule`, `ConnectionRule`) will each seed a
+  default template into the env tree; the abstract `Rule` root will not
+  (F4 D15 — non-instantiable classes skip the auto-default via the
+  deferred `instantiable => false` marker). Revisit the diagram then.
 - **R4.** Promote the L7 sub-grouping pattern (sub-group per owning
   worker, idempotent ensure-by-name under a category/attribute
   parent) to **policy** or keep it as **precedent only**?

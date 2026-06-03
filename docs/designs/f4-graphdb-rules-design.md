@@ -40,6 +40,12 @@ Phase A delivers:
 
 - Meta-ontology: `Rule` class root + two leaf meta-classes
   (`CompositionRule`, `ConnectionRule`) seeded at runtime.
+- Non-instantiable class marker (D15): the abstract `Rule` root is
+  seeded with `instantiable => false`, which suppresses its auto-default
+  template and makes `create_instance` refuse it. The marker mechanism
+  ships as the **L9 prerequisite** (landed 2026-06-01,
+  `docs/designs/l9-non-instantiable-classes-design.md`) — Phase A simply
+  calls `graphdb_class:create_class("Rule", ?NREF_CLASSES, [Marker])`.
 - AVP schemas locked for both Phase A rule kinds.
 - Attachment mechanism: `applies_to` / `applied_by` arc pair from
   owning class to rule instance.
@@ -290,16 +296,26 @@ All seeds are idempotent — re-running them after restart is a no-op.
 All nrefs are cached in gen_server state and exposed via
 `seeded_nrefs/0`.
 
-**Side-effect of `graphdb_class:create_class/2`:** the existing API
-atomically writes the class node *and* a default Template node
-(`kind = template`) plus the class→template composition arc pair.
-Seeding `Rule`, `CompositionRule`, and `ConnectionRule` therefore
-creates three meta-class nodes **plus three default Template nodes**.
-The default-template nrefs are not exposed via `seeded_nrefs/0` in
-Phase A — Phase B+ engines dispatch on `classes` cache on rule
-instances, never on meta-class default templates. The owning class's
-default template (e.g., Car's default template) is what scopes the
-`applies_to` arc per D5, not the meta-class's default template.
+**Side-effect of `graphdb_class:create_class/2` (reviewed — kept,
+D14):** the existing API atomically writes the class node *and* a
+default Template node (`kind = template`) plus the class→template
+composition arc pair. The per-class auto-default-template behavior is
+canonical (`the-knowledge-network.md` §7 line 172) and was reviewed
+during F4 Phase A pre-implementation; the decision is to **keep it as
+written** — no singleton, no removal (see D14).
+
+`CompositionRule` and `ConnectionRule` are **instantiable** (their
+instances *are* the rules), so each keeps its auto-default Template
+node. The `Rule` root is **abstract / non-instantiable** and must be
+seeded with the `instantiable => false` marker (D15), which suppresses
+its auto-default template. Seeding the meta-classes therefore creates
+three class nodes **plus two default Template nodes** (one each for the
+two instantiable leaves). The default-template nrefs are not exposed via
+`seeded_nrefs/0` in Phase A — Phase B+ engines dispatch on the `classes`
+cache on rule instances, never on meta-class default templates. The
+owning *domain* class's default template (e.g., Car's default template)
+is what scopes the `applies_to` arc per D5, not the meta-class's
+template.
 
 ### 3.1 Seed list
 
@@ -310,19 +326,19 @@ the /3 variant that takes an explicit parent nref (introduced by L7);
 in L7 `graphdb_attr` and `graphdb_language` already use the /3 form
 to seed under their own sub-groups.
 
-| #   | Seeded entity                         | API call                                                                                            | Stored under                                                                                |
-| --- | ------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| 1   | `Rule Literals` sub-group attribute   | seeded directly by `graphdb_rules:init/1` as a child attribute of nref 7                            | nref 7 (Literals)                                                                           |
-| 2   | `child_class_nref` literal attr       | `graphdb_attr:create_literal_attribute("child_class_nref", integer, RuleLiteralsNref)`              | Rule Literals                                                                               |
-| 3   | `target_class_nref` literal attr      | `graphdb_attr:create_literal_attribute("target_class_nref", integer, RuleLiteralsNref)`             | Rule Literals                                                                               |
-| 4   | `template_nref` literal attr          | `graphdb_attr:create_literal_attribute("template_nref", integer, RuleLiteralsNref)`                 | Rule Literals                                                                               |
-| 5   | `characterization_nref` literal attr  | `graphdb_attr:create_literal_attribute("characterization_nref", integer, RuleLiteralsNref)`         | Rule Literals                                                                               |
-| 6   | `mode` literal attr                   | `graphdb_attr:create_literal_attribute("mode", atom, RuleLiteralsNref)`                             | Rule Literals                                                                               |
-| 7   | `multiplicity` literal attr           | `graphdb_attr:create_literal_attribute("multiplicity", term, RuleLiteralsNref)`                     | Rule Literals                                                                               |
-| 8   | `applies_to` / `applied_by` rel attrs | `graphdb_attr:create_relationship_attribute_pair("applies_to", "applied_by", instance, ParentNref)` | see §10.1 P1 — parent is a Phase-A decision (L8 enables any attribute parent, e.g. nref 16) |
-| 9   | `Rule` class                          | `graphdb_class:create_class("Rule", ?NREF_CLASSES)`                                                 | nref 3 (Classes)                                                                            |
-| 10  | `CompositionRule` class               | `graphdb_class:create_class("CompositionRule", RuleNref)` (taxonomy arc)                            | subclass of Rule                                                                            |
-| 11  | `ConnectionRule` class                | `graphdb_class:create_class("ConnectionRule", RuleNref)` (taxonomy arc)                             | subclass of Rule                                                                            |
+| #   | Seeded entity                         | API call                                                                                                                                                             | Stored under                                                            |
+| --- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| 1   | `Rule Literals` sub-group attribute   | seeded directly by `graphdb_rules:init/1` as a child attribute of nref 7                                                                                             | nref 7 (Literals)                                                       |
+| 2   | `child_class_nref` literal attr       | `graphdb_attr:create_literal_attribute("child_class_nref", integer, RuleLiteralsNref)`                                                                               | Rule Literals                                                           |
+| 3   | `target_class_nref` literal attr      | `graphdb_attr:create_literal_attribute("target_class_nref", integer, RuleLiteralsNref)`                                                                              | Rule Literals                                                           |
+| 4   | `template_nref` literal attr          | `graphdb_attr:create_literal_attribute("template_nref", integer, RuleLiteralsNref)`                                                                                  | Rule Literals                                                           |
+| 5   | `characterization_nref` literal attr  | `graphdb_attr:create_literal_attribute("characterization_nref", integer, RuleLiteralsNref)`                                                                          | Rule Literals                                                           |
+| 6   | `mode` literal attr                   | `graphdb_attr:create_literal_attribute("mode", atom, RuleLiteralsNref)`                                                                                              | Rule Literals                                                           |
+| 7   | `multiplicity` literal attr           | `graphdb_attr:create_literal_attribute("multiplicity", term, RuleLiteralsNref)`                                                                                      | Rule Literals                                                           |
+| 8   | `applies_to` / `applied_by` rel attrs | `graphdb_attr:create_relationship_attribute_pair("applies_to", "applied_by", instance, ?NREF_INST_REL_ATTRS)`                                                        | parent = nref 16 (Instance Relationships) per D13 / §10.1 P1 (RESOLVED) |
+| 9   | `Rule` class                          | `graphdb_class:create_class("Rule", ?NREF_CLASSES, [#{attribute => InstantiableNref, value => false}])` — **non-instantiable** (D15/L9; skips auto-default template) | nref 3 (Classes); abstract root                                         |
+| 10  | `CompositionRule` class               | `graphdb_class:create_class("CompositionRule", RuleNref)` (taxonomy arc)                                                                                             | subclass of Rule                                                        |
+| 11  | `ConnectionRule` class                | `graphdb_class:create_class("ConnectionRule", RuleNref)` (taxonomy arc)                                                                                              | subclass of Rule                                                        |
 
 Order matters: the `Rule Literals` sub-group (step 1) before its
 children (2–7); the relationship-attribute pair (8) before the class
@@ -682,18 +698,18 @@ Three exits:
 - **Modify the existing API.** Would touch L7's already-shipped
   behavior and re-open closed tests.
 
-**Status:** pinned pending review of broader seeding questions that
-surfaced alongside it (the default-template auto-creation by
-`create_class/2` noted in §3, and any related seed-shape questions
-the user wishes to explore). Resolution of those questions may
-shape or directly answer P1.
+**Status: RESOLVED (2026-06-01, D13).** The pair is seeded under
+**nref 16** (`?NREF_INST_REL_ATTRS`, Instance Relationships) via
+`create_relationship_attribute_pair/4`. This mirrors the Instance
+Relationships subcategory rather than introducing a dedicated Rule
+sub-bucket. §3.1 row 8 and the CT case `seeds_applies_to_pair` assert
+parent = nref 16.
 
-**Update (2026-05-31, L8):** The placement blocker is removed by
-construction. `create_relationship_attribute_pair/4` now files the
-`applies_to` / `applied_by` pair under any attribute parent, e.g.
-`?NREF_INST_REL_ATTRS` (16). The remaining choice of exact parent
-(nref 16 vs a Rule sub-bucket) stays a Phase-A seeding decision; the
-"would require an API extension" tension is gone.
+History: L8 (2026-05-31) removed the API blocker — the no-parent `/3`
+arity parked both nodes under nref 8, but the new `/4` arity files them
+under any attribute parent. With the API unblocked, the only remaining
+choice was the exact parent; that choice (nref 16, the "kind-specific
+parent" exit) is now taken.
 
 ### 10.2 Deferred — Later Phases or Follow-up Tasks
 
@@ -821,20 +837,23 @@ mode).
 Decisions taken during brainstorming. Each maps to one of the
 commitments in §2.
 
-| Tag | Decision                                                                                                                                                                                                                                                                                                                             | Date       |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- |
-| D1  | P2 placement: Rule class root under nref 3 with leaf meta-classes as subclasses                                                                                                                                                                                                                                                      | 2026-05-25 |
-| D2  | A2 + B3: rule is `kind=instance` whose class is a rule meta-class                                                                                                                                                                                                                                                                    | 2026-05-25 |
-| D3  | Y1: general rules live in environment; project rules deferred to L6                                                                                                                                                                                                                                                                  | 2026-05-25 |
-| D4  | Unified ConnectionRule with 3-state mode (mandatory \| auto \| propose) — mandatory is enforcement, not a rule kind                                                                                                                                                                                                                  | 2026-05-25 |
-| D5  | Attachment B: `applies_to` / `applied_by` arc from owning class                                                                                                                                                                                                                                                                      | 2026-05-25 |
-| D6  | AVP schemas locked for CompositionRule and ConnectionRule                                                                                                                                                                                                                                                                            | 2026-05-25 |
-| D7  | Scope-aware API; Phase A env-only; project returns placeholder error                                                                                                                                                                                                                                                                 | 2026-05-25 |
-| D8  | `graphdb_rules` is a direct entry point, not routed through `graphdb_mgr`                                                                                                                                                                                                                                                            | 2026-05-25 |
-| D9  | Multiplicity literal attr uses `attribute_type => term`; union types are future M8 work                                                                                                                                                                                                                                              | 2026-05-25 |
-| D10 | Supervisor reorder: `graphdb_rules` becomes last child of `graphdb_sup`                                                                                                                                                                                                                                                              | 2026-05-25 |
-| D11 | Literals subtree partitioned by owning subsystem (`Attribute Literals` / `Language Literals` / `Rule Literals`). L7 lands the first two; Phase A adds the third. No runtime migration — clean-slate seeding.                                                                                                                         | 2026-05-25 |
-| D12 | `applies_to` / `applied_by` arc pair is `kind = connection`. The arc carries Template (owning class's default), `mode`, and `multiplicity` as AVPs. `mode` and `multiplicity` move off the rule instance node — they are properties of the binding, not the rule. Same rule node reusable across classes with different enforcement. | 2026-05-26 |
+| Tag | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Date       |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- |
+| D1  | P2 placement: Rule class root under nref 3 with leaf meta-classes as subclasses                                                                                                                                                                                                                                                                                                                                                                                                                        | 2026-05-25 |
+| D2  | A2 + B3: rule is `kind=instance` whose class is a rule meta-class                                                                                                                                                                                                                                                                                                                                                                                                                                      | 2026-05-25 |
+| D3  | Y1: general rules live in environment; project rules deferred to L6                                                                                                                                                                                                                                                                                                                                                                                                                                    | 2026-05-25 |
+| D4  | Unified ConnectionRule with 3-state mode (mandatory \| auto \| propose) — mandatory is enforcement, not a rule kind                                                                                                                                                                                                                                                                                                                                                                                    | 2026-05-25 |
+| D5  | Attachment B: `applies_to` / `applied_by` arc from owning class                                                                                                                                                                                                                                                                                                                                                                                                                                        | 2026-05-25 |
+| D6  | AVP schemas locked for CompositionRule and ConnectionRule                                                                                                                                                                                                                                                                                                                                                                                                                                              | 2026-05-25 |
+| D7  | Scope-aware API; Phase A env-only; project returns placeholder error                                                                                                                                                                                                                                                                                                                                                                                                                                   | 2026-05-25 |
+| D8  | `graphdb_rules` is a direct entry point, not routed through `graphdb_mgr`                                                                                                                                                                                                                                                                                                                                                                                                                              | 2026-05-25 |
+| D9  | Multiplicity literal attr uses `attribute_type => term`; union types are future M8 work                                                                                                                                                                                                                                                                                                                                                                                                                | 2026-05-25 |
+| D10 | Supervisor reorder: `graphdb_rules` becomes last child of `graphdb_sup`                                                                                                                                                                                                                                                                                                                                                                                                                                | 2026-05-25 |
+| D11 | Literals subtree partitioned by owning subsystem (`Attribute Literals` / `Language Literals` / `Rule Literals`). L7 lands the first two; Phase A adds the third. No runtime migration — clean-slate seeding.                                                                                                                                                                                                                                                                                           | 2026-05-25 |
+| D12 | `applies_to` / `applied_by` arc pair is `kind = connection`. The arc carries Template (owning class's default), `mode`, and `multiplicity` as AVPs. `mode` and `multiplicity` move off the rule instance node — they are properties of the binding, not the rule. Same rule node reusable across classes with different enforcement.                                                                                                                                                                   | 2026-05-26 |
+| D13 | P1 resolved: the `applies_to` / `applied_by` arc-label pair is seeded under nref 16 (`?NREF_INST_REL_ATTRS`, Instance Relationships) via `create_relationship_attribute_pair/4` — mirroring the Instance Relationships subcategory rather than a dedicated Rule sub-bucket.                                                                                                                                                                                                                            | 2026-06-01 |
+| D14 | `create_class/2` auto-default-template review resolved: **keep** the per-class auto-default template as the canonical model (`the-knowledge-network.md` §7 line 172). Singleton and removal both rejected — singleton contradicts §7 line 170 (templates not shared) and loses per-class enrichment; per-class is simplest to maintain. F4 D12 (`applies_to` stamps the owning class's default) is consequently unaffected.                                                                            | 2026-06-01 |
+| D15 | Non-instantiable (abstract) class marker — `instantiable => false` AVP on the class node, enforced by `create_instance` (and `add_class_membership`); an abstract class skips the auto-default template; abstractness is set at creation. **Delivered by the L9 prerequisite task (landed 2026-06-01, `docs/designs/l9-non-instantiable-classes-design.md`).** F4 Phase A seeds the abstract `Rule` root via `create_class/3` with the marker; `CompositionRule` / `ConnectionRule` stay instantiable. | 2026-06-01 |
 
 ---
 

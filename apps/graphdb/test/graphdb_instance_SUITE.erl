@@ -64,6 +64,8 @@
 	create_instance_rejects_missing_parent/1,
 	create_instance_writes_membership_arcs/1,
 	create_instance_writes_compositional_arcs/1,
+	create_instance_refused_for_abstract_class/1,
+	create_instance_allowed_for_unmarked_class/1,
 	%% Relationships
 	add_relationship_basic/1,
 	add_relationship_both_directions/1,
@@ -114,6 +116,7 @@
 	add_class_membership_rejects_non_instance/1,
 	add_class_membership_rejects_missing_class/1,
 	add_class_membership_rejects_non_class_target/1,
+	add_class_membership_refuses_abstract_class/1,
 	class_memberships_initial/1,
 	%% Multi-membership resolver (H5)
 	resolve_value_unique_across_two_classes/1,
@@ -143,7 +146,9 @@ groups() ->
 			create_instance_rejects_missing_class,
 			create_instance_rejects_missing_parent,
 			create_instance_writes_membership_arcs,
-			create_instance_writes_compositional_arcs
+			create_instance_writes_compositional_arcs,
+			create_instance_refused_for_abstract_class,
+			create_instance_allowed_for_unmarked_class
 		]},
 		{relationships, [], [
 			add_relationship_basic,
@@ -199,6 +204,7 @@ groups() ->
 			add_class_membership_rejects_non_instance,
 			add_class_membership_rejects_missing_class,
 			add_class_membership_rejects_non_class_target,
+			add_class_membership_refuses_abstract_class,
 			class_memberships_initial,
 			resolve_value_unique_across_two_classes,
 			resolve_value_same_value_two_classes,
@@ -397,6 +403,28 @@ create_instance_writes_compositional_arcs(_Config) ->
 		R#relationship.characterization =:= ?ARC_INST_PARENT andalso
 		R#relationship.reciprocal =:= ?ARC_INST_CHILD
 	end, ChildOut)).
+
+
+%%-----------------------------------------------------------------------------
+%% Instantiating a class marked instantiable=>false is refused, and no
+%% rows are written.
+%%-----------------------------------------------------------------------------
+create_instance_refused_for_abstract_class(_Config) ->
+	{ok, #{instantiable := Inst}} = graphdb_attr:seeded_nrefs(),
+	{ok, ClassNref} = graphdb_class:create_class("Meta", 3,
+		[#{attribute => Inst, value => false}]),
+	Before = mnesia:table_info(nodes, size),
+	?assertEqual({error, {class_not_instantiable, ClassNref}},
+		graphdb_instance:create_instance("Nope", ClassNref, 5)),
+	?assertEqual(Before, mnesia:table_info(nodes, size)).
+
+%%-----------------------------------------------------------------------------
+%% Ordinary classes still instantiate normally.
+%%-----------------------------------------------------------------------------
+create_instance_allowed_for_unmarked_class(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Plain", 3),
+	?assertMatch({ok, _},
+		graphdb_instance:create_instance("Inst1", ClassNref, 5)).
 
 
 %%=============================================================================
@@ -1092,6 +1120,22 @@ add_class_membership_rejects_non_class_target(_Config) ->
 	%% Nref 6 (Names) is an attribute node
 	?assertMatch({error, {not_a_class, attribute}},
 		graphdb_instance:add_class_membership(Inst, 6)).
+
+%%-----------------------------------------------------------------------------
+%% A non-instantiable (abstract) class target is rejected — an instance
+%% cannot become a member of an abstract class (that would make it an
+%% instance of one).  Same guard as create_instance (L9).
+%%-----------------------------------------------------------------------------
+add_class_membership_refuses_abstract_class(_Config) ->
+	{ok, #{instantiable := Inst}} = graphdb_attr:seeded_nrefs(),
+	{ok, ClassA}   = graphdb_class:create_class("A", 3),
+	{ok, Instance} = graphdb_instance:create_instance("X", ClassA, 5),
+	{ok, Abstract} = graphdb_class:create_class("Meta", 3,
+		[#{attribute => Inst, value => false}]),
+	RelsBefore = mnesia:table_info(relationships, size),
+	?assertEqual({error, {class_not_instantiable, Abstract}},
+		graphdb_instance:add_class_membership(Instance, Abstract)),
+	?assertEqual(RelsBefore, mnesia:table_info(relationships, size)).
 
 %%-----------------------------------------------------------------------------
 %% After create_instance/3, class_memberships/1 returns the single class.

@@ -93,7 +93,10 @@
 	avps					%% [#{attribute => Nref, value => term()}]
 }).
 
--record(state, {}).
+-record(state, {
+	instantiable_nref				%% integer() -- seeded `instantiable` marker, cached
+									%% from graphdb_attr at init (L9)
+}).
 
 
 %%---------------------------------------------------------------------
@@ -106,6 +109,7 @@
 		start_link/0,
 		%% Creators
 		create_class/2,
+		create_class/3,
 		add_superclass/2,
 		add_qualifying_characteristic/2,
 		bind_qc_value/3,
@@ -117,6 +121,7 @@
 		get_template/1,
 		templates_for_class/1,
 		default_template/1,
+		is_instantiable/1,
 		%% Class-of resolution helper (used by graphdb_instance to validate
 		%% Template AVP class scope on Connection arcs)
 		class_in_ancestry/2,
@@ -156,7 +161,8 @@ start_link() ->
 
 
 %%-----------------------------------------------------------------------------
-%% create_class(Name, ParentClassNref) -> {ok, Nref} | {error, term()}
+%% create_class(Name, ParentClassNref)       -> {ok, Nref} | {error, term()}
+%% create_class(Name, ParentClassNref, AVPs) -> {ok, Nref} | {error, term()}
 %%
 %% Creates a new class node in the ontology.  ParentClassNref
 %% is either the Classes category (nref 3) for top-level classes or
@@ -165,13 +171,20 @@ start_link() ->
 %% template node (kind=template, parent=ClassNref, name "default"),
 %% and the compositional class -> template arc pair.
 %%
+%% The /3 form prepends AVPs (a list of attribute-value pair maps) to the
+%% class node's attribute_value_pairs, after the class-name AVP; /2 is the
+%% same with an empty AVP list.
+%%
 %% Class authors may later delete the default template to force
 %% explicit Template specification on subsequent Connection arcs
 %% involving instances of this class, or call add_template/2 to
 %% attach additional named templates as compositional children.
 %%-----------------------------------------------------------------------------
 create_class(Name, ParentClassNref) ->
-	gen_server:call(?MODULE, {create_class, Name, ParentClassNref}).
+	create_class(Name, ParentClassNref, []).
+
+create_class(Name, ParentClassNref, AVPs) when is_list(AVPs) ->
+	gen_server:call(?MODULE, {create_class, Name, ParentClassNref, AVPs}).
 
 
 %%-----------------------------------------------------------------------------
@@ -287,6 +300,15 @@ default_template(ClassNref) ->
 
 
 %%-----------------------------------------------------------------------------
+%% is_instantiable(ClassNref) -> boolean() | {error, term()}
+%%
+%% false iff the class carries an instantiable=>false marker AVP.
+%%-----------------------------------------------------------------------------
+is_instantiable(ClassNref) ->
+	gen_server:call(?MODULE, {is_instantiable, ClassNref}).
+
+
+%%-----------------------------------------------------------------------------
 %% class_in_ancestry(CandidateClassNref, ClassNref) -> boolean()
 %%
 %% Returns true if CandidateClassNref equals ClassNref or is an ancestor
@@ -320,15 +342,19 @@ inherited_qcs(ClassNref) ->
 %% init/1
 %%-----------------------------------------------------------------------------
 init([]) ->
-	logger:info("graphdb_class: started"),
-	{ok, #state{}}.
+	%% graphdb_attr is started before graphdb_class by graphdb_sup, so
+	%% seeded_nrefs/0 is answerable here.
+	{ok, #{instantiable := InstAttr}} = graphdb_attr:seeded_nrefs(),
+	logger:info("graphdb_class: started (instantiable=~p)", [InstAttr]),
+	{ok, #state{instantiable_nref = InstAttr}}.
 
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Creators
 %%-----------------------------------------------------------------------------
-handle_call({create_class, Name, ParentClassNref}, _From, State) ->
-	{reply, do_create_class(Name, ParentClassNref), State};
+handle_call({create_class, Name, ParentClassNref, AVPs}, _From,
+		#state{instantiable_nref = InstAttr} = State) ->
+	{reply, do_create_class(Name, ParentClassNref, AVPs, InstAttr), State};
 
 handle_call({add_superclass, ClassNref, AdditionalParentNref}, _From, State) ->
 	{reply, do_add_superclass(ClassNref, AdditionalParentNref), State};
@@ -366,6 +392,16 @@ handle_call({default_template, ClassNref}, _From, State) ->
 
 handle_call({class_in_ancestry, CandidateNref, ClassNref}, _From, State) ->
 	{reply, do_class_in_ancestry(CandidateNref, ClassNref), State};
+
+handle_call({is_instantiable, ClassNref}, _From,
+		#state{instantiable_nref = InstAttr} = State) ->
+	Reply = case mnesia:dirty_read(nodes, ClassNref) of
+		[#node{kind = class, attribute_value_pairs = AVPs}] ->
+			not is_marked_non_instantiable(AVPs, InstAttr);
+		[#node{kind = Kind}] -> {error, {not_a_class, Kind}};
+		[]                   -> {error, class_not_found}
+	end,
+	{reply, Reply, State};
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Inheritance
@@ -409,37 +445,33 @@ is_valid_parent_kind(_)        -> false.
 
 
 %%-----------------------------------------------------------------------------
-%% do_create_class(Name, ParentClassNref) ->
+%% do_create_class(Name, ParentClassNref, AVPs, InstAttr) ->
 %%     {ok, Nref} | {error, term()}
 %%
 %% Validates the parent, allocates nrefs OUTSIDE the Mnesia transaction
 %% (to avoid side-effects on retry), then atomically writes:
 %%   - the class node (kind=class)
 %%   - taxonomic parent/child arc pair  (kind=taxonomy, char 26/25)
-%%   - the default template node (kind=template, parent=class)
+%%   - the default template node (kind=template, parent=class) UNLESS the
+%%     class is marked non-instantiable (instantiable=>false in AVPs)
 %%   - compositional class -> template arc pair (kind=composition, char 26/25)
+%%     (omitted for non-instantiable classes)
+%%
+%% InstAttr is the cached `instantiable` attribute nref from #state{}.
+%% template_rows/3 is evaluated BEFORE the Txn fun is built so that all
+%% nref/id allocation stays outside the transaction.
 %%-----------------------------------------------------------------------------
-do_create_class(Name, ParentClassNref) ->
+do_create_class(Name, ParentClassNref, AVPs, InstAttr) ->
 	case do_validate_parent(ParentClassNref) of
 		ok ->
-			ClassNref              = graphdb_nref:get_next(),
-			{TaxId1, TaxId2}       = rel_id_server:get_id_pair(),
-			TemplateNref           = graphdb_nref:get_next(),
-			{TmplCompId1, TmplCompId2} = rel_id_server:get_id_pair(),
-			ClassNameAVP    = #{attribute => ?NAME_ATTR_CLASS, value => Name},
-			TemplateNameAVP = #{attribute => ?NAME_ATTR_CLASS,
-				value => ?DEFAULT_TEMPLATE_NAME},
+			ClassNref        = graphdb_nref:get_next(),
+			{TaxId1, TaxId2} = rel_id_server:get_id_pair(),
+			ClassNameAVP = #{attribute => ?NAME_ATTR_CLASS, value => Name},
 			ClassNode = #node{
 				nref = ClassNref,
 				kind = class,
 				parents = [ParentClassNref],
-				attribute_value_pairs = [ClassNameAVP]
-			},
-			TemplateNode = #node{
-				nref = TemplateNref,
-				kind = template,
-				parents = [ClassNref],
-				attribute_value_pairs = [TemplateNameAVP]
+				attribute_value_pairs = [ClassNameAVP | AVPs]
 			},
 			TaxP2C = #relationship{
 				id = TaxId1, kind = taxonomy,
@@ -457,6 +489,45 @@ do_create_class(Name, ParentClassNref) ->
 				reciprocal = ?ARC_CLS_CHILD,
 				avps = []
 			},
+			TemplateRows = template_rows(ClassNref, AVPs, InstAttr),
+			Txn = fun() ->
+				ok = mnesia:write(nodes, ClassNode, write),
+				ok = mnesia:write(relationships, TaxP2C, write),
+				ok = mnesia:write(relationships, TaxC2P, write),
+				[ ok = mnesia:write(T, R, write) || {T, R} <- TemplateRows ]
+			end,
+			case mnesia:transaction(Txn) of
+				%% Txn value is [] (abstract) or [ok,ok,ok] (template rows)
+				{atomic, _Writes} -> {ok, ClassNref};
+				{aborted, Reason} -> {error, Reason}
+			end;
+		{error, _} = Err ->
+			Err
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% template_rows(ClassNref, AVPs, InstAttr) -> [{Table, Record}]
+%%
+%% Returns the default-template node + class<->template composition arc
+%% pair, or [] when the class is marked non-instantiable.
+%% All nref and relationship-id allocation happens here, OUTSIDE the
+%% calling transaction, so retries are side-effect-free.
+%%-----------------------------------------------------------------------------
+template_rows(ClassNref, AVPs, InstAttr) ->
+	case is_marked_non_instantiable(AVPs, InstAttr) of
+		true  -> [];
+		false ->
+			TemplateNref               = graphdb_nref:get_next(),
+			{TmplCompId1, TmplCompId2} = rel_id_server:get_id_pair(),
+			TemplateNameAVP = #{attribute => ?NAME_ATTR_CLASS,
+				value => ?DEFAULT_TEMPLATE_NAME},
+			TemplateNode = #node{
+				nref = TemplateNref,
+				kind = template,
+				parents = [ClassNref],
+				attribute_value_pairs = [TemplateNameAVP]
+			},
 			TmplP2C = #relationship{
 				id = TmplCompId1, kind = composition,
 				source_nref = ClassNref,
@@ -473,21 +544,24 @@ do_create_class(Name, ParentClassNref) ->
 				reciprocal = ?ARC_CLS_CHILD,
 				avps = []
 			},
-			Txn = fun() ->
-				ok = mnesia:write(nodes, ClassNode, write),
-				ok = mnesia:write(nodes, TemplateNode, write),
-				ok = mnesia:write(relationships, TaxP2C, write),
-				ok = mnesia:write(relationships, TaxC2P, write),
-				ok = mnesia:write(relationships, TmplP2C, write),
-				ok = mnesia:write(relationships, TmplC2P, write)
-			end,
-			case mnesia:transaction(Txn) of
-				{atomic, ok}      -> {ok, ClassNref};
-				{aborted, Reason} -> {error, Reason}
-			end;
-		{error, _} = Err ->
-			Err
+			[{nodes, TemplateNode},
+			 {relationships, TmplP2C},
+			 {relationships, TmplC2P}]
 	end.
+
+
+%%-----------------------------------------------------------------------------
+%% is_marked_non_instantiable(AVPs, InstAttr) -> boolean()
+%%
+%% Returns true when AVPs contains #{attribute => InstAttr, value => false}.
+%% Deliberately duplicated in graphdb_instance (the two workers share no
+%% module); L9 avoids a shared util for one predicate (YAGNI).
+%%-----------------------------------------------------------------------------
+is_marked_non_instantiable(AVPs, InstAttr) ->
+	lists:any(fun
+		(#{attribute := A, value := false}) when A =:= InstAttr -> true;
+		(_) -> false
+	end, AVPs).
 
 
 %%-----------------------------------------------------------------------------

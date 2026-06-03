@@ -64,6 +64,11 @@
 	create_class_rejects_missing_parent/1,
 	create_class_writes_compositional_arcs/1,
 	create_class_auto_creates_default_template/1,
+	create_class_3_default_avps_empty/1,
+	create_class_3_writes_avps/1,
+	create_abstract_class_skips_default_template/1,
+	instantiable_class_keeps_default_template/1,
+	is_instantiable_true_false/1,
 	%% Templates
 	add_template_basic/1,
 	add_template_rejects_duplicate_name/1,
@@ -131,7 +136,12 @@ groups() ->
 			create_class_rejects_bad_parent_kind,
 			create_class_rejects_missing_parent,
 			create_class_writes_compositional_arcs,
-			create_class_auto_creates_default_template
+			create_class_auto_creates_default_template,
+			create_class_3_default_avps_empty,
+			create_class_3_writes_avps,
+			create_abstract_class_skips_default_template,
+			instantiable_class_keeps_default_template,
+			is_instantiable_true_false
 		]},
 		{templates, [], [
 			add_template_basic,
@@ -367,6 +377,64 @@ create_class_auto_creates_default_template(_Config) ->
 	?assertEqual([ClassNref], TemplateNode#node.parents),
 	?assert(lists:member(#{attribute => ?NAME_ATTR_CLASS, value => "default"},
 		TemplateNode#node.attribute_value_pairs)).
+
+
+%%-----------------------------------------------------------------------------
+%% create_class/2 and create_class/3 with [] produce identical structure:
+%% a class node plus its default template.
+%%-----------------------------------------------------------------------------
+create_class_3_default_avps_empty(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, C2} = graphdb_class:create_class("Two", 3),
+	{ok, C3} = graphdb_class:create_class("Three", 3, []),
+	?assertMatch({ok, _}, graphdb_class:default_template(C2)),
+	?assertMatch({ok, _}, graphdb_class:default_template(C3)).
+
+%%-----------------------------------------------------------------------------
+%% AVPs passed to create_class/3 are written onto the class node verbatim,
+%% after the class-name AVP.
+%%-----------------------------------------------------------------------------
+create_class_3_writes_avps(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, LtNref} = graphdb_attr:create_literal_attribute("note", term),
+	Extra = #{attribute => LtNref, value => "hello"},
+	{ok, ClassNref} = graphdb_class:create_class("Tagged", 3, [Extra]),
+	{ok, Node} = graphdb_class:get_class(ClassNref),
+	?assert(lists:member(#{attribute => ?NAME_ATTR_CLASS, value => "Tagged"},
+		Node#node.attribute_value_pairs)),
+	?assert(lists:member(Extra, Node#node.attribute_value_pairs)).
+
+
+%%-----------------------------------------------------------------------------
+%% A class created with instantiable=>false has NO default template.
+%%-----------------------------------------------------------------------------
+create_abstract_class_skips_default_template(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, #{instantiable := Inst}} = graphdb_attr:seeded_nrefs(),
+	Marker = #{attribute => Inst, value => false},
+	{ok, ClassNref} = graphdb_class:create_class("Abstract", 3, [Marker]),
+	?assertEqual(not_found, graphdb_class:default_template(ClassNref)),
+	?assertEqual({ok, []}, graphdb_class:templates_for_class(ClassNref)).
+
+%%-----------------------------------------------------------------------------
+%% A class created without the marker still gets its default template.
+%%-----------------------------------------------------------------------------
+instantiable_class_keeps_default_template(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Concrete", 3),
+	?assertMatch({ok, _}, graphdb_class:default_template(ClassNref)).
+
+%%-----------------------------------------------------------------------------
+%% is_instantiable/1: true for ordinary classes, false for marked ones.
+%%-----------------------------------------------------------------------------
+is_instantiable_true_false(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, #{instantiable := Inst}} = graphdb_attr:seeded_nrefs(),
+	{ok, Ordinary} = graphdb_class:create_class("Ord", 3),
+	{ok, Abstract} = graphdb_class:create_class("Abs", 3,
+		[#{attribute => Inst, value => false}]),
+	?assertEqual(true,  graphdb_class:is_instantiable(Ordinary)),
+	?assertEqual(false, graphdb_class:is_instantiable(Abstract)).
 
 
 %%=============================================================================
