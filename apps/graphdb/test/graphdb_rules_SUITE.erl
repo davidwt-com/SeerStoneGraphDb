@@ -98,7 +98,13 @@
 	list_rules_returns_all/1,
 	%% scope
 	project_scope_rejected_on_create/1,
-	project_scope_returns_empty_on_retrieve/1
+	project_scope_returns_empty_on_retrieve/1,
+	%% complex scenarios
+	mixed_rules_on_one_class/1,
+	rule_isolation_across_class_taxonomy/1,
+	duplicate_child_class_with_different_modes/1,
+	%% cache audit
+	verify_caches_passes_after_rule_creation/1
 ]).
 
 
@@ -111,7 +117,8 @@ suite() ->
 
 all() ->
 	[{group, seeding}, {group, composition}, {group, connection},
-	 {group, validation}, {group, retrieval}, {group, scope}].
+	 {group, validation}, {group, retrieval}, {group, scope},
+	 {group, complex_scenarios}, {group, cache_audit}].
 
 groups() ->
 	[
@@ -159,6 +166,14 @@ groups() ->
 		{scope, [], [
 			project_scope_rejected_on_create,
 			project_scope_returns_empty_on_retrieve
+		]},
+		{complex_scenarios, [], [
+			mixed_rules_on_one_class,
+			rule_isolation_across_class_taxonomy,
+			duplicate_child_class_with_different_modes
+		]},
+		{cache_audit, [], [
+			verify_caches_passes_after_rule_creation
 		]}
 	].
 
@@ -670,6 +685,104 @@ project_scope_returns_empty_on_retrieve(_Config) ->
 		graphdb_rules:composition_rules_for_class({project, 1}, Car)),
 	?assertEqual({ok, []}, graphdb_rules:list_rules({project, 1})),
 	?assertEqual(not_found, graphdb_rules:get_rule({project, 1}, 999999)).
+
+
+%%=============================================================================
+%% Complex Scenario Tests
+%%=============================================================================
+%% Integration tests over the Task 2-5 API.  No new production code; these
+%% exercise the create/retrieve paths in combination and document Phase A
+%% semantics (direct-attachment retrieval, no conflict resolution).
+
+%% Five distinct rules of both kinds attached to one owning class.  Asserts
+%% the kind-partitioned retrieval counts, the exact applies_to arc count out
+%% of the class, and the cache invariant.
+mixed_rules_on_one_class(_Config) ->
+	Car   = make_class("Car"),
+	Eng   = make_class("Engine"),
+	Whl   = make_class("Wheel"),
+	Sun   = make_class("Sunroof"),
+	Maker = make_class("Manufacturer"),
+	Deal  = make_class("Dealer"),
+	MadeBy = make_rel_char("made_by", "makes"),
+	SoldBy = make_rel_char("sold_by", "sells"),
+	{ok, DT} = graphdb_class:default_template(Car),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "engine", Car, Eng, mandatory, 1),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "wheels", Car, Whl, auto, 4, DT),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "sunroof", Car, Sun, propose, 1),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "made-by", Car, MadeBy, Maker, mandatory, 1, DT),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "sold-by", Car, SoldBy, Deal, propose, unbounded),
+	{ok, All}  = graphdb_rules:rules_for_class(environment, Car),
+	{ok, Comp} = graphdb_rules:composition_rules_for_class(environment, Car),
+	{ok, Conn} = graphdb_rules:connection_rules_for_class(environment, Car),
+	?assertEqual(5, length(All)),
+	?assertEqual(3, length(Comp)),
+	?assertEqual(2, length(Conn)),
+	%% five applies_to arcs out of Car
+	{ok, S} = graphdb_rules:seeded_nrefs(),
+	AppliesTo = maps:get(applies_to, S),
+	Arcs = mnesia:dirty_index_read(relationships, Car,
+								   #relationship.source_nref),
+	Applies = [A || A <- Arcs, A#relationship.kind == connection,
+			   A#relationship.characterization == AppliesTo],
+	?assertEqual(5, length(Applies)),
+	?assertEqual(ok, graphdb_mgr:verify_caches()).
+
+%% Phase A retrieval is direct-attachment only: a rule on a superclass is NOT
+%% returned for a subclass.  Documents that taxonomy-walking retrieval is
+%% Phase B (effective_rules_for_class/2).
+rule_isolation_across_class_taxonomy(_Config) ->
+	Vehicle = make_class("Vehicle"),
+	{ok, Car} = graphdb_class:create_class("Car", Vehicle),
+	{ok, Sports} = graphdb_class:create_class("SportsCar", Car),
+	Eng   = make_class("Engine"),
+	Wheel = make_class("SteeringWheel"),
+	Spoil = make_class("Spoiler"),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "v-engine", Vehicle, Eng, mandatory, 1),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "c-wheel", Car, Wheel, mandatory, 1),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "s-spoiler", Sports, Spoil, auto, 1),
+	{ok, RV} = graphdb_rules:rules_for_class(environment, Vehicle),
+	{ok, RC} = graphdb_rules:rules_for_class(environment, Car),
+	{ok, RS} = graphdb_rules:rules_for_class(environment, Sports),
+	?assertEqual(1, length(RV)),
+	?assertEqual(1, length(RC)),
+	?assertEqual(1, length(RS)).
+
+%% Two composition rules with the same child class but different modes are
+%% both accepted (distinct nrefs).  Documents that Phase A makes no
+%% conflict-resolution commitment.
+duplicate_child_class_with_different_modes(_Config) ->
+	Cell = make_class("Cell"),
+	Nuc  = make_class("Nucleus"),
+	{ok, R1} = graphdb_rules:create_composition_rule(
+		environment, "nuc-mandatory", Cell, Nuc, mandatory, 1),
+	{ok, R2} = graphdb_rules:create_composition_rule(
+		environment, "nuc-propose", Cell, Nuc, propose, 1),
+	?assertNotEqual(R1, R2),
+	{ok, Rules} = graphdb_rules:composition_rules_for_class(environment, Cell),
+	?assertEqual(2, length(Rules)).
+
+
+%%=============================================================================
+%% Cache Audit Tests
+%%=============================================================================
+%% Rule creation writes instantiation + applies_to arcs.  This asserts the
+%% "arcs authoritative; lists cached" invariant holds after a rule write.
+
+verify_caches_passes_after_rule_creation(_Config) ->
+	Car = make_class("Car"),
+	Eng = make_class("Engine"),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "engine", Car, Eng, mandatory, 1),
+	?assertEqual(ok, graphdb_mgr:verify_caches()).
 
 
 %%=============================================================================
