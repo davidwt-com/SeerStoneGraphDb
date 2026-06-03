@@ -908,6 +908,47 @@ root.
 
 ---
 
+### L10. Transaction observability for the allocate-outside-txn pattern — **OPEN**
+
+Every write-path worker (`graphdb_attr`, `graphdb_class`,
+`graphdb_instance`, `graphdb_rules`) allocates node nrefs and
+relationship row IDs **outside** the `mnesia:transaction/1` that writes
+the rows, to keep the transaction fun free of side-effects on retry
+(Mnesia may re-run the fun on lock conflict). The deliberate cost is
+that an aborted transaction orphans the already-allocated nrefs/ids —
+harmless given the unbounded monotonic nref space (no contiguity
+invariant), but currently **unobservable**: nothing measures how often
+the abort/retry path actually fires.
+
+Mnesia exposes node-global cumulative counters via
+`mnesia:system_info/1` that make the real rate measurable:
+
+- `transaction_restarts` — fun re-runs (lock-conflict / deadlock retries)
+- `transaction_failures` — aborts
+- `transaction_commits`  — successful commits
+- `transaction_log_writes`
+
+These are node-global and cumulative (no reset, no per-table or
+per-callsite attribution), so a delta-snapshot helper is needed to make
+them useful for ad-hoc workload observation.
+
+Scope:
+
+1. Add a `dev_lib` helper that snapshots the four counters around a fun
+   and returns the deltas (commits / failures / restarts / log writes),
+   for ad-hoc observability during review and load checks.
+2. Decide whether the rule/attr/instance write paths warrant their own
+   `{atomic,_}` vs `{aborted,_}` counters for per-callsite leak-rate
+   attribution, or whether the global counters suffice. Document the
+   decision.
+3. Confirm the allocate-outside-txn rationale carries an inline comment
+   at each allocation site (present in `graphdb_attr` / `graphdb_instance`;
+   verify `graphdb_class` and `graphdb_rules`).
+
+Observability-only; no behavioural change to the write paths.
+
+---
+
 ### Task 7. Wire `dictionary_server` and `term_server` to `dictionary_imp` — **RESOLVED** (2026-05-19)
 
 Both gen_servers delegate to `dictionary_imp` via `start_dictionary/stop_dictionary`
