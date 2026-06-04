@@ -24,13 +24,13 @@ Phase B (the rule-*firing* engine) is large. It is split into five
 independently shippable divisions, each with its own brainstorm →
 design → plan → implement cycle:
 
-| Div    | Subject                                                                       | Depends on |
-| ------ | ----------------------------------------------------------------------------- | ---------- |
-| **B1** | `effective_rules_for_class/2` — read-side taxonomy walk (no firing)           | Phase A    |
+| Div    | Subject                                                                        | Depends on |
+| ------ | ------------------------------------------------------------------------------ | ---------- |
+| **B1** | `effective_rules_for_class/2` — read-side taxonomy walk (no firing)            | Phase A    |
 | **B2** | Composition firing engine — `mandatory` + `auto`; cascade; return-shape change | B1         |
-| **B3** | `propose` mode + interactive/non-interactive session flag (`graphdb_query`)   | B2         |
-| **B4** | Connection firing engine (Mandatory Connections, §10)                         | B1         |
-| **B5** | Horizontal conflict resolution / precedence (OI-2) — rules at one class level | B2         |
+| **B3** | `propose` mode + interactive/non-interactive session flag (`graphdb_query`)    | B2         |
+| **B4** | Connection firing engine (Mandatory Connections, §10)                          | B1         |
+| **B5** | Horizontal conflict resolution / precedence (OI-2) — rules at one class level  | B2         |
 
 This document specifies **B1 only**.
 
@@ -264,19 +264,19 @@ B1 adds no seeded nrefs, no records, no supervisor change, no
 
 New CT group `effective` in `apps/graphdb/test/graphdb_rules_SUITE.erl`:
 
-| Case                              | Asserts                                                                                                   |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `self_only_no_ancestors`          | Rules attached directly to a root class surface under that class's own group; head group is the class    |
-| `linear_chain_nearest_first`      | `Vehicle ◀ Car ◀ SportsCar`, one rule per level; group order is `[SportsCar, Car, Vehicle]` membership   |
-| `diamond_dag_dedup`               | A multi-parent shared ancestor appears exactly once                                                      |
-| `shared_rule_node_across_ancestors` | One rule node attached to two ancestors appears once per ancestor, each with that ancestor's deployment |
-| `deployment_avps_surfaced`        | `mode` / `multiplicity` / `template` decoded correctly onto each pair                                     |
-| `additive_parent_and_child`       | Parent `mandatory` rule + subclass rule for the same relationship attribute at higher `multiplicity`: **both** present, each with its own deployment (nothing dropped) |
-| `empty_levels_skipped`            | An ancestor with no attached rules is omitted from the result                                            |
-| `mixed_kinds_returned`            | Composition + connection rules both present; inline comprehension filters recover each kind              |
-| `project_scope_empty`             | `effective_rules_for_class({project, _}, _) -> {ok, []}`                                                 |
-| `unknown_class_empty`             | A non-existent nref -> `{ok, []}` (ancestor-walk `{error, not_found}` mapped to empty)                    |
-| `non_class_nref_empty`            | An existing non-class nref (e.g. an instance) -> `{ok, []}` (`{error, not_a_class}` mapped to empty)      |
+| Case                                | Asserts                                                                                                                                                                |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `self_only_no_ancestors`            | Rules attached directly to a root class surface under that class's own group; head group is the class                                                                  |
+| `linear_chain_nearest_first`        | `Vehicle ◀ Car ◀ SportsCar`, one rule per level; group order is `[SportsCar, Car, Vehicle]` membership                                                                 |
+| `diamond_dag_dedup`                 | A multi-parent shared ancestor appears exactly once                                                                                                                    |
+| `shared_rule_node_across_ancestors` | One rule node attached to two ancestors appears once per ancestor, each with that ancestor's deployment                                                                |
+| `deployment_avps_surfaced`          | `mode` / `multiplicity` / `template` decoded correctly onto each pair                                                                                                  |
+| `additive_parent_and_child`         | Parent `mandatory` rule + subclass rule for the same relationship attribute at higher `multiplicity`: **both** present, each with its own deployment (nothing dropped) |
+| `empty_levels_skipped`              | An ancestor with no attached rules is omitted from the result                                                                                                          |
+| `mixed_kinds_returned`              | Composition + connection rules both present; inline comprehension filters recover each kind                                                                            |
+| `project_scope_empty`               | `effective_rules_for_class({project, _}, _) -> {ok, []}`                                                                                                               |
+| `unknown_class_empty`               | A non-existent nref -> `{ok, []}` (ancestor-walk `{error, not_found}` mapped to empty)                                                                                 |
+| `non_class_nref_empty`              | An existing non-class nref (e.g. an instance) -> `{ok, []}` (`{error, not_a_class}` mapped to empty)                                                                   |
 
 `end_per_testcase` asserts `graphdb_mgr:verify_caches/0 = ok` (B1 is a
 read; the cache invariant must be untouched).
@@ -309,16 +309,16 @@ No `docs/diagrams/ontology-tree.md` change — B1 seeds nothing.
 
 ## 7. Decision Log
 
-| Tag    | Decision                                                                                                            | Date       |
-| ------ | ----------------------------------------------------------------------------------------------------------------- | ---------- |
-| B1-D1  | Pure gather; no override/shadow resolution (additive contributions must not be pre-empted)                        | 2026-06-03 |
-| B1-D2  | Element shape `{RuleNode, Deployment}`; deployment read from the `applies_to` arc (OI-1's bare `[#node{}]` superseded) | 2026-06-03 |
-| B1-D3  | Ordering reuses `graphdb_class:ancestors/1` (nearest-first BFS, deduped); class itself prepended as head          | 2026-06-03 |
-| B1-D4  | Single gather function; kind-filtering is inline consumer enumeration; formal cursor deferred until a consumer needs it | 2026-06-03 |
-| B1-D5  | Environment scope only; `{project, _} -> {ok, []}` (L6 later)                                                      | 2026-06-03 |
-| B1-D6  | No input validation; unknown/non-class nref -> `{ok, []}`                                                          | 2026-06-03 |
-| B1-D7  | Levels contributing no rules are omitted from the result                                                           | 2026-06-03 |
-| B1-D8  | Non-atomic, dirty, snapshot-free read; accepted limitation                                                         | 2026-06-03 |
+| Tag   | Decision                                                                                                                | Date       |
+| ----- | ----------------------------------------------------------------------------------------------------------------------- | ---------- |
+| B1-D1 | Pure gather; no override/shadow resolution (additive contributions must not be pre-empted)                              | 2026-06-03 |
+| B1-D2 | Element shape `{RuleNode, Deployment}`; deployment read from the `applies_to` arc (OI-1's bare `[#node{}]` superseded)  | 2026-06-03 |
+| B1-D3 | Ordering reuses `graphdb_class:ancestors/1` (nearest-first BFS, deduped); class itself prepended as head                | 2026-06-03 |
+| B1-D4 | Single gather function; kind-filtering is inline consumer enumeration; formal cursor deferred until a consumer needs it | 2026-06-03 |
+| B1-D5 | Environment scope only; `{project, _} -> {ok, []}` (L6 later)                                                           | 2026-06-03 |
+| B1-D6 | No input validation; unknown/non-class nref -> `{ok, []}`                                                               | 2026-06-03 |
+| B1-D7 | Levels contributing no rules are omitted from the result                                                                | 2026-06-03 |
+| B1-D8 | Non-atomic, dirty, snapshot-free read; accepted limitation                                                              | 2026-06-03 |
 
 ---
 
