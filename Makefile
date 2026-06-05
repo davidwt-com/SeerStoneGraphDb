@@ -1,6 +1,6 @@
 REBAR3 ?= ./rebar3
 
-.PHONY: all compile clean shell release rebar3
+.PHONY: all compile clean shell release rebar3 test-ct-parallel
 
 all: compile
 
@@ -25,3 +25,10 @@ shell: $(REBAR3)
 ## Build a release
 release: $(REBAR3)
 	$(REBAR3) as prod release
+
+## Run all Common Test suites concurrently (one isolated process per suite).
+## Pass extra args via ARGS, e.g. `make test-ct-parallel ARGS="-j 8 rules class"`.
+## (No $(REBAR3) prereq: the script validates rebar3/erl itself and a hard
+## dep would re-download rebar3 on every run.)
+test-ct-parallel:
+	scripts/test-ct-parallel.sh $(ARGS)
