@@ -266,6 +266,11 @@ engine yet (Phases B–F are tracked in `TASKS.md`).
 - `create_composition_rule/6,7` (scope, name, parent_class, child_class, mode, multiplicity [, template_nref])
 - `create_connection_rule/7,8` (scope, name, source_class, characterization, target_class, mode, multiplicity [, template_nref])
 - `get_rule/2`, `rules_for_class/2`, `composition_rules_for_class/2`, `connection_rules_for_class/2`, `list_rules/1`
+- `effective_rules_for_class/2` (F4 Phase B / B1) — taxonomy-walking read:
+  every rule attached to a class **and its taxonomy ancestors**, grouped by
+  attaching class nearest-first, each paired with its `applies_to`-arc
+  deployment (`mode`/`multiplicity`/`template`). Resolves nothing; the B2+
+  firing engines consume it.
 - `seeded_nrefs/0`
 - At bootstrap: seeds the `Rule Literals` sub-group under the `Literals`
   subtree (nref 7) with 6 literal attributes (`child_class_nref`,

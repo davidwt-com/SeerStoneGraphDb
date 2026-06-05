@@ -28,7 +28,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_rules`     | Implemented — F4 Phase A: rule meta-ontology, applies_to attachment, scope-aware create/retrieve                                                                                                                |
 | `graphdb_language`  | Implemented — M6 multilingual overlay layer (label resolution, dialect chains, per-language Mnesia overlay tables)                                                                                              |
 | `graphdb_query`     | Implemented — F3 query language (Q1-Q6) with snapshot-semantics sessions and continuation-based bounded BFS                                                                                                     |
-| Tests               | 430 passing (329 Common Test + 101 EUnit)                                                                                                                                                                       |
+| Tests               | 441 passing (340 Common Test + 101 EUnit)                                                                                                                                                                       |
 
 The kernel is functional under multi-inheritance, multi-class-
 membership, and per-class template semantics.  Multilingual label
@@ -611,9 +611,12 @@ Architectural shape:
 - **Attachment.** Each rule is written in one Mnesia transaction: the
   instance node, its instance↔class membership pair (chars 29/30), and
   the `applies_to`/`applied_by` connection pair between owning class and
-  rule. Retrieval is **direct-attachment only** — `rules_for_class/2`
-  reads the owning class's outgoing `applies_to` arcs. Taxonomy-walking
-  effective-rule resolution (`effective_rules_for_class/2`) is Phase B.
+  rule. `rules_for_class/2` is **direct-attachment only** — it reads the
+  owning class's outgoing `applies_to` arcs. `effective_rules_for_class/2`
+  (Phase B / B1) additionally walks the class's taxonomy ancestors:
+  a nearest-first, deployment-bearing gather of every rule attached to the
+  class and its superclasses, grouped by attaching class. It resolves
+  nothing — additive-vs-shadow is the firing engine's job (B2/B5).
 - **Scope.** The API is scope-tagged (`environment` | `{project, _}`).
   Phase A serves the `environment` scope; `{project, _}` creates are
   rejected and `{project, _}` reads return empty.

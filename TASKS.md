@@ -630,9 +630,21 @@ added (`graphdb_rules_SUITE`).
 ### F4 Phases B–F — Rule-firing engine — OUTSTANDING
 
 The remaining phases build the engine that consumes the Phase A data
-model. Taxonomy-walking `effective_rules_for_class/2`, the
-instantiation engine, composition-rule firing at `create_instance`,
-and reactive learning are all Phase B+ work.
+model: the instantiation engine, composition-rule firing at
+`create_instance`, connection firing, conflict precedence, and reactive
+learning.
+
+**Phase B is divided B1–B5** (each with its own design + plan):
+
+- **B1 — `effective_rules_for_class/2` (read-side taxonomy walk) — DONE.**
+  Nearest-first gather of every rule attached to a class and its taxonomy
+  ancestors, grouped by attaching class, each paired with its
+  `applies_to`-arc deployment (`mode`/`multiplicity`/`template`). Resolves
+  nothing — additive-vs-shadow is the firing engine's job. Design:
+  `docs/designs/f4-phase-b1-effective-rules-design.md`.
+- **B2** composition firing engine; **B3** `propose` mode + session flag;
+  **B4** connection firing; **B5** horizontal conflict precedence —
+  OUTSTANDING.
 
 **Evidence:** `apps/graphdb/src/graphdb_rules.erl` Phase A is
 implemented; no firing engine exists yet.
