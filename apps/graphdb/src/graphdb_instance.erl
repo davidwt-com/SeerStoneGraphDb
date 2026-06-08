@@ -143,7 +143,11 @@
 %%---------------------------------------------------------------------
 -ifdef(TEST).
 -export([
-		find_avp_value/2
+		find_avp_value/2,
+		add_outcome/4,
+		merge_reports/2,
+		report_not_attempted/2,
+		summarize/1
 		]).
 -endif.
 
@@ -1137,3 +1141,85 @@ search_targets([Nref | Rest], AttrNref) ->
 		_ ->
 			search_targets(Rest, AttrNref)
 	end.
+
+
+%%=============================================================================
+%% Firing Report Helpers (B2-D6)
+%%=============================================================================
+
+%% Suppress unused-function warnings for the report helpers until Task 5 wires
+%% them into the firing engine.  They ARE used in TEST builds (exported) and
+%% will be used unconditionally once create_instance gains its firing path.
+-compile({nowarn_unused_function, [add_outcome/4, append_if/3,
+                                   merge_reports/2, report_not_attempted/2,
+                                   walk_not_attempted/2, summarize/1]}).
+
+%%-----------------------------------------------------------------------------
+%% add_outcome(Report, RuleNode, Deployment, Outcome) -> Report'
+%%
+%% Appends Outcome under RuleNode's rule_report (preserving rule order),
+%% creating the rule_report if this rule is not yet present.
+%%-----------------------------------------------------------------------------
+add_outcome(Report, #node{nref = RuleNref} = RuleNode, Deployment, Outcome) ->
+	case lists:any(fun(#{rule := RN}) ->
+						RN#node.nref =:= RuleNref end, Report) of
+		true ->
+			[ append_if(RR, RuleNref, Outcome) || RR <- Report ];
+		false ->
+			Report ++ [#{rule => RuleNode, deployment => Deployment,
+						 outcomes => [Outcome]}]
+	end.
+
+append_if(#{rule := RN, outcomes := Os} = RR, RuleNref, Outcome) ->
+	case RN#node.nref =:= RuleNref of
+		true  -> RR#{outcomes => Os ++ [Outcome]};
+		false -> RR
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% merge_reports(R1, R2) -> Report   (union by rule nref)
+%%-----------------------------------------------------------------------------
+merge_reports(R1, R2) ->
+	lists:foldl(
+		fun(#{rule := RuleNode, deployment := Dep, outcomes := Outs}, Acc) ->
+			lists:foldl(
+				fun(O, A) -> add_outcome(A, RuleNode, Dep, O) end, Acc, Outs)
+		end, R1, R2).
+
+
+%%-----------------------------------------------------------------------------
+%% report_not_attempted(Reason, Failure) -> Report
+%%
+%% Failure = #{plan_so_far => PlanNode, culprit => #node{} | undefined}.
+%% Every mandated child in plan_so_far becomes a not_attempted outcome under
+%% its mandating rule; the culprit (if any) becomes one failed outcome.
+%%-----------------------------------------------------------------------------
+report_not_attempted(Reason, #{plan_so_far := Plan, culprit := Culprit}) ->
+	Base = walk_not_attempted(Plan, []),
+	case Culprit of
+		undefined ->
+			Base;
+		#node{} ->
+			Dep = #{},      %% deployment not carried on the error path
+			add_outcome(Base, Culprit, Dep,
+						#{index => 1, status => failed, reason => Reason})
+	end.
+
+walk_not_attempted(#{mandatory_children := Kids}, Acc0) ->
+	lists:foldl(
+		fun(#{rule := Rule} = Child, Acc) ->
+			Acc1 = add_outcome(Acc, Rule, #{},
+								#{index => 1, status => not_attempted}),
+			walk_not_attempted(Child, Acc1)         %% recurse deeper
+		end, Acc0, Kids).
+
+
+%%-----------------------------------------------------------------------------
+%% summarize(Report) -> #{fired => N, failed => M, not_attempted => K}
+%%-----------------------------------------------------------------------------
+summarize(Report) ->
+	Outs = [O || #{outcomes := Os} <- Report, O <- Os],
+	Count = fun(S) -> length([1 || #{status := X} <- Outs, X =:= S]) end,
+	#{fired => Count(fired), failed => Count(failed),
+	  not_attempted => Count(not_attempted)}.

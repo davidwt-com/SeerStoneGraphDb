@@ -58,3 +58,60 @@ find_avp_value_undefined_does_not_shadow_bound_in_suffix_test() ->
 	AVPs = [#{attribute => 42, value => undefined},
 			#{attribute => 42, value => "should_not_reach"}],
 	?assertEqual(not_found, graphdb_instance:find_avp_value(AVPs, 42)).
+
+
+%%=============================================================================
+%% Firing report helpers (B2-D6) tests
+%%=============================================================================
+
+mk_rule(N) -> {node, N, instance, [], [c], [#{attribute => 1, value => "r"}]}.
+
+add_outcome_creates_then_appends_test() ->
+	R0 = [],
+	Rule = mk_rule(100),
+	Dep = #{mode => mandatory, multiplicity => 2, template => 31},
+	R1 = graphdb_instance:add_outcome(R0, Rule, Dep,
+			#{owner => 5, index => 1, status => fired, child => 200}),
+	?assertMatch([#{rule := _, deployment := Dep, outcomes := [_]}], R1),
+	R2 = graphdb_instance:add_outcome(R1, Rule, Dep,
+			#{owner => 5, index => 2, status => fired, child => 201}),
+	[#{outcomes := Outs}] = R2,
+	?assertEqual(2, length(Outs)).            %% same rule -> one rule_report
+
+merge_reports_unions_by_rule_test() ->
+	Rule = mk_rule(100),
+	Dep = #{mode => auto, multiplicity => 1, template => 31},
+	A = graphdb_instance:add_outcome([], Rule, Dep,
+			#{owner => 5, index => 1, status => fired, child => 200}),
+	B = graphdb_instance:add_outcome([], Rule, Dep,
+			#{owner => 6, index => 1, status => fired, child => 300}),
+	Merged = graphdb_instance:merge_reports(A, B),
+	?assertEqual(1, length(Merged)),          %% one rule_report
+	[#{outcomes := Outs}] = Merged,
+	?assertEqual(2, length(Outs)).
+
+report_not_attempted_marks_planned_and_culprit_test() ->
+	Bolt = #{class => 10, name => "Bolt", rule => mk_rule(100),
+			 mandatory_children => [], auto_rules => []},
+	PlanSoFar = #{class => 9, name => undefined, rule => root,
+				  mandatory_children => [Bolt], auto_rules => []},
+	Culprit = mk_rule(101),
+	Failure = #{plan_so_far => PlanSoFar, culprit => Culprit},
+	R = graphdb_instance:report_not_attempted(some_reason, Failure),
+	Status = fun(N) ->
+		[#{outcomes := [#{status := S}]}] =
+			[RR || RR = #{rule := {node, X, _,_,_,_}} <- R, X =:= N],
+		S
+	end,
+	?assertEqual(not_attempted, Status(100)),
+	?assertEqual(failed, Status(101)).
+
+summarize_counts_test() ->
+	Rule = mk_rule(100),
+	Dep = #{mode => mandatory, multiplicity => 1, template => 31},
+	R0 = graphdb_instance:add_outcome([], Rule, Dep,
+			#{owner => 5, index => 1, status => fired, child => 200}),
+	R1 = graphdb_instance:add_outcome(R0, Rule, Dep,
+			#{owner => 5, index => 1, status => failed, reason => x}),
+	?assertEqual(#{fired => 1, failed => 1, not_attempted => 0},
+				 graphdb_instance:summarize(R1)).
