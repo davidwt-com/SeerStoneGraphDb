@@ -1,6 +1,6 @@
 # Ontology Tree — Bootstrap + Runtime Init Seeds
 
-**Status:** current as of 2026-06-02 (post F4 Phase A).
+**Status:** current as of 2026-06-08 (post F4 Phase B2).
 
 This diagram is the **organisational shape of the environment ontology**
 immediately after `application:start(database)` finishes. It captures:
@@ -87,6 +87,7 @@ graph LR
   NRCH["characterization_nref<br/>(runtime, attribute)"]:::attr
   NRMO["mode<br/>(runtime, attribute)"]:::attr
   NRMU["multiplicity<br/>(runtime, attribute)"]:::attr
+  NRNP["name_pattern<br/>(runtime, attribute)"]:::attr
 
   %% --- Relationships sub-tree ---
   N13["Category Relationships<br/>(13, attribute)"]:::attr
@@ -174,6 +175,7 @@ graph LR
   NRL ==> NRCH
   NRL ==> NRMO
   NRL ==> NRMU
+  NRL ==> NRNP
 
   %% --- Taxonomy: Relationships sub-tree ---
   N8 ==> N13
@@ -243,10 +245,11 @@ Subtree → arc kind:
 Runtime sub-group / attribute / class nrefs sit at 10000+ and are not
 enumerated here (they shift between sessions); the L7 Attribute
 Literals and Language Literals sub-groups are seeded by
-`graphdb_attr:init/1` and `graphdb_language:init/1`, and the F4 Phase A
-Rule Literals sub-group plus the `Rule` / `CompositionRule` /
-`ConnectionRule` meta-classes and the `applies_to` / `applied_by` pair
-are seeded by `graphdb_rules:init/1`.
+`graphdb_attr:init/1` and `graphdb_language:init/1`, and the F4
+Rule Literals sub-group (7 literals, including `name_pattern` added
+in B2) plus the `Rule` / `CompositionRule` / `ConnectionRule`
+meta-classes and the `applies_to` / `applied_by` pair are seeded by
+`graphdb_rules:init/1`.
 
 ## Maintenance
 

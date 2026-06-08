@@ -24,12 +24,12 @@ underway:
 | `graphdb_mgr`          | Implemented — bootstrap init, public read API (`get_node`, `get_relationships`), category immutability guard, cache audit/repair (`verify_caches/0`, `rebuild_caches/0`); write operations delegate to workers |
 | `graphdb_attr`         | Fully implemented — attribute library (name, literal, relationship attributes, relationship types)                                                                                                             |
 | `graphdb_class`        | Fully implemented — taxonomic hierarchy with multi-parent inheritance (BFS — breadth-first search — over a DAG, a directed acyclic graph), qualifying characteristics, class-level inheritance                 |
-| `graphdb_instance`     | Fully implemented — compositional hierarchy, multi-class membership, four-level inheritance with class-resolver ambiguity detection                                                                            |
-| `graphdb_rules`        | Implemented — F4 Phase A rule meta-ontology + create/retrieve; Phase B1 `effective_rules_for_class/2` (taxonomy walk); firing engine (Phases B2–F) outstanding (TASKS.md F4)                                   |
+| `graphdb_instance`     | Fully implemented — compositional hierarchy, multi-class membership, four-level inheritance with class-resolver ambiguity detection; fires composition rules on `create_instance/3` (F4 B2)                    |
+| `graphdb_rules`        | Implemented — F4 Phases A+B1+B2: rule meta-ontology + create/retrieve; `effective_rules_for_class/2` (taxonomy walk); composition firing engine; firing engine (Phases B3–F) outstanding (TASKS.md F4)         |
 | `graphdb_language`     | Fully implemented — M6 multilingual overlay (language registration, dialect chains, per-language overlay tables, label resolution, translation hooks)                                                          |
 | `graphdb_query`        | Implemented — F3 query language (parse/execute, snapshot-semantics sessions, path finding)                                                                                                                     |
 
-**441 tests** (101 EUnit + 340 Common Test) — all passing. See
+**465 tests** (105 EUnit + 360 Common Test) — all passing. See
 `TASKS.md` for the prioritised task list.
 
 ---
@@ -192,15 +192,15 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 
 ### graphdb Workers
 
-| Module             | Role                                                                                                                 |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `graphdb_attr`     | Attribute library — name attributes, literal attributes, relationship attributes, relationship types                 |
-| `graphdb_class`    | Taxonomic hierarchy — class nodes, qualifying characteristics, class inheritance                                     |
-| `graphdb_instance` | Instance nodes — creation, retrieval, compositional hierarchy                                                        |
-| `graphdb_rules`    | Graph rules — F4 rule meta-ontology + create/retrieve; `effective_rules_for_class/2` (B1); firing engine outstanding |
-| `graphdb_language` | Multilingual overlay (M6) — language registration, dialect chains, per-language overlay tables, label resolution     |
-| `graphdb_query`    | Query language (F3) — parses and executes graph queries; snapshot-semantics sessions                                 |
-| `graphdb_mgr`      | Primary coordinator — routes operations across the other specialized workers                                         |
+| Module             | Role                                                                                                                                               |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `graphdb_attr`     | Attribute library — name attributes, literal attributes, relationship attributes, relationship types                                               |
+| `graphdb_class`    | Taxonomic hierarchy — class nodes, qualifying characteristics, class inheritance                                                                   |
+| `graphdb_instance` | Instance nodes — creation, retrieval, compositional hierarchy                                                                                      |
+| `graphdb_rules`    | Graph rules — F4 rule meta-ontology + create/retrieve; `effective_rules_for_class/2` (B1); composition firing engine (B2); Phases B3–F outstanding |
+| `graphdb_language` | Multilingual overlay (M6) — language registration, dialect chains, per-language overlay tables, label resolution                                   |
+| `graphdb_query`    | Query language (F3) — parses and executes graph queries; snapshot-semantics sessions                                                               |
+| `graphdb_mgr`      | Primary coordinator — routes operations across the other specialized workers                                                                       |
 
 ---
 
@@ -232,26 +232,26 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 ./rebar3 eunit --app=graphdb && ./rebar3 ct
 ```
 
-| Suite                     | Type  | Tests | Coverage                                                                                                                                                                    |
-| ------------------------- | ----- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `graphdb_bootstrap_tests` | EUnit | 61    | Term parsing, validation, record conversion, nref macro consistency                                                                                                         |
-| `graphdb_class_tests`     | EUnit | 13    | `is_valid_parent_kind/1`, `collect_qc_nrefs/2`                                                                                                                              |
-| `graphdb_instance_tests`  | EUnit | 9     | `find_avp_value/2`                                                                                                                                                          |
-| `graphdb_language_tests`  | EUnit | 9     | Dialect-chain building, label-resolution helpers (M6)                                                                                                                       |
-| `graphdb_mgr_tests`       | EUnit | 9     | Direction validation, client-side arg checks                                                                                                                                |
-| `graphdb_bootstrap_SUITE` | CT    | 19    | Full bootstrap load, Mnesia tables, idempotency, error handling, Language subcategory nodes                                                                                 |
-| `graphdb_mgr_SUITE`       | CT    | 28    | Bootstrap init, read ops, category guard, write stubs, cache audit/repair                                                                                                   |
-| `graphdb_attr_SUITE`      | CT    | 37    | Attribute create/lookup, seeding, relationship types, atomic reciprocal pair (M4), literal sub-groups, `attribute_type`/`instantiable` markers                              |
-| `graphdb_class_SUITE`     | CT    | 49    | Class create, QC (qualifying characteristics), lookups, hierarchy, multi-inheritance (H3), inheritance, templates, abstract classes (L9)                                    |
-| `graphdb_instance_SUITE`  | CT    | 60    | Instance create, relationships (incl. M3 validation, M5 per-arc AVPs — attribute-value pairs), lookups, hierarchy, four-level inheritance, multi-class membership (H4 + H5) |
-| `graphdb_language_SUITE`  | CT    | 27    | M6 multilingual overlay: language/dialect registration, per-language overlay tables, label resolution, translation hooks                                                    |
-| `graphdb_query_SUITE`     | CT    | 43    | F3 query language: parse/execute, snapshot-semantics sessions, `#cont_path{}` resume, path finding                                                                          |
-| `graphdb_rules_SUITE`     | CT    | 48    | F4 rule meta-ontology seeding, composition/connection rule create/retrieve, validation catalog, `effective_rules_for_class/2` taxonomy walk (B1)                            |
-| `graphdb_nref_SUITE`      | CT    | 6     | Switchable node-nref allocation facade; permanent/runtime phase flip                                                                                                        |
-| `graphdb_nrefs_SUITE`     | CT    | 2     | `graphdb_nrefs:verify/0` bootstrap nref-macro consistency check                                                                                                             |
-| `rel_id_server_SUITE`     | CT    | 7     | Relationship-row ID allocator (`get_id/0`, `get_id_pair/0`)                                                                                                                 |
-| `dictionary_server_SUITE` | CT    | 7     | `dictionary_server` gen_server behaviour                                                                                                                                    |
-| `term_server_SUITE`       | CT    | 7     | `term_server` gen_server behaviour                                                                                                                                          |
+| Suite                     | Type  | Tests | Coverage                                                                                                                                                                                                          |
+| ------------------------- | ----- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `graphdb_bootstrap_tests` | EUnit | 61    | Term parsing, validation, record conversion, nref macro consistency                                                                                                                                               |
+| `graphdb_class_tests`     | EUnit | 13    | `is_valid_parent_kind/1`, `collect_qc_nrefs/2`                                                                                                                                                                    |
+| `graphdb_instance_tests`  | EUnit | 13    | `find_avp_value/2`, composition-firing helpers (`summarize/1` etc.)                                                                                                                                               |
+| `graphdb_language_tests`  | EUnit | 9     | Dialect-chain building, label-resolution helpers (M6)                                                                                                                                                             |
+| `graphdb_mgr_tests`       | EUnit | 9     | Direction validation, client-side arg checks                                                                                                                                                                      |
+| `graphdb_bootstrap_SUITE` | CT    | 19    | Full bootstrap load, Mnesia tables, idempotency, error handling, Language subcategory nodes                                                                                                                       |
+| `graphdb_mgr_SUITE`       | CT    | 28    | Bootstrap init, read ops, category guard, write stubs, cache audit/repair                                                                                                                                         |
+| `graphdb_attr_SUITE`      | CT    | 37    | Attribute create/lookup, seeding, relationship types, atomic reciprocal pair (M4), literal sub-groups, `attribute_type`/`instantiable` markers                                                                    |
+| `graphdb_class_SUITE`     | CT    | 49    | Class create, QC (qualifying characteristics), lookups, hierarchy, multi-inheritance (H3), inheritance, templates, abstract classes (L9)                                                                          |
+| `graphdb_instance_SUITE`  | CT    | 68    | Instance create (incl. F4 B2 composition rule firing), relationships (incl. M3 validation, M5 per-arc AVPs — attribute-value pairs), lookups, hierarchy, four-level inheritance, multi-class membership (H4 + H5) |
+| `graphdb_language_SUITE`  | CT    | 27    | M6 multilingual overlay: language/dialect registration, per-language overlay tables, label resolution, translation hooks                                                                                          |
+| `graphdb_query_SUITE`     | CT    | 43    | F3 query language: parse/execute, snapshot-semantics sessions, `#cont_path{}` resume, path finding                                                                                                                |
+| `graphdb_rules_SUITE`     | CT    | 60    | F4 rule meta-ontology seeding, composition/connection rule create/retrieve, validation catalog, `effective_rules_for_class/2` taxonomy walk (B1), composition firing engine (B2)                                  |
+| `graphdb_nref_SUITE`      | CT    | 6     | Switchable node-nref allocation facade; permanent/runtime phase flip                                                                                                                                              |
+| `graphdb_nrefs_SUITE`     | CT    | 2     | `graphdb_nrefs:verify/0` bootstrap nref-macro consistency check                                                                                                                                                   |
+| `rel_id_server_SUITE`     | CT    | 7     | Relationship-row ID allocator (`get_id/0`, `get_id_pair/0`)                                                                                                                                                       |
+| `dictionary_server_SUITE` | CT    | 7     | `dictionary_server` gen_server behaviour                                                                                                                                                                          |
+| `term_server_SUITE`       | CT    | 7     | `term_server` gen_server behaviour                                                                                                                                                                                |
 
 Each CT test case runs in an isolated Mnesia database with a fresh nref
 allocator in a private temp directory.

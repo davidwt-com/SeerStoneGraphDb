@@ -806,13 +806,25 @@ Phase B (the rule-*firing* engine) is itself split into five
 independently shippable divisions, each with its own brainstorm →
 design → plan → implement cycle:
 
-| Div    | Subject                                                                        | Depends on | Design                                               |
-| ------ | ------------------------------------------------------------------------------ | ---------- | ---------------------------------------------------- |
-| **B1** | `effective_rules_for_class/2` — read-side taxonomy walk (no firing)            | A          | `docs/designs/f4-phase-b1-effective-rules-design.md` |
-| **B2** | Composition firing engine — `mandatory` + `auto`; cascade; return-shape change | B1         | —                                                    |
-| **B3** | `propose` mode + interactive/non-interactive session flag (`graphdb_query`)    | B2         | —                                                    |
-| **B4** | Connection firing engine (Mandatory Connections, §10)                          | B1         | —                                                    |
-| **B5** | Horizontal conflict resolution / precedence (OI-2) — rules at one class level  | B2         | —                                                    |
+| Div    | Subject                                                                        | Depends on | Design                                                  |
+| ------ | ------------------------------------------------------------------------------ | ---------- | ------------------------------------------------------- |
+| **B1** | `effective_rules_for_class/2` — read-side taxonomy walk (no firing)            | A          | `docs/designs/f4-phase-b1-effective-rules-design.md`    |
+| **B2** | Composition firing engine — `mandatory` + `auto`; cascade; return-shape change | B1         | `docs/designs/f4-phase-b2-composition-firing-design.md` |
+| **B3** | `propose` mode + interactive/non-interactive session flag (`graphdb_query`)    | B2         | —                                                       |
+| **B4** | Connection firing engine (Mandatory Connections, §10)                          | B1         | —                                                       |
+| **B5** | Horizontal conflict resolution / precedence (OI-2) — rules at one class level  | B2         | —                                                       |
+
+**OI-B2. Composition firing engine — RESOLVED (B2).**
+
+`graphdb_instance:create_instance/3` calls
+`graphdb_rules:plan_composition_firing/2` to build an abstract plan tree,
+then executes it. `mandatory` rules fire inside the same transaction as the
+parent instance; `auto` rules fire post-commit. Return shape is
+`{ok, Nref, Report}` on success or `{error, Reason, Report}` on firing
+failure; pre-plan validation errors return `{error, Reason}` (2-tuple).
+Report is rule-centric: `[#{rule, deployment, outcomes}]`.
+`plan_composition_firing/2` is a pure-read helper reused by B3.
+See `docs/designs/f4-phase-b2-composition-firing-design.md`.
 
 The composition engine described below is the **B2** division; B1 is
 the read-side prerequisite that gathers the rules it fires.
