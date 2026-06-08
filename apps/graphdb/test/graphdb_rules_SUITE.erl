@@ -57,6 +57,22 @@
 ]).
 
 %%---------------------------------------------------------------------
+%% Plan firing test case exports (B2 Task 3)
+%%---------------------------------------------------------------------
+-export([
+	plan_single_mandatory/1,
+	plan_name_pattern/1,
+	plan_mult_one_singular_name/1,
+	plan_auto_annotated_not_expanded/1,
+	plan_unbounded_mandatory_fails/1,
+	plan_abstract_mandatory_child_fails/1,
+	plan_cascade/1,
+	plan_cycle_self_nest_zero_children/1,
+	plan_cycle_a_b_a/1,
+	plan_project_scope_is_leaf/1
+]).
+
+%%---------------------------------------------------------------------
 %% Test cases
 %%---------------------------------------------------------------------
 -export([
@@ -133,7 +149,8 @@ suite() ->
 all() ->
 	[{group, seeding}, {group, composition}, {group, connection},
 	 {group, validation}, {group, retrieval}, {group, scope},
-	 {group, complex_scenarios}, {group, effective}, {group, cache_audit}].
+	 {group, complex_scenarios}, {group, effective}, {group, cache_audit},
+	 {group, plan_firing}].
 
 groups() ->
 	[
@@ -204,6 +221,18 @@ groups() ->
 		]},
 		{cache_audit, [], [
 			verify_caches_passes_after_rule_creation
+		]},
+		{plan_firing, [], [
+			plan_single_mandatory,
+			plan_name_pattern,
+			plan_mult_one_singular_name,
+			plan_auto_annotated_not_expanded,
+			plan_unbounded_mandatory_fails,
+			plan_abstract_mandatory_child_fails,
+			plan_cascade,
+			plan_cycle_self_nest_zero_children,
+			plan_cycle_a_b_a,
+			plan_project_scope_is_leaf
 		]}
 	].
 
@@ -226,7 +255,7 @@ end_per_suite(_Config) ->
 %%-----------------------------------------------------------------------------
 %% init_per_testcase/2
 %%-----------------------------------------------------------------------------
-init_per_testcase(_TC, Config) ->
+init_per_testcase(TC, Config) ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
@@ -241,7 +270,33 @@ init_per_testcase(_TC, Config) ->
 	{ok, _} = graphdb_language:start_link(),
 	{ok, _} = graphdb_query:start_link(),
 	{ok, _} = graphdb_rules:start_link(),
-	Config1.
+	plan_firing_fixtures(TC, Config1).
+
+%% plan_firing_fixtures/2  — gate: only runs for plan_firing test cases.
+%% Creates shared class fixtures and stashes them in Config.
+plan_firing_fixtures(TC, Config) ->
+	PlanFiringCases = [
+		plan_single_mandatory, plan_name_pattern, plan_mult_one_singular_name,
+		plan_auto_annotated_not_expanded, plan_unbounded_mandatory_fails,
+		plan_abstract_mandatory_child_fails, plan_cascade,
+		plan_cycle_self_nest_zero_children, plan_cycle_a_b_a,
+		plan_project_scope_is_leaf
+	],
+	case lists:member(TC, PlanFiringCases) of
+		false ->
+			Config;
+		true ->
+			Owner    = make_class("Owner"),
+			Bolt     = make_class("Bolt"),
+			Widget   = make_class("Widget"),
+			Abstract = make_abstract_class("Abstract"),
+			Folder   = make_class("Folder"),
+			A        = make_class("A"),
+			B        = make_class("B"),
+			[{ob, {Owner, Bolt}}, {oa, {Owner, Abstract}},
+			 {obw, {Owner, Bolt, Widget}}, {folder, Folder}, {ab, {A, B}}
+			 | Config]
+	end.
 
 setup_isolated_env(Config) ->
 	OrigCwd = proplists:get_value(orig_cwd, Config),
@@ -982,6 +1037,122 @@ non_class_nref_empty(_Config) ->
 	%% ancestors/1 -> {error, not_a_class}, mapped to [].
 	?assertEqual({ok, []},
 		graphdb_rules:effective_rules_for_class(environment, ?NREF_NAMES)).
+
+
+%%=============================================================================
+%% Plan Firing Tests (B2 Task 3)
+%%=============================================================================
+
+%% plan_single_mandatory/1 — one mandatory rule, mult=2, two Bolt children.
+%% Verifies the top-level plan shape: rule=root, deploy=undefined, name=undefined,
+%% no auto_rules, and both expanded children have class=Bolt with fallback names.
+plan_single_mandatory(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _R} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, 2),
+	{ok, Plan} = graphdb_rules:plan_composition_firing(environment, Owner),
+	#{class := Owner, mandatory_children := Kids, auto_rules := []} = Plan,
+	?assertEqual(2, length(Kids)),
+	[#{class := Bolt, name := N1}, #{class := Bolt, name := N2}] = Kids,
+	?assertEqual("Bolt 1", N1),                      %% fallback, mult>1
+	?assertEqual("Bolt 2", N2).
+
+%% plan_name_pattern/1 — name_pattern AVP is threaded into child plan name.
+%% Creates with mult=2 and name_pattern "Pin {i}"; expects two children named
+%% "Pin 1" and "Pin 2".
+plan_name_pattern(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, 2, undefined,
+		#{name_pattern => "Pin {i}"}),
+	{ok, #{mandatory_children := [#{name := "Pin 1"}, #{name := "Pin 2"}]}} =
+		graphdb_rules:plan_composition_firing(environment, Owner).
+
+%% plan_mult_one_singular_name/1 — mult=1 with no name_pattern falls back to
+%% class name (no index suffix).
+plan_mult_one_singular_name(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, 1),
+	{ok, #{mandatory_children := [#{name := "Bolt"}]}} =       %% no index suffix
+		graphdb_rules:plan_composition_firing(environment, Owner).
+
+%% plan_auto_annotated_not_expanded/1 — auto rule appears in auto_rules, not
+%% mandatory_children; no recursive expansion.
+plan_auto_annotated_not_expanded(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, auto, 1),
+	{ok, #{mandatory_children := [], auto_rules := [{_RuleNode, Dep}]}} =
+		graphdb_rules:plan_composition_firing(environment, Owner),
+	?assertEqual(auto, maps:get(mode, Dep)).
+
+%% plan_unbounded_mandatory_fails/1 — mandatory + unbounded multiplicity is
+%% not fireable; plan must fail with culprit = the rule node.
+plan_unbounded_mandatory_fails(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, R} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, unbounded),
+	{error, {unbounded_multiplicity_not_fireable, R},
+	 #{plan_so_far := #{class := Owner}, culprit := #node{nref = R}}} =
+		graphdb_rules:plan_composition_firing(environment, Owner).
+
+%% plan_abstract_mandatory_child_fails/1 — mandatory rule whose child_class is
+%% abstract must fail planning.
+plan_abstract_mandatory_child_fails(Config) ->
+	{Owner, Abstract} = ?config(oa, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OA", Owner, Abstract, mandatory, 1),
+	{error, {class_not_instantiable, Abstract}, #{culprit := _}} =
+		graphdb_rules:plan_composition_firing(environment, Owner).
+
+%% plan_cascade/1 — Owner→Bolt (mandatory/1), Bolt→Widget (mandatory/1).
+%% Verifies the plan tree recurses: Owner's child is Bolt, Bolt's child is
+%% Widget.
+plan_cascade(Config) ->
+	%% Owner mandates Bolt; Bolt mandates Widget
+	{Owner, Bolt, Widget} = ?config(obw, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, 1),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "BW", Bolt, Widget, mandatory, 1),
+	{ok, #{mandatory_children :=
+	        [#{class := Bolt, mandatory_children := [#{class := Widget}]}]}} =
+		graphdb_rules:plan_composition_firing(environment, Owner).
+
+%% plan_cycle_self_nest_zero_children/1 — a class with a rule pointing back to
+%% itself (Folder→Folder) must produce zero mandatory_children for the root node
+%% (on-path cycle cut at plan_mandatory level, B2-D5), not loop.
+plan_cycle_self_nest_zero_children(Config) ->
+	%% Folder mandates Folder
+	Folder = ?config(folder, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "FF", Folder, Folder, mandatory, 1),
+	{ok, #{mandatory_children := []}} =       %% zero-level cut, B2-D5
+		graphdb_rules:plan_composition_firing(environment, Folder).
+
+%% plan_cycle_a_b_a/1 — two-class cycle: A→B (mandatory/1), B→A (mandatory/1).
+%% Root is A.  OnPath at B's plan_mandatory call is [B, A], so A is on-path →
+%% cut returns {ok, Acc} (A absent from B's mandatory_children).
+plan_cycle_a_b_a(Config) ->
+	%% A mandates B; B mandates A  -> {A,B}, the closing A cut
+	{A, B} = ?config(ab, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "AB", A, B, mandatory, 1),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "BA", B, A, mandatory, 1),
+	{ok, #{class := A, mandatory_children :=
+	        [#{class := B, mandatory_children := []}]}} =
+		graphdb_rules:plan_composition_firing(environment, A).
+
+%% plan_project_scope_is_leaf/1 — project scope is always a leaf plan (no
+%% rule lookup attempted).
+plan_project_scope_is_leaf(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, 1),
+	{ok, #{class := Owner, mandatory_children := [], auto_rules := []}} =
+		graphdb_rules:plan_composition_firing({project, p1}, Owner).
 
 
 %%=============================================================================
