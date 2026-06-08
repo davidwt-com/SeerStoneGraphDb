@@ -65,7 +65,8 @@
 	seeds_rule_literals_subgroup/1,
 	seeds_literal_attributes_under_rule_literals/1,
 	seeds_applies_to_pair/1,
-	seeded_nrefs_returns_all_twelve/1,
+	seeded_nrefs_returns_all_thirteen/1,
+	name_pattern_is_seeded/1,
 	%% composition
 	creates_composition_rule_minimal/1,
 	creates_composition_rule_with_template/1,
@@ -139,7 +140,8 @@ groups() ->
 			seeds_rule_literals_subgroup,
 			seeds_literal_attributes_under_rule_literals,
 			seeds_applies_to_pair,
-			seeded_nrefs_returns_all_twelve
+			seeded_nrefs_returns_all_thirteen,
+			name_pattern_is_seeded
 		]},
 		{composition, [], [
 			creates_composition_rule_minimal,
@@ -354,15 +356,24 @@ seeds_applies_to_pair(_Config) ->
 	?assert(lists:member(?NREF_INST_REL_ATTRS, P1)),
 	?assert(lists:member(?NREF_INST_REL_ATTRS, P2)).
 
-seeded_nrefs_returns_all_twelve(_Config) ->
+seeded_nrefs_returns_all_thirteen(_Config) ->
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	Expected = [rule, composition_rule, connection_rule,
 				applies_to, applied_by, rule_literals_group,
 				child_class_nref_attr, target_class_nref_attr,
 				template_nref_attr, characterization_nref_attr,
-				mode_attr, multiplicity_attr],
+				mode_attr, multiplicity_attr, name_pattern],
 	lists:foreach(fun(K) -> ?assert(maps:is_key(K, S)) end, Expected),
 	?assertEqual(length(Expected), maps:size(S)).
+
+name_pattern_is_seeded(_Config) ->
+	{ok, Seeds} = graphdb_rules:seeded_nrefs(),
+	?assert(maps:is_key(name_pattern, Seeds)),
+	NP = maps:get(name_pattern, Seeds),
+	?assert(is_integer(NP)),
+	%% it lives under the Rule Literals group
+	RuleLit = maps:get(rule_literals_group, Seeds),
+	{ok, NP} = graphdb_attr:find_attribute_by_name(RuleLit, "name_pattern").
 
 
 %%=============================================================================

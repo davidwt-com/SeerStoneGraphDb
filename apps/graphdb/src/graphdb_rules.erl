@@ -129,7 +129,8 @@
 	template_nref_attr,
 	characterization_nref_attr,
 	mode_attr,
-	multiplicity_attr
+	multiplicity_attr,
+	name_pattern_attr
 }).
 
 
@@ -276,6 +277,7 @@ init([]) ->
 		CharAttr       = ensure_seed("characterization_nref", RuleLitGrp),
 		ModeAttr       = ensure_seed("mode",                  RuleLitGrp),
 		MultAttr       = ensure_seed("multiplicity",          RuleLitGrp),
+		NamePatternAttr= ensure_seed("name_pattern",          RuleLitGrp),
 		{AppliesTo, AppliedBy} =
 			ensure_rel_attr_pair("applies_to", "applied_by",
 								 instance, ?NREF_INST_REL_ATTRS),
@@ -301,7 +303,8 @@ init([]) ->
 			template_nref_attr         = TemplateAttr,
 			characterization_nref_attr = CharAttr,
 			mode_attr                  = ModeAttr,
-			multiplicity_attr          = MultAttr
+			multiplicity_attr          = MultAttr,
+			name_pattern_attr          = NamePatternAttr
 		}}
 	catch
 		throw:{error, Reason} ->
@@ -326,7 +329,8 @@ handle_call(seeded_nrefs, _From, State) ->
 		template_nref_attr         => State#state.template_nref_attr,
 		characterization_nref_attr => State#state.characterization_nref_attr,
 		mode_attr                  => State#state.mode_attr,
-		multiplicity_attr          => State#state.multiplicity_attr
+		multiplicity_attr          => State#state.multiplicity_attr,
+		name_pattern               => State#state.name_pattern_attr
 	}}, State};
 handle_call({create_composition_rule, environment, Name, ParentClass,
 			 ChildClass, Mode, Mult, TemplateNref}, _From, State) ->
