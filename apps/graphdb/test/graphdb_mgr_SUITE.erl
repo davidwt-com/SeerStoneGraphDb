@@ -211,6 +211,7 @@ init_per_testcase(TC, Config) when
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, _} = graphdb_class:start_link(),
 	{ok, _} = graphdb_instance:start_link(),
+	{ok, _} = graphdb_rules:start_link(),
 	Config1;
 init_per_testcase(_TC, Config) ->
 	Config1 = setup_isolated_env(Config),
@@ -251,6 +252,7 @@ setup_isolated_env(Config) ->
 end_per_testcase(TC, Config) ->
 	verify_cache_invariant(TC),
 	%% Stop workers if running (write_delegation tests start these)
+	catch gen_server:stop(graphdb_rules),
 	catch gen_server:stop(graphdb_instance),
 	catch gen_server:stop(graphdb_class),
 	catch gen_server:stop(graphdb_attr),
@@ -556,7 +558,7 @@ create_class_delegates(_Config) ->
 %%-----------------------------------------------------------------------------
 create_instance_delegates(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("TestClass2", 3),
-	{ok, Nref} = graphdb_mgr:create_instance("TestInst", ClassNref, 5),
+	{ok, Nref, _} = graphdb_mgr:create_instance("TestInst", ClassNref, 5),
 	?assert(is_integer(Nref)),
 	{ok, Node} = graphdb_mgr:get_node(Nref),
 	?assertEqual(instance, Node#node.kind).
@@ -568,8 +570,8 @@ create_instance_delegates(_Config) ->
 add_relationship_delegates(_Config) ->
 	%% Create a class and two instances
 	{ok, ClassNref} = graphdb_class:create_class("RelClass", 3),
-	{ok, InstA} = graphdb_instance:create_instance("A", ClassNref, 5),
-	{ok, InstB} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, InstA, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, InstB, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	%% Create a reciprocal relationship attribute pair (char/reciprocal nrefs)
 	{ok, {CharNref, RecipNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),

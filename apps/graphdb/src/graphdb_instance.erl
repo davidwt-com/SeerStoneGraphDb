@@ -73,6 +73,13 @@
 
 
 %%---------------------------------------------------------------------
+%% Constants
+%%---------------------------------------------------------------------
+%% Rules live in the shared ontology; project-scoped rules are not yet
+%% supported (B1/B2).  Firing always consults environment-scope rules.
+-define(RULE_SCOPE, environment).
+
+%%---------------------------------------------------------------------
 %% Record Definitions
 %%---------------------------------------------------------------------
 -record(node, {
@@ -162,9 +169,13 @@ start_link() ->
 
 %%-----------------------------------------------------------------------------
 %% create_instance(Name, ClassNref, ParentNref) ->
-%%     {ok, Nref} | {error, term()}
+%%     {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
-%% Creates a new instance node.  Atomically writes:
+%% Creates a new instance node and fires any applicable composition rules.
+%% Atomically writes the root + mandatory subtree in one Mnesia transaction.
+%% Returns {ok, Nref, Report} on success (Report is [] when no rules apply).
+%% Pre-PLAN validation errors return 2-tuple {error, Reason} (no report).
+%% Firing errors return 3-tuple {error, Reason, Report}.
 %%   - the node record (kind=instance, parent=ParentNref)
 %%   - instance→class membership arc pair (char=29/30)
 %%   - compositional parent→child arc pair (char=28/27)
@@ -346,7 +357,7 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 handle_call({create_instance, Name, ClassNref, ParentNref}, _From,
 		#state{instantiable_nref = InstAttr} = State) ->
-	{reply, do_create_instance(Name, ClassNref, ParentNref, InstAttr),
+	{reply, do_create_instance(Name, ClassNref, ParentNref, InstAttr, []),
 		State};
 
 handle_call({add_relationship, S, C, T, R, TemplateSpec, AVPSpec},
@@ -432,91 +443,163 @@ find_avp_value([_ | Rest], AttrNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_create_instance(Name, ClassNref, ParentNref, InstAttr) ->
-%%     {ok, Nref} | {error, term()}
+%% do_create_instance(Name, ClassNref, ParentNref, InstAttr, OnPath)
+%%     -> {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
-%% Validates the class (must be kind=class and instantiable) and parent
-%% (must exist), allocates nrefs outside the Mnesia transaction, then
-%% atomically writes the node record, membership arcs, and compositional
-%% arcs.
+%% The unifying internal entry (B2-D2): every cascade level flows through
+%% here, never the gen_server API (that would deadlock).  OnPath is the
+%% class path for the on-path cycle guard.  Validates the class (must be
+%% kind=class and instantiable) and parent (must exist); pre-PLAN errors
+%% return a 2-tuple {error, Reason} (no report).  Post-PLAN paths return
+%% 3-tuples.
 %%-----------------------------------------------------------------------------
-do_create_instance(Name, ClassNref, ParentNref, InstAttr) ->
+do_create_instance(Name, ClassNref, ParentNref, InstAttr, OnPath) ->
 	case do_validate_class(ClassNref, InstAttr) of
 		ok ->
 			case do_validate_parent(ParentNref) of
 				ok ->
-					do_write_instance(Name, ClassNref, ParentNref);
+					fire_create(Name, ClassNref, ParentNref, OnPath);
 				{error, _} = Err ->
-					Err
+					Err            %% pre-PLAN root error: 2-tuple (no report)
 			end;
 		{error, _} = Err ->
-			Err
+			Err                    %% pre-PLAN root error: 2-tuple (no report)
 	end.
 
-do_write_instance(Name, ClassNref, ParentNref) ->
-	%% Allocate all nrefs OUTSIDE the Mnesia transaction
+%%-----------------------------------------------------------------------------
+%% fire_create(Name, ClassNref, ParentNref, OnPath)
+%%     -> {ok, Nref, report()} | {error, Reason, report()}
+%%
+%% PLAN → EXECUTE → POST-COMMIT (B2-D1/D2/D3).  Calls graphdb_rules for the
+%% abstract plan tree, then executes the mandatory subtree atomically, then
+%% fires auto children best-effort post-commit.
+%%-----------------------------------------------------------------------------
+fire_create(Name, ClassNref, ParentNref, OnPath) ->
+	case graphdb_rules:plan_composition_firing(?RULE_SCOPE, ClassNref) of
+		{ok, PlanTree} ->
+			case execute(Name, ClassNref, ParentNref, OnPath, PlanTree) of
+				{ok, RootNref, MandOutcomes, InstPlan} ->
+					AutoReport = fire_auto(InstPlan, OnPath),
+					{ok, RootNref,
+					 merge_reports(MandOutcomes, AutoReport)};
+				{error, R, Report} ->
+					{error, R, Report}
+			end;
+		{error, R, Failure} ->
+			{error, R, report_not_attempted(R, Failure)}
+	end.
+
+%%-----------------------------------------------------------------------------
+%% execute(RootName, RootClass, RootParent, OnPath, PlanTree)
+%%     -> {ok, RootNref, MandOutcomes, InstPlan} | {error, Reason, report()}
+%%
+%% Allocates every node's nrefs/ids OUTSIDE the transaction, writes the
+%% root and the whole mandatory subtree in ONE Mnesia transaction.
+%%-----------------------------------------------------------------------------
+execute(RootName, _RootClass, RootParent, _OnPath, PlanTree) ->
+	%% Annotate the plan tree with allocated nrefs (root uses caller's Name).
+	InstPlan = allocate_plan(PlanTree#{name => RootName}),
+	{Writes, Outcomes} = plan_writes(InstPlan, RootParent),
+	Txn = fun() ->
+		lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
+					  Writes)
+	end,
+	case mnesia:transaction(Txn) of
+		{atomic, ok} ->
+			{ok, maps:get(nref, InstPlan), Outcomes, InstPlan};
+		{aborted, R} ->
+			{error, R,
+			 report_not_attempted(R,
+				#{plan_so_far => PlanTree, culprit => undefined})}
+	end.
+
+%%-----------------------------------------------------------------------------
+%% allocate_plan(PlanNode) -> InstPlanNode (same tree + nref per node)
+%%
+%% Depth-first pre-order walk: allocates one nref per node OUTSIDE the
+%% Mnesia transaction.
+%%-----------------------------------------------------------------------------
+allocate_plan(#{mandatory_children := Kids} = Node) ->
 	Nref = graphdb_nref:get_next(),
+	Node#{nref => Nref,
+		  mandatory_children => [allocate_plan(K) || K <- Kids]}.
+
+%%-----------------------------------------------------------------------------
+%% plan_writes(InstPlan, RootParent) -> {Writes, Outcomes}
+%%
+%% Pre-order DFS over the instantiated plan tree.  The root emits only its
+%% own five records.  Each mandated descendant emits its records plus one
+%% `fired` outcome under its rule, indexed 1..N within that rule.
+%%-----------------------------------------------------------------------------
+plan_writes(#{nref := RootNref, class := Class, name := Name,
+			  mandatory_children := Kids}, RootParent) ->
+	Acc0 = {instance_records(RootNref, Class, Name, RootParent), []},
+	write_children(Kids, RootNref, Acc0).
+
+%%-----------------------------------------------------------------------------
+%% write_children(Siblings, OwnerNref, {Writes, Outcomes}) -> {Writes, Outcomes}
+%%
+%% Numbers siblings within their mandating rule (1-based), emits each
+%% child's records + fired outcome (with real `deploy` map), then recurses
+%% into the child's own mandatory children.
+%%-----------------------------------------------------------------------------
+write_children(Siblings, OwnerNref, Acc) ->
+	{_Counts, Result} =
+		lists:foldl(
+			fun(#{nref := CNref, class := CClass, name := CName,
+				  rule := Rule, deploy := Deploy,
+				  mandatory_children := GKids}, {Counts, {W, O}}) ->
+				Idx = maps:get(rule_key(Rule), Counts, 0) + 1,
+				W1 = W ++ instance_records(CNref, CClass, CName, OwnerNref),
+				O1 = add_outcome(O, Rule, Deploy,
+						#{owner => OwnerNref, index => Idx,
+						  status => fired, child => CNref}),
+				{W2, O2} = write_children(GKids, CNref, {W1, O1}),
+				{Counts#{rule_key(Rule) => Idx}, {W2, O2}}
+			end, {#{}, Acc}, Siblings),
+	Result.
+
+rule_key(#node{nref = N}) -> N.
+
+%%-----------------------------------------------------------------------------
+%% instance_records(Nref, ClassNref, Name, ParentNref) -> [{Tab, Rec}]
+%%
+%% Builds the five Mnesia records for one instance node.  Rel-IDs are
+%% allocated here (outside the transaction by the allocate_plan caller
+%% chain; this function is called from plan_writes/write_children which
+%% are invoked in execute/5 before the transaction).
+%%-----------------------------------------------------------------------------
+instance_records(Nref, ClassNref, Name, ParentNref) ->
 	{MembId1, MembId2} = rel_id_server:get_id_pair(),
 	{CompId1, CompId2} = rel_id_server:get_id_pair(),
 	NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
-	Node = #node{
-		nref = Nref,
-		kind = instance,
-		parents = [ParentNref],
-		classes = [ClassNref],
-		attribute_value_pairs = [NameAVP]
-	},
+	Node = #node{nref = Nref, kind = instance, parents = [ParentNref],
+				 classes = [ClassNref], attribute_value_pairs = [NameAVP]},
 	%% Instance -> Class (char=29, reciprocal=30)
-	I2C = #relationship{
-		id = MembId1,
-		kind = instantiation,
-		source_nref = Nref,
-		characterization = ?ARC_INST_TO_CLASS,
-		target_nref = ClassNref,
-		reciprocal = ?ARC_CLASS_TO_INST,
-		avps = []
-	},
+	I2C = #relationship{id = MembId1, kind = instantiation, source_nref = Nref,
+		characterization = ?ARC_INST_TO_CLASS, target_nref = ClassNref,
+		reciprocal = ?ARC_CLASS_TO_INST, avps = []},
 	%% Class -> Instance (char=30, reciprocal=29)
-	C2I = #relationship{
-		id = MembId2,
-		kind = instantiation,
-		source_nref = ClassNref,
-		characterization = ?ARC_CLASS_TO_INST,
-		target_nref = Nref,
-		reciprocal = ?ARC_INST_TO_CLASS,
-		avps = []
-	},
+	C2I = #relationship{id = MembId2, kind = instantiation,
+		source_nref = ClassNref, characterization = ?ARC_CLASS_TO_INST,
+		target_nref = Nref, reciprocal = ?ARC_INST_TO_CLASS, avps = []},
 	%% Parent -> Child (char=28, reciprocal=27)
-	P2C = #relationship{
-		id = CompId1,
-		kind = composition,
-		source_nref = ParentNref,
-		characterization = ?ARC_INST_CHILD,
-		target_nref = Nref,
-		reciprocal = ?ARC_INST_PARENT,
-		avps = []
-	},
+	P2C = #relationship{id = CompId1, kind = composition,
+		source_nref = ParentNref, characterization = ?ARC_INST_CHILD,
+		target_nref = Nref, reciprocal = ?ARC_INST_PARENT, avps = []},
 	%% Child -> Parent (char=27, reciprocal=28)
-	C2P = #relationship{
-		id = CompId2,
-		kind = composition,
-		source_nref = Nref,
-		characterization = ?ARC_INST_PARENT,
-		target_nref = ParentNref,
-		reciprocal = ?ARC_INST_CHILD,
-		avps = []
-	},
-	Txn = fun() ->
-		ok = mnesia:write(nodes, Node, write),
-		ok = mnesia:write(relationships, I2C, write),
-		ok = mnesia:write(relationships, C2I, write),
-		ok = mnesia:write(relationships, P2C, write),
-		ok = mnesia:write(relationships, C2P, write)
-	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}      -> {ok, Nref};
-		{aborted, Reason} -> {error, Reason}
-	end.
+	C2P = #relationship{id = CompId2, kind = composition, source_nref = Nref,
+		characterization = ?ARC_INST_PARENT, target_nref = ParentNref,
+		reciprocal = ?ARC_INST_CHILD, avps = []},
+	[{nodes, Node}, {relationships, I2C}, {relationships, C2I},
+	 {relationships, P2C}, {relationships, C2P}].
+
+%%-----------------------------------------------------------------------------
+%% fire_auto(InstPlan, OnPath) -> report()
+%%
+%% POST-COMMIT best-effort auto firing (Task 6).  Stub for Task 5.
+%%-----------------------------------------------------------------------------
+fire_auto(_InstPlan, _OnPath) -> [].
 
 
 %%-----------------------------------------------------------------------------
@@ -1147,12 +1230,9 @@ search_targets([Nref | Rest], AttrNref) ->
 %% Firing Report Helpers (B2-D6)
 %%=============================================================================
 
-%% Suppress unused-function warnings for the report helpers until Task 5 wires
-%% them into the firing engine.  They ARE used in TEST builds (exported) and
-%% will be used unconditionally once create_instance gains its firing path.
--compile({nowarn_unused_function, [add_outcome/4, append_if/3,
-                                   merge_reports/2, report_not_attempted/2,
-                                   walk_not_attempted/2, summarize/1]}).
+%% summarize/1 is exported in TEST builds and available for external callers
+%% but not referenced in non-TEST production paths — suppress the warning.
+-compile({nowarn_unused_function, [summarize/1]}).
 
 %%-----------------------------------------------------------------------------
 %% add_outcome(Report, RuleNode, Deployment, Outcome) -> Report'

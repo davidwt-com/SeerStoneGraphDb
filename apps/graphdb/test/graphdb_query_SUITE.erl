@@ -193,6 +193,7 @@ init_per_testcase(_TC, Config) ->
     {ok, _} = graphdb_attr:start_link(),
     {ok, _} = graphdb_class:start_link(),
     {ok, _} = graphdb_instance:start_link(),
+    {ok, _} = graphdb_rules:start_link(),
     {ok, _} = graphdb_language:start_link(),
     {ok, _} = graphdb_query:start_link(),
     Config1.
@@ -213,6 +214,7 @@ end_per_testcase(TC, Config) ->
     verify_cache_invariant(TC),
     catch gen_server:stop(graphdb_query),
     catch gen_server:stop(graphdb_language),
+    catch gen_server:stop(graphdb_rules),
     catch gen_server:stop(graphdb_instance),
     catch gen_server:stop(graphdb_class),
     catch gen_server:stop(graphdb_attr),
@@ -546,7 +548,7 @@ q3_class_not_found(_Config) ->
 %%---------------------------------------------------------------------
 q4_describes_instance_with_class(_Config) ->
     {ok, Vehicle} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
-    {ok, Taurus}  = graphdb_instance:create_instance(
+    {ok, Taurus, _}  = graphdb_instance:create_instance(
                        "Taurus", Vehicle, ?NREF_PROJECTS),
     {ok, R} = graphdb_query:execute_query(
         #q_describe{nref = Taurus, labels = default}),
@@ -560,7 +562,7 @@ q4_resolves_inherited_attributes(_Config) ->
     ok = graphdb_class:add_qualifying_characteristic(Vehicle, WeightA),
     %% Bind a class-level value (Task 0 adds bind_qc_value/3)
     ok = graphdb_class:bind_qc_value(Vehicle, WeightA, 3500),
-    {ok, Taurus} = graphdb_instance:create_instance(
+    {ok, Taurus, _} = graphdb_instance:create_instance(
                       "Taurus", Vehicle, ?NREF_PROJECTS),
     {ok, R} = graphdb_query:execute_query(
         #q_describe{nref = Taurus, labels = default}),
@@ -572,9 +574,9 @@ q4_resolves_inherited_attributes(_Config) ->
 q4_outgoing_and_incoming_connections(_Config) ->
     {ok, Mfr}    = graphdb_class:create_class("Manufacturer", ?NREF_CLASSES),
     {ok, Veh}    = graphdb_class:create_class("Vehicle",      ?NREF_CLASSES),
-    {ok, Ford}   = graphdb_instance:create_instance(
+    {ok, Ford, _}   = graphdb_instance:create_instance(
                        "Ford",   Mfr, ?NREF_PROJECTS),
-    {ok, Tau}    = graphdb_instance:create_instance(
+    {ok, Tau, _}    = graphdb_instance:create_instance(
                        "Taurus", Veh, ?NREF_PROJECTS),
     %% create_relationship_attribute/3 atomically creates BOTH directions
     %% in one call and returns {ok, {FwdNref, RevNref}}.
@@ -596,9 +598,9 @@ q4_outgoing_and_incoming_connections(_Config) ->
 
 q4_compositional_ancestors(_Config) ->
     {ok, Veh}    = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
-    {ok, Car}    = graphdb_instance:create_instance(
+    {ok, Car, _}    = graphdb_instance:create_instance(
                        "Car",    Veh, ?NREF_PROJECTS),
-    {ok, Engine} = graphdb_instance:create_instance(
+    {ok, Engine, _} = graphdb_instance:create_instance(
                        "Engine", Veh, Car),
     {ok, R} = graphdb_query:execute_query(
         #q_describe{nref = Engine, labels = default}),
@@ -615,9 +617,9 @@ q4_instance_not_found(_Config) ->
 %%---------------------------------------------------------------------
 q5_lists_direct_instances(_Config) ->
     {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
-    {ok, Tau} = graphdb_instance:create_instance(
+    {ok, Tau, _} = graphdb_instance:create_instance(
                     "Taurus", Veh, ?NREF_PROJECTS),
-    {ok, Acc} = graphdb_instance:create_instance(
+    {ok, Acc, _} = graphdb_instance:create_instance(
                     "Accord", Veh, ?NREF_PROJECTS),
     {ok, Insts} = graphdb_query:execute_query(
         #q_instances_of{class = Veh, recursive = false}),
@@ -627,7 +629,7 @@ q5_lists_direct_instances(_Config) ->
 q5_recursive_includes_subclass_instances(_Config) ->
     {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
     {ok, Car} = graphdb_class:create_class("Car",     Veh),
-    {ok, Tau} = graphdb_instance:create_instance(
+    {ok, Tau, _} = graphdb_instance:create_instance(
                     "Taurus", Car, ?NREF_PROJECTS),
     {ok, Insts} = graphdb_query:execute_query(
         #q_instances_of{class = Veh, recursive = true}),
@@ -636,7 +638,7 @@ q5_recursive_includes_subclass_instances(_Config) ->
 q5_non_recursive_excludes_subclasses(_Config) ->
     {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
     {ok, Car} = graphdb_class:create_class("Car",     Veh),
-    {ok, Tau} = graphdb_instance:create_instance(
+    {ok, Tau, _} = graphdb_instance:create_instance(
                     "Taurus", Car, ?NREF_PROJECTS),
     {ok, Insts} = graphdb_query:execute_query(
         #q_instances_of{class = Veh, recursive = false}),
@@ -705,9 +707,9 @@ q6_arc_kind_filter(_Config) ->
     %% B (child) -> A (parent) via composition; restricting to taxonomy
     %% yields no_path because the path is purely compositional.
     {ok, Cls} = graphdb_class:create_class("Cls", ?NREF_CLASSES),
-    {ok, A}   = graphdb_instance:create_instance(
+    {ok, A, _}   = graphdb_instance:create_instance(
                     "A", Cls, ?NREF_PROJECTS),
-    {ok, B}   = graphdb_instance:create_instance("B", Cls, A),
+    {ok, B, _}   = graphdb_instance:create_instance("B", Cls, A),
     {ok, [_|_]} = graphdb_query:execute_query(
         #q_find_path{from      = B,
                      to        = A,
