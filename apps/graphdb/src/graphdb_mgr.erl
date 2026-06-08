@@ -206,11 +206,11 @@ create_class(Name, ParentClassNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% create_instance(Name, ClassNref, ParentNref) -> {ok, Nref} | {error, term()}
+%% create_instance(Name, ClassNref, ParentNref) ->
+%%     {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
-%% Creates a new instance node.  Atomically writes the node record and
-%% the instance-to-class membership relationship pair (arc labels 29/30).
-%% Delegates to graphdb_instance (not yet implemented).
+%% Creates a new instance node and fires mandatory composition rules.
+%% Delegates to graphdb_instance; propagates the 3-tuple return verbatim.
 %%-----------------------------------------------------------------------------
 create_instance(Name, ClassNref, ParentNref) ->
 	gen_server:call(?MODULE, {create_instance, Name, ClassNref, ParentNref}).
