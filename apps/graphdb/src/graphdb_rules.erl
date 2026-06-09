@@ -888,7 +888,7 @@ meta_nref(connection_rule,  State) -> State#state.connection_rule_nref.
 %% is the real #{mode, multiplicity, template} (B2-D6).
 leaf_plan(ClassNref, Rule, Deploy, Name) ->
 	#{class => ClassNref, name => Name, rule => Rule, deploy => Deploy,
-	  mandatory_children => [], auto_rules => []}.
+	  mandatory_children => [], auto_rules => [], propose_rules => []}.
 
 %% plan_node(ClassNref, Rule, Deploy, Name, OnPath, State)
 %%   -> {ok, PlanNode} | {error, Reason, #{plan_so_far, culprit}}
@@ -925,7 +925,11 @@ plan_rules([{RuleNode, Deploy} | Rest], OnPath1, State, Acc) ->
 			Autos = maps:get(auto_rules, Acc) ++ [{RuleNode, Deploy}],
 			plan_rules(Rest, OnPath1, State, Acc#{auto_rules => Autos});
 		propose ->
-			plan_rules(Rest, OnPath1, State, Acc);          %% B3 owns propose
+			%% B3: accumulate (B2 dropped these).  Mirrors the `auto` clause;
+			%% graphdb_instance:fire_propose/2 expands multiplicity post-commit
+			%% and emits `proposed` outcomes.  Unexpanded here, like auto_rules.
+			Proposes = maps:get(propose_rules, Acc) ++ [{RuleNode, Deploy}],
+			plan_rules(Rest, OnPath1, State, Acc#{propose_rules => Proposes});
 		mandatory ->
 			case plan_mandatory(RuleNode, Deploy, OnPath1, State, Acc) of
 				{ok, Acc1}          -> plan_rules(Rest, OnPath1, State, Acc1);

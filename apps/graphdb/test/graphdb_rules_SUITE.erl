@@ -64,6 +64,9 @@
 	plan_name_pattern/1,
 	plan_mult_one_singular_name/1,
 	plan_auto_annotated_not_expanded/1,
+	plan_propose_accumulated/1,
+	plan_mixed_modes/1,
+	plan_propose_at_mandatory_child/1,
 	plan_unbounded_mandatory_fails/1,
 	plan_abstract_mandatory_child_fails/1,
 	plan_cascade/1,
@@ -232,7 +235,10 @@ groups() ->
 			plan_cascade,
 			plan_cycle_self_nest_zero_children,
 			plan_cycle_a_b_a,
-			plan_project_scope_is_leaf
+			plan_project_scope_is_leaf,
+			plan_propose_accumulated,
+			plan_mixed_modes,
+			plan_propose_at_mandatory_child
 		]}
 	].
 
@@ -280,7 +286,9 @@ plan_firing_fixtures(TC, Config) ->
 		plan_auto_annotated_not_expanded, plan_unbounded_mandatory_fails,
 		plan_abstract_mandatory_child_fails, plan_cascade,
 		plan_cycle_self_nest_zero_children, plan_cycle_a_b_a,
-		plan_project_scope_is_leaf
+		plan_project_scope_is_leaf,
+		plan_propose_accumulated, plan_mixed_modes,
+		plan_propose_at_mandatory_child
 	],
 	case lists:member(TC, PlanFiringCases) of
 		false ->
@@ -517,6 +525,58 @@ composition_rule_carries_name_pattern(_Config) ->
 	{ok, Seeds} = graphdb_rules:seeded_nrefs(),
 	NP = maps:get(name_pattern, Seeds),
 	?assertEqual({ok, "Bolt {i}"}, find_avp(AVPs, NP)).
+
+%%-----------------------------------------------------------------------------
+%% B3: a propose-mode rule lands in propose_rules (NOT auto_rules /
+%% mandatory_children), unexpanded — exactly one {RuleNode, Deploy} entry
+%% regardless of multiplicity.
+%%-----------------------------------------------------------------------------
+plan_propose_accumulated(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OBpropose", Owner, Bolt, propose, 3),
+	{ok, Plan} = graphdb_rules:plan_composition_firing(environment, Owner),
+	#{class := Owner, mandatory_children := [], auto_rules := [],
+	  propose_rules := [{_RuleNode, Dep}]} = Plan,
+	?assertEqual(propose, maps:get(mode, Dep)),
+	?assertEqual(3, maps:get(multiplicity, Dep)).
+
+%%-----------------------------------------------------------------------------
+%% B3: one rule of each mode on the same owner populates all three
+%% accumulators independently.
+%%-----------------------------------------------------------------------------
+plan_mixed_modes(Config) ->
+	{Owner, Bolt, Widget} = ?config(obw, Config),
+	Gizmo = make_class("Gizmo"),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "man", Owner, Bolt, mandatory, 1),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "aut", Owner, Widget, auto, 1),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "pro", Owner, Gizmo, propose, 1),
+	{ok, Plan} = graphdb_rules:plan_composition_firing(environment, Owner),
+	#{mandatory_children := Mand, auto_rules := Auto,
+	  propose_rules := Prop} = Plan,
+	?assertEqual(1, length(Mand)),
+	?assertEqual(1, length(Auto)),
+	?assertEqual(1, length(Prop)),
+	%% the mandatory child is the Bolt class, not Widget/Gizmo
+	[#{class := Bolt}] = Mand.
+
+%%-----------------------------------------------------------------------------
+%% B3: a propose rule attached to a MANDATORY child's class appears in that
+%% child's plan node (propose rides the mandatory-cascade recursion).
+%%-----------------------------------------------------------------------------
+plan_propose_at_mandatory_child(Config) ->
+	{Owner, Bolt, Widget} = ?config(obw, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, 1),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "BWpropose", Bolt, Widget, propose, 1),
+	{ok, Plan} = graphdb_rules:plan_composition_firing(environment, Owner),
+	#{mandatory_children := [BoltPlan]} = Plan,
+	#{class := Bolt, propose_rules := [{_R, Dep}]} = BoltPlan,
+	?assertEqual(propose, maps:get(mode, Dep)).
 
 
 %%=============================================================================
