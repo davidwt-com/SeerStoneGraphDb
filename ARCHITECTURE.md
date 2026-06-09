@@ -15,26 +15,27 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 ## 1. Status
 
-| Component           | State                                                                                                                                                                                                           |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Build               | Compiles clean — zero warnings (Erlang/OTP, the Open Telecom Platform, version 28 / rebar3 3.27)                                                                                                                |
-| `nref` subsystem    | Fully implemented; backed by DETS (Disk-based Erlang Term Storage); `set_floor/1` API                                                                                                                           |
-| `dictionary_imp`    | Implemented; not yet wired to `dictionary_server` / `term_server`                                                                                                                                               |
-| `graphdb_bootstrap` | Implemented — Mnesia schema, table creation, scaffold loader                                                                                                                                                    |
-| `graphdb_mgr`       | Implemented — bootstrap startup, read API, category guard, cache audit/repair. Write-side delegation pending.                                                                                                   |
-| `graphdb_attr`      | Implemented — attribute library (name, literal, relationship attributes)                                                                                                                                        |
-| `graphdb_class`     | Implemented — taxonomic hierarchy with multi-parent inheritance (BFS — breadth-first search — over a DAG, a directed acyclic graph; H3); abstract (non-instantiable) classes via the `instantiable` marker (L9) |
-| `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance with multi-class membership (H4) and ambiguity-detecting class resolver (H5); refuses instantiation/membership of abstract classes (L9)          |
-| `graphdb_rules`     | Implemented — F4 Phase A: rule meta-ontology, applies_to attachment, scope-aware create/retrieve                                                                                                                |
-| `graphdb_language`  | Implemented — M6 multilingual overlay layer (label resolution, dialect chains, per-language Mnesia overlay tables)                                                                                              |
-| `graphdb_query`     | Implemented — F3 query language (Q1-Q6) with snapshot-semantics sessions and continuation-based bounded BFS                                                                                                     |
-| Tests               | 441 passing (340 Common Test + 101 EUnit)                                                                                                                                                                       |
+| Component           | State                                                                                                                                                                                                                                                          |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Build               | Compiles clean — zero warnings (Erlang/OTP, the Open Telecom Platform, version 28 / rebar3 3.27)                                                                                                                                                               |
+| `nref` subsystem    | Fully implemented; backed by DETS (Disk-based Erlang Term Storage); `set_floor/1` API                                                                                                                                                                          |
+| `dictionary_imp`    | Implemented; not yet wired to `dictionary_server` / `term_server`                                                                                                                                                                                              |
+| `graphdb_bootstrap` | Implemented — Mnesia schema, table creation, scaffold loader                                                                                                                                                                                                   |
+| `graphdb_mgr`       | Implemented — bootstrap startup, read API, category guard, cache audit/repair. Write-side delegation pending.                                                                                                                                                  |
+| `graphdb_attr`      | Implemented — attribute library (name, literal, relationship attributes)                                                                                                                                                                                       |
+| `graphdb_class`     | Implemented — taxonomic hierarchy with multi-parent inheritance (BFS — breadth-first search — over a DAG, a directed acyclic graph; H3); abstract (non-instantiable) classes via the `instantiable` marker (L9)                                                |
+| `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance with multi-class membership (H4) and ambiguity-detecting class resolver (H5); refuses instantiation/membership of abstract classes (L9); fires composition rules on `create_instance/3` (F4 B2) |
+| `graphdb_rules`     | Implemented — F4 Phases A+B1+B2: rule meta-ontology, applies_to attachment, scope-aware create/retrieve, taxonomy-walking effective-rules read, composition firing engine                                                                                      |
+| `graphdb_language`  | Implemented — M6 multilingual overlay layer (label resolution, dialect chains, per-language Mnesia overlay tables)                                                                                                                                             |
+| `graphdb_query`     | Implemented — F3 query language (Q1-Q6) with snapshot-semantics sessions and continuation-based bounded BFS                                                                                                                                                    |
+| Tests               | 465 passing (360 Common Test + 105 EUnit)                                                                                                                                                                                                                      |
 
 The kernel is functional under multi-inheritance, multi-class-
 membership, and per-class template semantics.  Multilingual label
 overlay (M6, §10) and the F3 query language (§11) are landed.
-The `graphdb_rules` data model (F4 Phase A, §12) is landed; only its
-rule-firing engine (Phases B–F) remains.
+The `graphdb_rules` data model (F4 Phase A, §12) is landed; the
+taxonomy-walk read (Phase B1) and composition firing engine (Phase B2) are
+also landed. The firing engine (Phases B3–F) remains.
 
 ---
 
@@ -232,7 +233,7 @@ graphdb (application — started after mnesia + nref)
         ├── graphdb_instance     — compositional hierarchy + inheritance
         ├── graphdb_language     — multilingual label overlay (M6)
         ├── graphdb_query        — F3 query language gen_server
-        └── graphdb_rules        — rule meta-ontology + create/retrieve (F4 Phase A)
+        └── graphdb_rules        — rule meta-ontology + create/retrieve + composition firing (F4 A+B1+B2)
 
 dictionary (application — started alongside graphdb)
   └── dictionary_sup
@@ -588,11 +589,12 @@ contract.
 
 ---
 
-## 12. Rules (`graphdb_rules`, F4 Phase A)
+## 12. Rules (`graphdb_rules`, F4 Phases A + B1 + B2)
 
-`graphdb_rules` is the data model for graph rules. Phase A is storage and
-retrieval only — there is no rule-firing engine yet (Phases B–F remain,
-tracked in `TASKS.md`).
+`graphdb_rules` implements the rules data model and composition firing
+engine. Phase A is storage and retrieval; Phase B1 adds taxonomy-walking
+reads; Phase B2 adds the composition firing engine. Phases B3–F remain,
+tracked in `TASKS.md`.
 
 Architectural shape:
 
@@ -616,7 +618,14 @@ Architectural shape:
   (Phase B / B1) additionally walks the class's taxonomy ancestors:
   a nearest-first, deployment-bearing gather of every rule attached to the
   class and its superclasses, grouped by attaching class. It resolves
-  nothing — additive-vs-shadow is the firing engine's job (B2/B5).
+  nothing — additive-vs-shadow is the firing engine's job (B5).
+- **Composition firing (B2).** `graphdb_instance:create_instance/3` calls
+  `graphdb_rules:plan_composition_firing/2` to build an abstract plan tree,
+  then executes it: `mandatory` rules fire inside the same transaction as
+  the parent; `auto` rules fire post-commit. Return shape is `{ok, Nref,
+  Report}` on success or `{error, Reason, Report}` on firing failure; pre-
+  plan validation errors return `{error, Reason}` (2-tuple). The report is
+  rule-centric: `[#{rule, deployment, outcomes}]`.
 - **Scope.** The API is scope-tagged (`environment` | `{project, _}`).
   Phase A serves the `environment` scope; `{project, _}` creates are
   rejected and `{project, _}` reads return empty.

@@ -68,5 +68,10 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(Echo *)"
+    ]
   }
 }

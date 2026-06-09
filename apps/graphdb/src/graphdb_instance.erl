@@ -73,6 +73,13 @@
 
 
 %%---------------------------------------------------------------------
+%% Constants
+%%---------------------------------------------------------------------
+%% Rules live in the shared ontology; project-scoped rules are not yet
+%% supported (B1/B2).  Firing always consults environment-scope rules.
+-define(RULE_SCOPE, environment).
+
+%%---------------------------------------------------------------------
 %% Record Definitions
 %%---------------------------------------------------------------------
 -record(node, {
@@ -143,7 +150,11 @@
 %%---------------------------------------------------------------------
 -ifdef(TEST).
 -export([
-		find_avp_value/2
+		find_avp_value/2,
+		add_outcome/4,
+		merge_reports/2,
+		report_not_attempted/2,
+		summarize/1
 		]).
 -endif.
 
@@ -158,9 +169,13 @@ start_link() ->
 
 %%-----------------------------------------------------------------------------
 %% create_instance(Name, ClassNref, ParentNref) ->
-%%     {ok, Nref} | {error, term()}
+%%     {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
-%% Creates a new instance node.  Atomically writes:
+%% Creates a new instance node and fires any applicable composition rules.
+%% Atomically writes the root + mandatory subtree in one Mnesia transaction.
+%% Returns {ok, Nref, Report} on success (Report is [] when no rules apply).
+%% Pre-PLAN validation errors return 2-tuple {error, Reason} (no report).
+%% Firing errors return 3-tuple {error, Reason, Report}.
 %%   - the node record (kind=instance, parent=ParentNref)
 %%   - instance→class membership arc pair (char=29/30)
 %%   - compositional parent→child arc pair (char=28/27)
@@ -342,7 +357,7 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 handle_call({create_instance, Name, ClassNref, ParentNref}, _From,
 		#state{instantiable_nref = InstAttr} = State) ->
-	{reply, do_create_instance(Name, ClassNref, ParentNref, InstAttr),
+	{reply, do_create_instance(Name, ClassNref, ParentNref, InstAttr, []),
 		State};
 
 handle_call({add_relationship, S, C, T, R, TemplateSpec, AVPSpec},
@@ -428,91 +443,232 @@ find_avp_value([_ | Rest], AttrNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_create_instance(Name, ClassNref, ParentNref, InstAttr) ->
-%%     {ok, Nref} | {error, term()}
+%% do_create_instance(Name, ClassNref, ParentNref, InstAttr, OnPath)
+%%     -> {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
-%% Validates the class (must be kind=class and instantiable) and parent
-%% (must exist), allocates nrefs outside the Mnesia transaction, then
-%% atomically writes the node record, membership arcs, and compositional
-%% arcs.
+%% The unifying internal entry (B2-D2): every cascade level flows through
+%% here, never the gen_server API (that would deadlock).  OnPath is the
+%% class path for the on-path cycle guard.  Validates the class (must be
+%% kind=class and instantiable) and parent (must exist); pre-PLAN errors
+%% return a 2-tuple {error, Reason} (no report).  Post-PLAN paths return
+%% 3-tuples.
 %%-----------------------------------------------------------------------------
-do_create_instance(Name, ClassNref, ParentNref, InstAttr) ->
+do_create_instance(Name, ClassNref, ParentNref, InstAttr, OnPath) ->
 	case do_validate_class(ClassNref, InstAttr) of
 		ok ->
 			case do_validate_parent(ParentNref) of
 				ok ->
-					do_write_instance(Name, ClassNref, ParentNref);
+					fire_create(Name, ClassNref, ParentNref, OnPath);
 				{error, _} = Err ->
-					Err
+					Err            %% pre-PLAN root error: 2-tuple (no report)
 			end;
 		{error, _} = Err ->
-			Err
+			Err                    %% pre-PLAN root error: 2-tuple (no report)
 	end.
 
-do_write_instance(Name, ClassNref, ParentNref) ->
-	%% Allocate all nrefs OUTSIDE the Mnesia transaction
+%%-----------------------------------------------------------------------------
+%% fire_create(Name, ClassNref, ParentNref, OnPath)
+%%     -> {ok, Nref, report()} | {error, Reason, report()}
+%%
+%% PLAN → EXECUTE → POST-COMMIT (B2-D1/D2/D3).  Calls graphdb_rules for the
+%% abstract plan tree, then executes the mandatory subtree atomically, then
+%% fires auto children best-effort post-commit.
+%%-----------------------------------------------------------------------------
+fire_create(Name, ClassNref, ParentNref, OnPath) ->
+	case graphdb_rules:plan_composition_firing(?RULE_SCOPE, ClassNref) of
+		{ok, PlanTree} ->
+			case execute(Name, ClassNref, ParentNref, OnPath, PlanTree) of
+				{ok, RootNref, MandOutcomes, InstPlan} ->
+					AutoReport = fire_auto(InstPlan, OnPath),
+					{ok, RootNref,
+					 merge_reports(MandOutcomes, AutoReport)};
+				{error, R, Report} ->
+					{error, R, Report}
+			end;
+		{error, R, Failure} ->
+			{error, R, report_not_attempted(R, Failure)}
+	end.
+
+%%-----------------------------------------------------------------------------
+%% execute(RootName, RootClass, RootParent, OnPath, PlanTree)
+%%     -> {ok, RootNref, MandOutcomes, InstPlan} | {error, Reason, report()}
+%%
+%% Allocates every node's nrefs/ids OUTSIDE the transaction, writes the
+%% root and the whole mandatory subtree in ONE Mnesia transaction.
+%%-----------------------------------------------------------------------------
+execute(RootName, _RootClass, RootParent, _OnPath, PlanTree) ->
+	%% Annotate the plan tree with allocated nrefs (root uses caller's Name).
+	InstPlan = allocate_plan(PlanTree#{name => RootName}),
+	{Writes, Outcomes} = plan_writes(InstPlan, RootParent),
+	Txn = fun() ->
+		lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
+					  Writes)
+	end,
+	case mnesia:transaction(Txn) of
+		{atomic, ok} ->
+			{ok, maps:get(nref, InstPlan), Outcomes, InstPlan};
+		{aborted, R} ->
+			{error, R,
+			 report_not_attempted(R,
+				#{plan_so_far => PlanTree, culprit => undefined})}
+	end.
+
+%%-----------------------------------------------------------------------------
+%% allocate_plan(PlanNode) -> InstPlanNode (same tree + nref per node)
+%%
+%% Depth-first pre-order walk: allocates one nref per node OUTSIDE the
+%% Mnesia transaction.
+%%-----------------------------------------------------------------------------
+allocate_plan(#{mandatory_children := Kids} = Node) ->
 	Nref = graphdb_nref:get_next(),
+	Node#{nref => Nref,
+		  mandatory_children => [allocate_plan(K) || K <- Kids]}.
+
+%%-----------------------------------------------------------------------------
+%% plan_writes(InstPlan, RootParent) -> {Writes, Outcomes}
+%%
+%% Pre-order DFS over the instantiated plan tree.  The root emits only its
+%% own five records.  Each mandated descendant emits its records plus one
+%% `fired` outcome under its rule, indexed 1..N within that rule.
+%%-----------------------------------------------------------------------------
+plan_writes(#{nref := RootNref, class := Class, name := Name,
+			  mandatory_children := Kids}, RootParent) ->
+	Acc0 = {instance_records(RootNref, Class, Name, RootParent), []},
+	write_children(Kids, RootNref, Acc0).
+
+%%-----------------------------------------------------------------------------
+%% write_children(Siblings, OwnerNref, {Writes, Outcomes}) -> {Writes, Outcomes}
+%%
+%% Numbers siblings within their mandating rule (1-based), emits each
+%% child's records + fired outcome (with real `deploy` map), then recurses
+%% into the child's own mandatory children.
+%%-----------------------------------------------------------------------------
+write_children(Siblings, OwnerNref, Acc) ->
+	{_Counts, Result} =
+		lists:foldl(
+			fun(#{nref := CNref, class := CClass, name := CName,
+				  rule := Rule, deploy := Deploy,
+				  mandatory_children := GKids}, {Counts, {W, O}}) ->
+				Idx = maps:get(rule_key(Rule), Counts, 0) + 1,
+				W1 = W ++ instance_records(CNref, CClass, CName, OwnerNref),
+				O1 = add_outcome(O, Rule, Deploy,
+						#{owner => OwnerNref, index => Idx,
+						  status => fired, child => CNref}),
+				{W2, O2} = write_children(GKids, CNref, {W1, O1}),
+				{Counts#{rule_key(Rule) => Idx}, {W2, O2}}
+			end, {#{}, Acc}, Siblings),
+	Result.
+
+rule_key(#node{nref = N}) -> N.
+
+%%-----------------------------------------------------------------------------
+%% instance_records(Nref, ClassNref, Name, ParentNref) -> [{Tab, Rec}]
+%%
+%% Builds the five Mnesia records for one instance node.  Rel-IDs are
+%% allocated here (outside the transaction by the allocate_plan caller
+%% chain; this function is called from plan_writes/write_children which
+%% are invoked in execute/5 before the transaction).
+%%-----------------------------------------------------------------------------
+instance_records(Nref, ClassNref, Name, ParentNref) ->
 	{MembId1, MembId2} = rel_id_server:get_id_pair(),
 	{CompId1, CompId2} = rel_id_server:get_id_pair(),
 	NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
-	Node = #node{
-		nref = Nref,
-		kind = instance,
-		parents = [ParentNref],
-		classes = [ClassNref],
-		attribute_value_pairs = [NameAVP]
-	},
+	Node = #node{nref = Nref, kind = instance, parents = [ParentNref],
+				 classes = [ClassNref], attribute_value_pairs = [NameAVP]},
 	%% Instance -> Class (char=29, reciprocal=30)
-	I2C = #relationship{
-		id = MembId1,
-		kind = instantiation,
-		source_nref = Nref,
-		characterization = ?ARC_INST_TO_CLASS,
-		target_nref = ClassNref,
-		reciprocal = ?ARC_CLASS_TO_INST,
-		avps = []
-	},
+	I2C = #relationship{id = MembId1, kind = instantiation, source_nref = Nref,
+		characterization = ?ARC_INST_TO_CLASS, target_nref = ClassNref,
+		reciprocal = ?ARC_CLASS_TO_INST, avps = []},
 	%% Class -> Instance (char=30, reciprocal=29)
-	C2I = #relationship{
-		id = MembId2,
-		kind = instantiation,
-		source_nref = ClassNref,
-		characterization = ?ARC_CLASS_TO_INST,
-		target_nref = Nref,
-		reciprocal = ?ARC_INST_TO_CLASS,
-		avps = []
-	},
+	C2I = #relationship{id = MembId2, kind = instantiation,
+		source_nref = ClassNref, characterization = ?ARC_CLASS_TO_INST,
+		target_nref = Nref, reciprocal = ?ARC_INST_TO_CLASS, avps = []},
 	%% Parent -> Child (char=28, reciprocal=27)
-	P2C = #relationship{
-		id = CompId1,
-		kind = composition,
-		source_nref = ParentNref,
-		characterization = ?ARC_INST_CHILD,
-		target_nref = Nref,
-		reciprocal = ?ARC_INST_PARENT,
-		avps = []
-	},
+	P2C = #relationship{id = CompId1, kind = composition,
+		source_nref = ParentNref, characterization = ?ARC_INST_CHILD,
+		target_nref = Nref, reciprocal = ?ARC_INST_PARENT, avps = []},
 	%% Child -> Parent (char=27, reciprocal=28)
-	C2P = #relationship{
-		id = CompId2,
-		kind = composition,
-		source_nref = Nref,
-		characterization = ?ARC_INST_PARENT,
-		target_nref = ParentNref,
-		reciprocal = ?ARC_INST_CHILD,
-		avps = []
-	},
-	Txn = fun() ->
-		ok = mnesia:write(nodes, Node, write),
-		ok = mnesia:write(relationships, I2C, write),
-		ok = mnesia:write(relationships, C2I, write),
-		ok = mnesia:write(relationships, P2C, write),
-		ok = mnesia:write(relationships, C2P, write)
-	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}      -> {ok, Nref};
-		{aborted, Reason} -> {error, Reason}
+	C2P = #relationship{id = CompId2, kind = composition, source_nref = Nref,
+		characterization = ?ARC_INST_PARENT, target_nref = ParentNref,
+		reciprocal = ?ARC_INST_CHILD, avps = []},
+	[{nodes, Node}, {relationships, I2C}, {relationships, C2I},
+	 {relationships, P2C}, {relationships, C2P}].
+
+%%-----------------------------------------------------------------------------
+%% fire_auto(InstPlan, OnPath) -> report()
+%%
+%% POST-COMMIT best-effort auto firing.  Walks the instantiated plan tree and
+%% fires each node's auto rules by recursing do_create_instance/5 (never the
+%% gen_server API — self-call deadlock).  Merges sub-reports additively.
+%% Failures are recorded in the report but do not abort the root instance.
+%%-----------------------------------------------------------------------------
+fire_auto(#{nref := Nref, class := Class, auto_rules := Autos,
+			mandatory_children := Kids}, OnPath) ->
+	OnPath1 = [Class | OnPath],
+	Here = lists:foldl(
+		fun({RuleNode, Deploy}, Acc) ->
+			fire_one_auto(RuleNode, Deploy, Nref, OnPath1, Acc)
+		end, [], Autos),
+	lists:foldl(
+		fun(Child, Acc) -> merge_reports(Acc, fire_auto(Child, OnPath1)) end,
+		Here, Kids).
+
+%%-----------------------------------------------------------------------------
+%% fire_one_auto(RuleNode, Deploy, OwnerNref, OnPath1, Acc) -> report()
+%%
+%% Check order matches design §3.3: instantiable, then unbounded, then the
+%% vertical-cycle cut, then expansion.
+%%-----------------------------------------------------------------------------
+fire_one_auto(RuleNode, Deploy, OwnerNref, OnPath1, Acc) ->
+	ChildClass = graphdb_rules:rule_child_class(RuleNode),
+	case graphdb_class:is_instantiable(ChildClass) of
+		false ->
+			add_outcome(Acc, RuleNode, Deploy,
+				#{owner => OwnerNref, index => 1, status => failed,
+				  reason => {class_not_instantiable, ChildClass}});
+		_ ->        %% true (or {error,_} -> treated as fireable; create reports)
+			case maps:get(multiplicity, Deploy, 1) of
+				unbounded ->
+					add_outcome(Acc, RuleNode, Deploy,
+						#{owner => OwnerNref, index => 1, status => failed,
+						  reason => unbounded_multiplicity_not_fireable});
+				Mult ->
+					case lists:member(ChildClass, OnPath1) of
+						true  -> Acc;       %% vertical cycle cut (B2-D5)
+						false -> fire_auto_children(RuleNode, Deploy, ChildClass,
+											Mult, 1, OwnerNref, OnPath1, Acc)
+					end
+			end
 	end.
+
+%%-----------------------------------------------------------------------------
+%% fire_auto_children — expand multiplicity, recursing do_create_instance/5
+%%-----------------------------------------------------------------------------
+fire_auto_children(_RuleNode, _Deploy, _ChildClass, Mult, I, _Owner, _OnPath1,
+				   Acc) when I > Mult ->
+	Acc;
+fire_auto_children(RuleNode, Deploy, ChildClass, Mult, I, OwnerNref, OnPath1,
+				   Acc) ->
+	Name = graphdb_rules:rule_child_name(RuleNode, ChildClass, I, Mult),
+	Acc2 = case do_create_instance(Name, ChildClass, OwnerNref, undefined,
+								   OnPath1) of
+		{ok, ChildNref, SubReport} ->
+			A1 = add_outcome(Acc, RuleNode, Deploy,
+					#{owner => OwnerNref, index => I, status => fired,
+					  child => ChildNref}),
+			merge_reports(A1, SubReport);
+		{error, R, SubReport} ->
+			A1 = add_outcome(Acc, RuleNode, Deploy,
+					#{owner => OwnerNref, index => I, status => failed,
+					  reason => R}),
+			merge_reports(A1, SubReport);
+		{error, R} ->        %% pre-PLAN 2-tuple (bad class/parent)
+			add_outcome(Acc, RuleNode, Deploy,
+					#{owner => OwnerNref, index => I, status => failed,
+					  reason => R})
+	end,
+	fire_auto_children(RuleNode, Deploy, ChildClass, Mult, I + 1, OwnerNref,
+					   OnPath1, Acc2).
 
 
 %%-----------------------------------------------------------------------------
@@ -1137,3 +1293,82 @@ search_targets([Nref | Rest], AttrNref) ->
 		_ ->
 			search_targets(Rest, AttrNref)
 	end.
+
+
+%%=============================================================================
+%% Firing Report Helpers (B2-D6)
+%%=============================================================================
+
+%% summarize/1 is exported in TEST builds and available for external callers
+%% but not referenced in non-TEST production paths — suppress the warning.
+-compile({nowarn_unused_function, [summarize/1]}).
+
+%%-----------------------------------------------------------------------------
+%% add_outcome(Report, RuleNode, Deployment, Outcome) -> Report'
+%%
+%% Appends Outcome under RuleNode's rule_report (preserving rule order),
+%% creating the rule_report if this rule is not yet present.
+%%-----------------------------------------------------------------------------
+add_outcome(Report, #node{nref = RuleNref} = RuleNode, Deployment, Outcome) ->
+	case lists:any(fun(#{rule := RN}) ->
+						RN#node.nref =:= RuleNref end, Report) of
+		true ->
+			[ append_if(RR, RuleNref, Outcome) || RR <- Report ];
+		false ->
+			Report ++ [#{rule => RuleNode, deployment => Deployment,
+						 outcomes => [Outcome]}]
+	end.
+
+append_if(#{rule := RN, outcomes := Os} = RR, RuleNref, Outcome) ->
+	case RN#node.nref =:= RuleNref of
+		true  -> RR#{outcomes => Os ++ [Outcome]};
+		false -> RR
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% merge_reports(R1, R2) -> Report   (union by rule nref)
+%%-----------------------------------------------------------------------------
+merge_reports(R1, R2) ->
+	lists:foldl(
+		fun(#{rule := RuleNode, deployment := Dep, outcomes := Outs}, Acc) ->
+			lists:foldl(
+				fun(O, A) -> add_outcome(A, RuleNode, Dep, O) end, Acc, Outs)
+		end, R1, R2).
+
+
+%%-----------------------------------------------------------------------------
+%% report_not_attempted(Reason, Failure) -> Report
+%%
+%% Failure = #{plan_so_far => PlanNode, culprit => #node{} | undefined}.
+%% Every mandated child in plan_so_far becomes a not_attempted outcome under
+%% its mandating rule; the culprit (if any) becomes one failed outcome.
+%%-----------------------------------------------------------------------------
+report_not_attempted(Reason, #{plan_so_far := Plan, culprit := Culprit}) ->
+	Base = walk_not_attempted(Plan, []),
+	case Culprit of
+		undefined ->
+			Base;
+		#node{} ->
+			Dep = #{},      %% deployment not carried on the error path
+			add_outcome(Base, Culprit, Dep,
+						#{index => 1, status => failed, reason => Reason})
+	end.
+
+walk_not_attempted(#{mandatory_children := Kids}, Acc0) ->
+	lists:foldl(
+		fun(#{rule := Rule} = Child, Acc) ->
+			Acc1 = add_outcome(Acc, Rule, #{},
+								#{index => 1, status => not_attempted}),
+			walk_not_attempted(Child, Acc1)         %% recurse deeper
+		end, Acc0, Kids).
+
+
+%%-----------------------------------------------------------------------------
+%% summarize(Report) -> #{fired => N, failed => M, not_attempted => K}
+%%-----------------------------------------------------------------------------
+summarize(Report) ->
+	Outs = [O || #{outcomes := Os} <- Report, O <- Os],
+	Count = fun(S) -> length([1 || #{status := X} <- Outs, X =:= S]) end,
+	#{fired => Count(fired), failed => Count(failed),
+	  not_attempted => Count(not_attempted)}.

@@ -91,6 +91,7 @@
 		seeded_nrefs/0,
 		create_composition_rule/6,
 		create_composition_rule/7,
+		create_composition_rule/8,
 		create_connection_rule/7,
 		create_connection_rule/8,
 		get_rule/2,
@@ -98,7 +99,10 @@
 		composition_rules_for_class/2,
 		connection_rules_for_class/2,
 		effective_rules_for_class/2,
-		list_rules/1
+		list_rules/1,
+		plan_composition_firing/2,
+		rule_child_class/1,
+		rule_child_name/4
 		]).
 
 %%---------------------------------------------------------------------
@@ -129,7 +133,8 @@
 	template_nref_attr,
 	characterization_nref_attr,
 	mode_attr,
-	multiplicity_attr
+	multiplicity_attr,
+	name_pattern_attr
 }).
 
 
@@ -153,7 +158,11 @@ seeded_nrefs() ->
 %% create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult)
 %% create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult,
 %%                         TemplateNref)
+%% create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult,
+%%                         TemplateNref, Opts)
 %%     -> {ok, RuleNref} | {error, term()}
+%%
+%% Opts :: #{name_pattern => string()} — optional keys; unknown keys ignored.
 %%
 %% Creates a composition rule: a kind=instance node whose class membership
 %% is the seeded CompositionRule meta-class.  Rule content (child_class_nref,
@@ -164,13 +173,18 @@ seeded_nrefs() ->
 %%-----------------------------------------------------------------------------
 create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult) ->
 	create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult,
-							undefined).
+							undefined, #{}).
 
 create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult,
 						TemplateNref) ->
+	create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult,
+							TemplateNref, #{}).
+
+create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult,
+						TemplateNref, Opts) when is_map(Opts) ->
 	gen_server:call(?MODULE,
 		{create_composition_rule, Scope, Name, ParentClass, ChildClass,
-		 Mode, Mult, TemplateNref}).
+		 Mode, Mult, TemplateNref, Opts}).
 
 %%-----------------------------------------------------------------------------
 %% create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
@@ -262,6 +276,60 @@ effective_rules_for_class(Scope, ClassNref) ->
 list_rules(Scope) ->
 	gen_server:call(?MODULE, {list_rules, Scope}).
 
+%%-----------------------------------------------------------------------------
+%% plan_composition_firing(Scope, ClassNref) ->
+%%     {ok, PlanNode} | {error, Reason, #{plan_so_far => PlanNode, culprit => #node{} | undefined}}
+%%
+%% Pure read: walks the effective mandatory composition rules for ClassNref
+%% (environment scope) and builds an abstract plan tree of the instance subtree
+%% that would be created.  No nrefs are allocated.  The returned PlanNode is a
+%% map with:
+%%   class              -- ClassNref (root of this plan node)
+%%   name               -- string() child name, or `undefined' for the top level
+%%   rule               -- #node{} rule that generated this node, or the atom
+%%                         `root' for the top level (the requested instance)
+%%   deploy             -- deployment map #{mode, multiplicity, template}, or
+%%                         `undefined' for the root
+%%   mandatory_children -- [PlanNode] recursive sub-tree for mandatory rules
+%%   auto_rules         -- [{#node{}, Deployment}] auto rules attached here
+%%                         (not expanded further)
+%%
+%% Error reasons:
+%%   {unbounded_multiplicity_not_fireable, RuleNref} --
+%%       a mandatory rule has multiplicity=unbounded
+%%   {class_not_instantiable, ChildClassNref} --
+%%       a mandatory rule's child_class is abstract (L9)
+%%
+%% Scope {project, _} returns a leaf plan immediately (no rule lookup).
+%%-----------------------------------------------------------------------------
+plan_composition_firing(Scope, ClassNref) ->
+	gen_server:call(?MODULE, {plan_composition_firing, Scope, ClassNref}).
+
+%%-----------------------------------------------------------------------------
+%% rule_child_class(RuleNode :: #node{}) -> integer() | undefined
+%%
+%% Reads the child_class_nref content AVP from a composition rule node.
+%% Called from graphdb_instance (cross-process), so uses the public
+%% seeded_nrefs/0 to learn the attribute nref.
+%%-----------------------------------------------------------------------------
+rule_child_class(RuleNode) ->
+	{ok, Seeds} = seeded_nrefs(),
+	content_avp_value(RuleNode, maps:get(child_class_nref_attr, Seeds)).
+
+%%-----------------------------------------------------------------------------
+%% rule_child_name(RuleNode, ChildClass, I, Mult) -> string()
+%%
+%% Derives the child instance name for the I-th instance (1-based) of
+%% ChildClass created by RuleNode.  Uses the name_pattern content AVP when
+%% present; falls back to "ClassName" (mult=1) or "ClassName N" (mult>1).
+%% Called from graphdb_instance (cross-process), so uses the public
+%% seeded_nrefs/0 to learn the attribute nref.
+%%-----------------------------------------------------------------------------
+rule_child_name(RuleNode, ChildClass, I, Mult) ->
+	{ok, Seeds} = seeded_nrefs(),
+	resolve_child_name_pub(RuleNode, ChildClass, I, Mult,
+						   maps:get(name_pattern, Seeds)).
+
 
 %%---------------------------------------------------------------------
 %% gen_server Behaviour Callbacks
@@ -276,6 +344,7 @@ init([]) ->
 		CharAttr       = ensure_seed("characterization_nref", RuleLitGrp),
 		ModeAttr       = ensure_seed("mode",                  RuleLitGrp),
 		MultAttr       = ensure_seed("multiplicity",          RuleLitGrp),
+		NamePatternAttr= ensure_seed("name_pattern",          RuleLitGrp),
 		{AppliesTo, AppliedBy} =
 			ensure_rel_attr_pair("applies_to", "applied_by",
 								 instance, ?NREF_INST_REL_ATTRS),
@@ -301,7 +370,8 @@ init([]) ->
 			template_nref_attr         = TemplateAttr,
 			characterization_nref_attr = CharAttr,
 			mode_attr                  = ModeAttr,
-			multiplicity_attr          = MultAttr
+			multiplicity_attr          = MultAttr,
+			name_pattern_attr          = NamePatternAttr
 		}}
 	catch
 		throw:{error, Reason} ->
@@ -326,23 +396,25 @@ handle_call(seeded_nrefs, _From, State) ->
 		template_nref_attr         => State#state.template_nref_attr,
 		characterization_nref_attr => State#state.characterization_nref_attr,
 		mode_attr                  => State#state.mode_attr,
-		multiplicity_attr          => State#state.multiplicity_attr
+		multiplicity_attr          => State#state.multiplicity_attr,
+		name_pattern               => State#state.name_pattern_attr
 	}}, State};
 handle_call({create_composition_rule, environment, Name, ParentClass,
-			 ChildClass, Mode, Mult, TemplateNref}, _From, State) ->
+			 ChildClass, Mode, Mult, TemplateNref, Opts}, _From, State) ->
 	Reply = case validate_composition(ParentClass, ChildClass, Mode, Mult,
 									  TemplateNref) of
 		ok ->
 			ContentAVPs = [#{attribute => State#state.child_class_nref_attr,
 							 value => ChildClass}
-						   | optional_template_avp(TemplateNref, State)],
+						   | optional_template_avp(TemplateNref, State)]
+						  ++ optional_name_pattern_avp(Opts, State),
 			do_create_rule(State#state.composition_rule_nref, Name,
 				ParentClass, ContentAVPs, Mode, Mult, State);
 		{error, _} = Err ->
 			Err
 	end,
 	{reply, Reply, State};
-handle_call({create_composition_rule, {project, _}, _, _, _, _, _, _},
+handle_call({create_composition_rule, {project, _}, _, _, _, _, _, _, _},
 			_From, State) ->
 	{reply, {error, project_rules_not_yet_supported}, State};
 handle_call({create_connection_rule, environment, Name, SourceClass, Char,
@@ -400,6 +472,11 @@ handle_call({list_rules, environment}, _From, State) ->
 	{reply, {ok, All}, State};
 handle_call({list_rules, {project, _}}, _From, State) ->
 	{reply, {ok, []}, State};
+handle_call({plan_composition_firing, environment, ClassNref}, _From, State) ->
+	Reply = plan_node(ClassNref, root, undefined, undefined, [], State),
+	{reply, Reply, State};
+handle_call({plan_composition_firing, {project, _}, ClassNref}, _From, State) ->
+	{reply, {ok, leaf_plan(ClassNref, root, undefined, undefined)}, State};
 handle_call(Request, From, State) ->
 	?UEM(handle_call, {Request, From, State}),
 	{noreply, State}.
@@ -693,6 +770,15 @@ optional_template_avp(undefined, _State) -> [];
 optional_template_avp(TemplateNref, State) ->
 	[#{attribute => State#state.template_nref_attr, value => TemplateNref}].
 
+%% optional_name_pattern_avp(Opts, State) -> [AVP] | []
+%% The optional name_pattern content AVP on the rule node (B2-D7).
+optional_name_pattern_avp(Opts, State) ->
+	case maps:get(name_pattern, Opts, undefined) of
+		undefined -> [];
+		Pattern   -> [#{attribute => State#state.name_pattern_attr,
+						value => Pattern}]
+	end.
+
 
 %%---------------------------------------------------------------------
 %% Rule read path (retrieval -- dirty, read-only)
@@ -786,3 +872,171 @@ is_rule_instance(#node{classes = Classes}, State) ->
 %% meta_nref(MetaKey, State) -> integer()
 meta_nref(composition_rule, State) -> State#state.composition_rule_nref;
 meta_nref(connection_rule,  State) -> State#state.connection_rule_nref.
+
+
+%%---------------------------------------------------------------------
+%% Plan path (pure read -- B2)
+%%---------------------------------------------------------------------
+%% plan_composition_firing/2 runs inside the gen_server process.  It calls
+%% effective_rules/2 (the internal state-passing helper) directly -- calling
+%% the public effective_rules_for_class/2 from within the gen_server would
+%% deadlock on the gen_server:call.
+
+%% leaf_plan(ClassNref, Rule, Deploy, Name) -> PlanNode
+%% Deploy is the deployment map of the rule that mandated this node
+%% (`undefined` for the root).  Carried so the report's `deployment` field
+%% is the real #{mode, multiplicity, template} (B2-D6).
+leaf_plan(ClassNref, Rule, Deploy, Name) ->
+	#{class => ClassNref, name => Name, rule => Rule, deploy => Deploy,
+	  mandatory_children => [], auto_rules => []}.
+
+%% plan_node(ClassNref, Rule, Deploy, Name, OnPath, State)
+%%   -> {ok, PlanNode} | {error, Reason, #{plan_so_far, culprit}}
+%% Recursively expands the mandatory cascade for ClassNref.  OnPath is the
+%% class path root->here (B2-D5 cycle guard).  Rule/Deploy describe the
+%% composition rule that mandated this node (`root`/`undefined` for the
+%% requested instance).
+plan_node(ClassNref, Rule, Deploy, Name, OnPath, State) ->
+	OnPath1 = [ClassNref | OnPath],
+	CompRules = composition_pairs(ClassNref, State),
+	plan_rules(CompRules, OnPath1, State,
+			   leaf_plan(ClassNref, Rule, Deploy, Name)).
+
+%% composition_pairs(ClassNref, State) -> [{#node{}, Deployment}]
+%% Effective rules (self + taxonomy ancestors, nearest-first) filtered to the
+%% CompositionRule meta-class.  Flattened across levels, preserving order.
+composition_pairs(ClassNref, State) ->
+	[ {RuleNode, Deploy}
+	  || {_Level, Pairs} <- effective_rules(ClassNref, State),
+		 {RuleNode, Deploy} <- Pairs,
+		 is_composition_rule(RuleNode, State) ].
+
+%% is_composition_rule(Node, State) -> boolean()
+is_composition_rule(#node{classes = Classes}, State) ->
+	lists:member(State#state.composition_rule_nref, Classes).
+
+%% plan_rules(Pairs, OnPath1, State, Acc) -> {ok, PlanNode} | {error, R, Failure}
+%% First-failure-aborts (B2-D6): a mandatory violation stops planning.
+plan_rules([], _OnPath1, _State, Acc) ->
+	{ok, Acc};
+plan_rules([{RuleNode, Deploy} | Rest], OnPath1, State, Acc) ->
+	case maps:get(mode, Deploy, undefined) of
+		auto ->
+			Autos = maps:get(auto_rules, Acc) ++ [{RuleNode, Deploy}],
+			plan_rules(Rest, OnPath1, State, Acc#{auto_rules => Autos});
+		propose ->
+			plan_rules(Rest, OnPath1, State, Acc);          %% B3 owns propose
+		mandatory ->
+			case plan_mandatory(RuleNode, Deploy, OnPath1, State, Acc) of
+				{ok, Acc1}          -> plan_rules(Rest, OnPath1, State, Acc1);
+				{error, _, _} = Err -> Err                  %% first-failure abort
+			end;
+		_ ->
+			plan_rules(Rest, OnPath1, State, Acc)
+	end.
+
+%% plan_mandatory(RuleNode, Deploy, OnPath1, State, Acc)
+%%   -> {ok, Acc'} | {error, Reason, #{plan_so_far, culprit}}
+plan_mandatory(RuleNode, Deploy, OnPath1, State, Acc) ->
+	ChildClass = content_avp_value(RuleNode,
+								   State#state.child_class_nref_attr),
+	case lists:member(ChildClass, OnPath1) of
+		true ->
+			{ok, Acc};                  %% B2-D5 zero-level cut: self-nest, no fire
+		false ->
+			case maps:get(multiplicity, Deploy, 1) of
+				unbounded ->
+					fail({unbounded_multiplicity_not_fireable,
+						  RuleNode#node.nref}, RuleNode, Acc);
+				Mult ->
+					case graphdb_class:is_instantiable(ChildClass) of
+						true ->
+							expand_children(RuleNode, Deploy, ChildClass, Mult, 1,
+											OnPath1, State, Acc);
+						false ->
+							fail({class_not_instantiable, ChildClass},
+								 RuleNode, Acc);
+						{error, Reason} ->
+							fail({child_class_invalid, ChildClass, Reason},
+								 RuleNode, Acc)
+					end
+			end
+	end.
+
+%% fail(Reason, CulpritRule, Acc) -> {error, Reason, Detail}
+fail(Reason, CulpritRule, Acc) ->
+	{error, Reason, #{plan_so_far => Acc, culprit => CulpritRule}}.
+
+%% expand_children(RuleNode, Deploy, ChildClass, Mult, I, OnPath1, State, Acc)
+%%   -> {ok, Acc'} | {error, R, Failure}
+expand_children(_RuleNode, _Deploy, _ChildClass, Mult, I, _OnPath1, _State, Acc)
+		when I > Mult ->
+	{ok, Acc};
+expand_children(RuleNode, Deploy, ChildClass, Mult, I, OnPath1, State, Acc) ->
+	Name = resolve_child_name(RuleNode, ChildClass, I, Mult, State),
+	case plan_node(ChildClass, RuleNode, Deploy, Name, OnPath1, State) of
+		{ok, ChildPlan} ->
+			Kids = maps:get(mandatory_children, Acc) ++ [ChildPlan],
+			expand_children(RuleNode, Deploy, ChildClass, Mult, I + 1, OnPath1,
+							State, Acc#{mandatory_children => Kids});
+		{error, R, Failure} ->
+			%% Nested failure: rewrite plan_so_far to THIS level's Acc (parent
+			%% with completed siblings; failing branch dropped), keep the leaf
+			%% culprit.  (B2 design §3.1 trace.)
+			{error, R, Failure#{plan_so_far => Acc}}
+	end.
+
+%% resolve_child_name(RuleNode, ChildClass, I, Mult, State) -> string()
+resolve_child_name(RuleNode, ChildClass, I, Mult, State) ->
+	resolve_child_name_pub(RuleNode, ChildClass, I, Mult,
+						   State#state.name_pattern_attr).
+
+%% resolve_child_name_pub(RuleNode, ChildClass, I, Mult, NamePatternAttr)
+%%   -> string()
+%% State-free name resolver so graphdb_instance can reuse it post-commit for
+%% auto children (via the rule_child_name/4 export below).
+resolve_child_name_pub(RuleNode, ChildClass, I, Mult, NamePatternAttr) ->
+	case content_avp_lookup(RuleNode, NamePatternAttr) of
+		{ok, Pattern} ->
+			lists:flatten(string:replace(Pattern, "{i}",
+										 integer_to_list(I), all));
+		not_found ->
+			fallback_name(ChildClass, I, Mult)
+	end.
+
+%% fallback_name(ChildClass, I, Mult) -> string()
+%% mult=1 -> plain class name; mult>1 -> "ClassName N".
+fallback_name(ChildClass, _I, 1) ->
+	class_name(ChildClass);
+fallback_name(ChildClass, I, _Mult) ->
+	class_name(ChildClass) ++ " " ++ integer_to_list(I).
+
+%% class_name(ClassNref) -> string()  (the class-name AVP, or a safe default)
+class_name(ClassNref) ->
+	case mnesia:dirty_read(nodes, ClassNref) of
+		[#node{attribute_value_pairs = AVPs}] ->
+			case avp_lookup(AVPs, ?NAME_ATTR_CLASS) of
+				{ok, N}   -> N;
+				not_found -> "instance"
+			end;
+		_ ->
+			"instance"
+	end.
+
+%% content_avp_value(RuleNode, AttrNref) -> term() | undefined
+content_avp_value(#node{attribute_value_pairs = AVPs}, AttrNref) ->
+	case avp_lookup(AVPs, AttrNref) of
+		{ok, V}   -> V;
+		not_found -> undefined
+	end.
+
+%% content_avp_lookup(RuleNode, AttrNref) -> {ok, term()} | not_found
+content_avp_lookup(#node{attribute_value_pairs = AVPs}, AttrNref) ->
+	avp_lookup(AVPs, AttrNref).
+
+%% avp_lookup(AVPs, AttrNref) -> {ok, Value} | not_found
+avp_lookup(AVPs, AttrNref) ->
+	case lists:search(fun(#{attribute := A}) -> A =:= AttrNref end, AVPs) of
+		{value, #{value := V}} -> {ok, V};
+		false                  -> not_found
+	end.

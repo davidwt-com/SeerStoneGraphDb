@@ -49,6 +49,8 @@
 	suite/0,
 	init_per_suite/1,
 	end_per_suite/1,
+	init_per_group/2,
+	end_per_group/2,
 	init_per_testcase/2,
 	end_per_testcase/2
 ]).
@@ -123,7 +125,16 @@
 	resolve_value_same_value_two_classes/1,
 	resolve_value_ambiguous_two_classes/1,
 	resolve_value_local_overrides_ambiguity/1,
-	resolve_value_ambiguity_via_taxonomy/1
+	resolve_value_ambiguity_via_taxonomy/1,
+	%% Firing (B2)
+	firing_no_rules_baseline/1,
+	firing_single_mandatory/1,
+	firing_mandatory_mult/1,
+	firing_mandatory_cascade_atomic/1,
+	firing_mandatory_failure_rolls_back/1,
+	firing_auto_best_effort/1,
+	firing_auto_failure_survives/1,
+	firing_auto_cascade_merges/1
 ]).
 
 
@@ -136,7 +147,8 @@ suite() ->
 
 all() ->
 	[{group, creation}, {group, relationships}, {group, lookups},
-	 {group, hierarchy}, {group, inheritance}, {group, multi_membership}].
+	 {group, hierarchy}, {group, inheritance}, {group, multi_membership},
+	 {group, firing}].
 
 groups() ->
 	[
@@ -211,6 +223,16 @@ groups() ->
 			resolve_value_ambiguous_two_classes,
 			resolve_value_local_overrides_ambiguity,
 			resolve_value_ambiguity_via_taxonomy
+		]},
+		{firing, [], [
+			firing_no_rules_baseline,
+			firing_single_mandatory,
+			firing_mandatory_mult,
+			firing_mandatory_cascade_atomic,
+			firing_mandatory_failure_rolls_back,
+			firing_auto_best_effort,
+			firing_auto_failure_survives,
+			firing_auto_cascade_merges
 		]}
 	].
 
@@ -231,9 +253,23 @@ end_per_suite(_Config) ->
 
 
 %%-----------------------------------------------------------------------------
+%% init_per_group/2
+%%-----------------------------------------------------------------------------
+init_per_group(_Group, Config) ->
+	Config.
+
+
+%%-----------------------------------------------------------------------------
+%% end_per_group/2
+%%-----------------------------------------------------------------------------
+end_per_group(_Group, _Config) ->
+	ok.
+
+
+%%-----------------------------------------------------------------------------
 %% init_per_testcase/2
 %%-----------------------------------------------------------------------------
-init_per_testcase(_TC, Config) ->
+init_per_testcase(TC, Config) ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
@@ -245,7 +281,32 @@ init_per_testcase(_TC, Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, _} = graphdb_class:start_link(),
 	{ok, _} = graphdb_instance:start_link(),
-	Config1.
+	{ok, _} = graphdb_rules:start_link(),
+	setup_firing_fixtures(TC, Config1).
+
+%% For firing-group test cases, create the shared class fixtures and add
+%% them to Config.  Other test cases pass through unchanged.
+setup_firing_fixtures(TC, Config) ->
+	FiringTests = [firing_no_rules_baseline, firing_single_mandatory,
+				   firing_mandatory_mult, firing_mandatory_cascade_atomic,
+				   firing_mandatory_failure_rolls_back,
+				   firing_auto_best_effort, firing_auto_failure_survives,
+				   firing_auto_cascade_merges],
+	case lists:member(TC, FiringTests) of
+		true ->
+			{ok, #{instantiable := InstAttr}} = graphdb_attr:seeded_nrefs(),
+			{ok, Owner}    = graphdb_class:create_class("Owner",    3),
+			{ok, Bolt}     = graphdb_class:create_class("Bolt",     3),
+			{ok, Widget}   = graphdb_class:create_class("Widget",   3),
+			{ok, Abstract} = graphdb_class:create_class("Abstract", 3,
+				[#{attribute => InstAttr, value => false}]),
+			[{ob,  {Owner, Bolt}},
+			 {obw, {Owner, Bolt, Widget}},
+			 {oa,  {Owner, Abstract}}
+			 | Config];
+		false ->
+			Config
+	end.
 
 setup_isolated_env(Config) ->
 	OrigCwd = proplists:get_value(orig_cwd, Config),
@@ -267,6 +328,7 @@ setup_isolated_env(Config) ->
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
 	verify_cache_invariant(TC),
+	catch gen_server:stop(graphdb_rules),
 	catch gen_server:stop(graphdb_instance),
 	catch gen_server:stop(graphdb_class),
 	catch gen_server:stop(graphdb_attr),
@@ -317,7 +379,7 @@ verify_cache_invariant(TC) ->
 %%-----------------------------------------------------------------------------
 create_instance_basic(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Vehicle", 3),
-	{ok, InstNref} = graphdb_instance:create_instance("Car1", ClassNref, 5),
+	{ok, InstNref, _} = graphdb_instance:create_instance("Car1", ClassNref, 5),
 	{ok, Node} = graphdb_instance:get_instance(InstNref),
 	?assertEqual(instance, Node#node.kind),
 	?assertEqual([5], Node#node.parents),
@@ -352,7 +414,7 @@ create_instance_rejects_missing_parent(_Config) ->
 %%-----------------------------------------------------------------------------
 create_instance_writes_membership_arcs(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
-	{ok, InstNref} = graphdb_instance:create_instance("Dog1", ClassNref, 5),
+	{ok, InstNref, _} = graphdb_instance:create_instance("Dog1", ClassNref, 5),
 
 	%% Instance -> Class (char=29, reciprocal=30)
 	{atomic, InstOut} = mnesia:transaction(fun() ->
@@ -381,7 +443,7 @@ create_instance_writes_membership_arcs(_Config) ->
 %%-----------------------------------------------------------------------------
 create_instance_writes_compositional_arcs(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Part", 3),
-	{ok, InstNref} = graphdb_instance:create_instance("Bolt1", ClassNref, 5),
+	{ok, InstNref, _} = graphdb_instance:create_instance("Bolt1", ClassNref, 5),
 
 	%% Parent (5) -> Child (InstNref) with char=28
 	{atomic, ParentOut} = mnesia:transaction(fun() ->
@@ -423,7 +485,7 @@ create_instance_refused_for_abstract_class(_Config) ->
 %%-----------------------------------------------------------------------------
 create_instance_allowed_for_unmarked_class(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Plain", 3),
-	?assertMatch({ok, _},
+	?assertMatch({ok, _, _},
 		graphdb_instance:create_instance("Inst1", ClassNref, 5)).
 
 
@@ -436,8 +498,8 @@ create_instance_allowed_for_unmarked_class(_Config) ->
 %%-----------------------------------------------------------------------------
 add_relationship_basic(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
-	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
-	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	%% Create a relationship attribute pair for testing
 	{ok, {MakesNref, MadeByNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", instance),
@@ -451,8 +513,8 @@ add_relationship_basic(_Config) ->
 %%-----------------------------------------------------------------------------
 add_relationship_both_directions(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Org", 3),
-	{ok, Ford} = graphdb_instance:create_instance("Ford", ClassNref, 5),
-	{ok, Taurus} = graphdb_instance:create_instance("Taurus", ClassNref, 5),
+	{ok, Ford, _} = graphdb_instance:create_instance("Ford", ClassNref, 5),
+	{ok, Taurus, _} = graphdb_instance:create_instance("Taurus", ClassNref, 5),
 	{ok, {MakesNref, MadeByNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", instance),
 	ok = graphdb_instance:add_relationship(Ford, MakesNref, Taurus, MadeByNref),
@@ -484,8 +546,8 @@ add_relationship_both_directions(_Config) ->
 add_relationship_stamps_template_avp(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Org", 3),
 	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
-	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
-	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
@@ -506,8 +568,8 @@ add_relationship_stamps_template_avp(_Config) ->
 add_relationship_explicit_template(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Person", 3),
 	{ok, AltTmpl} = graphdb_class:add_template(ClassNref, "social"),
-	{ok, A} = graphdb_instance:create_instance("Alice", ClassNref, 5),
-	{ok, B} = graphdb_instance:create_instance("Bob", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance("Alice", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("Bob", ClassNref, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	ok = graphdb_instance:add_relationship(A, Char, B, Recip, AltTmpl),
@@ -526,8 +588,8 @@ add_relationship_explicit_template(_Config) ->
 %%-----------------------------------------------------------------------------
 add_relationship_rejects_non_template_nref(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
-	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
-	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	%% ClassNref is a class, not a template
@@ -542,8 +604,8 @@ add_relationship_rejects_template_out_of_ancestry(_Config) ->
 	{ok, AnimalCls}  = graphdb_class:create_class("Animal", 3),
 	{ok, VehicleCls} = graphdb_class:create_class("Vehicle", 3),
 	{ok, VehTmpl}    = graphdb_class:default_template(VehicleCls),
-	{ok, A} = graphdb_instance:create_instance("Cat", AnimalCls, 5),
-	{ok, B} = graphdb_instance:create_instance("Dog", AnimalCls, 5),
+	{ok, A, _} = graphdb_instance:create_instance("Cat", AnimalCls, 5),
+	{ok, B, _} = graphdb_instance:create_instance("Dog", AnimalCls, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertMatch({error, {template_class_not_in_ancestry, _, _, _, _}},
@@ -556,8 +618,8 @@ add_relationship_rejects_template_out_of_ancestry(_Config) ->
 add_relationship_no_default_after_delete(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
 	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
-	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
-	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	{atomic, ok} = mnesia:transaction(fun() ->
@@ -571,7 +633,7 @@ add_relationship_no_default_after_delete(_Config) ->
 %%-----------------------------------------------------------------------------
 add_relationship_rejects_missing_source(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
-	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertEqual({error, {source_not_found, 99999}},
@@ -582,7 +644,7 @@ add_relationship_rejects_missing_source(_Config) ->
 %%-----------------------------------------------------------------------------
 add_relationship_rejects_missing_target(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
-	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertEqual({error, {target_not_found, 99999}},
@@ -594,8 +656,8 @@ add_relationship_rejects_missing_target(_Config) ->
 %%-----------------------------------------------------------------------------
 add_relationship_rejects_non_attribute_char(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
-	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
-	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {_Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertMatch({error, {characterization_not_an_attribute, 5, category}},
@@ -606,8 +668,8 @@ add_relationship_rejects_non_attribute_char(_Config) ->
 %%-----------------------------------------------------------------------------
 add_relationship_rejects_non_attribute_reciprocal(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
-	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
-	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, _Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertMatch({error, {reciprocal_not_an_attribute, 5, category}},
@@ -620,8 +682,8 @@ add_relationship_rejects_non_attribute_reciprocal(_Config) ->
 %%-----------------------------------------------------------------------------
 add_relationship_rejects_target_kind_mismatch(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
-	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
-	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	%% target_kind=class, but B is an instance
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Has", "HeldBy", class),
@@ -637,8 +699,8 @@ add_relationship_rejects_target_kind_mismatch(_Config) ->
 add_relationship_stamps_user_avps(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Org", 3),
 	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
-	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
-	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	{ok, Confidence} = graphdb_attr:create_literal_attribute("confidence", float),
@@ -664,8 +726,8 @@ add_relationship_stamps_user_avps(_Config) ->
 add_relationship_avps_are_per_direction(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Org", 3),
 	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
-	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
-	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	{ok, Source}     = graphdb_attr:create_literal_attribute("source",  string),
@@ -700,8 +762,8 @@ add_relationship_avps_are_per_direction(_Config) ->
 add_relationship_default_avps_empty(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Org", 3),
 	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
-	{ok, A} = graphdb_instance:create_instance("A", ClassNref, 5),
-	{ok, B} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
@@ -721,7 +783,7 @@ add_relationship_default_avps_empty(_Config) ->
 %%-----------------------------------------------------------------------------
 class_of_returns_class(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Color", 3),
-	{ok, InstNref} = graphdb_instance:create_instance("Red", ClassNref, 5),
+	{ok, InstNref, _} = graphdb_instance:create_instance("Red", ClassNref, 5),
 	?assertEqual({ok, ClassNref}, graphdb_instance:class_of(InstNref)).
 
 
@@ -734,7 +796,7 @@ class_of_returns_class(_Config) ->
 %%-----------------------------------------------------------------------------
 get_instance_returns_node(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Widget", 3),
-	{ok, InstNref} = graphdb_instance:create_instance("W1", ClassNref, 5),
+	{ok, InstNref, _} = graphdb_instance:create_instance("W1", ClassNref, 5),
 	{ok, Node} = graphdb_instance:get_instance(InstNref),
 	?assertEqual(InstNref, Node#node.nref),
 	?assertEqual(instance, Node#node.kind).
@@ -762,9 +824,9 @@ get_instance_rejects_non_instance(_Config) ->
 %%-----------------------------------------------------------------------------
 children_returns_instance_children(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Car", 3),
-	{ok, Car} = graphdb_instance:create_instance("MyCar", ClassNref, 5),
-	{ok, Engine} = graphdb_instance:create_instance("Engine1", ClassNref, Car),
-	{ok, Wheel} = graphdb_instance:create_instance("Wheel1", ClassNref, Car),
+	{ok, Car, _} = graphdb_instance:create_instance("MyCar", ClassNref, 5),
+	{ok, Engine, _} = graphdb_instance:create_instance("Engine1", ClassNref, Car),
+	{ok, Wheel, _} = graphdb_instance:create_instance("Wheel1", ClassNref, Car),
 	{ok, Kids} = graphdb_instance:children(Car),
 	KidNrefs = lists:sort([N#node.nref || N <- Kids]),
 	?assertEqual(lists:sort([Engine, Wheel]), KidNrefs).
@@ -774,7 +836,7 @@ children_returns_instance_children(_Config) ->
 %%-----------------------------------------------------------------------------
 children_empty_for_leaf(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Leaf", 3),
-	{ok, Leaf} = graphdb_instance:create_instance("Leaf1", ClassNref, 5),
+	{ok, Leaf, _} = graphdb_instance:create_instance("Leaf1", ClassNref, 5),
 	?assertEqual({ok, []}, graphdb_instance:children(Leaf)).
 
 %%-----------------------------------------------------------------------------
@@ -782,9 +844,9 @@ children_empty_for_leaf(_Config) ->
 %%-----------------------------------------------------------------------------
 ancestors_returns_chain(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Part", 3),
-	{ok, Car} = graphdb_instance:create_instance("Car", ClassNref, 5),
-	{ok, Engine} = graphdb_instance:create_instance("Engine", ClassNref, Car),
-	{ok, Block} = graphdb_instance:create_instance("Block", ClassNref, Engine),
+	{ok, Car, _} = graphdb_instance:create_instance("Car", ClassNref, 5),
+	{ok, Engine, _} = graphdb_instance:create_instance("Engine", ClassNref, Car),
+	{ok, Block, _} = graphdb_instance:create_instance("Block", ClassNref, Engine),
 	{ok, Ancestors} = graphdb_instance:compositional_ancestors(Block),
 	AncNrefs = [N#node.nref || N <- Ancestors],
 	%% Nearest-first: Engine, then Car
@@ -796,7 +858,7 @@ ancestors_returns_chain(_Config) ->
 %%-----------------------------------------------------------------------------
 ancestors_empty_for_top_level(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Top", 3),
-	{ok, Top} = graphdb_instance:create_instance("Top1", ClassNref, 5),
+	{ok, Top, _} = graphdb_instance:create_instance("Top1", ClassNref, 5),
 	?assertEqual({ok, []}, graphdb_instance:compositional_ancestors(Top)).
 
 
@@ -809,7 +871,7 @@ ancestors_empty_for_top_level(_Config) ->
 %%-----------------------------------------------------------------------------
 resolve_value_local(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
-	{ok, InstNref} = graphdb_instance:create_instance("T1", ClassNref, 5),
+	{ok, InstNref, _} = graphdb_instance:create_instance("T1", ClassNref, 5),
 	%% The name attribute (20) was set by create_instance
 	?assertMatch({ok, "T1", _},
 		graphdb_instance:resolve_value(InstNref, ?NAME_ATTR_INSTANCE)).
@@ -822,7 +884,7 @@ resolve_value_from_class(_Config) ->
 	%% Add a custom AVP directly to the class node
 	{ok, TestAttr} = graphdb_attr:create_literal_attribute("shade", string),
 	set_avp(ClassNref, TestAttr, "blue"),
-	{ok, InstNref} = graphdb_instance:create_instance("C1", ClassNref, 5),
+	{ok, InstNref, _} = graphdb_instance:create_instance("C1", ClassNref, 5),
 	%% Instance doesn't have shade — resolved from class
 	?assertMatch({ok, "blue", _},
 		graphdb_instance:resolve_value(InstNref, TestAttr)).
@@ -833,10 +895,10 @@ resolve_value_from_class(_Config) ->
 resolve_value_from_ancestor(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Part", 3),
 	{ok, TestAttr} = graphdb_attr:create_literal_attribute("location", string),
-	{ok, Car} = graphdb_instance:create_instance("Car", ClassNref, 5),
+	{ok, Car, _} = graphdb_instance:create_instance("Car", ClassNref, 5),
 	set_avp(Car, TestAttr, "garage"),
-	{ok, Engine} = graphdb_instance:create_instance("Engine", ClassNref, Car),
-	{ok, Block} = graphdb_instance:create_instance("Block", ClassNref, Engine),
+	{ok, Engine, _} = graphdb_instance:create_instance("Engine", ClassNref, Car),
+	{ok, Block, _} = graphdb_instance:create_instance("Block", ClassNref, Engine),
 	%% Block doesn't have location, Engine doesn't — resolved from Car
 	?assertMatch({ok, "garage", _},
 		graphdb_instance:resolve_value(Block, TestAttr)).
@@ -847,9 +909,9 @@ resolve_value_from_ancestor(_Config) ->
 resolve_value_from_connected(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Org", 3),
 	{ok, TestAttr} = graphdb_attr:create_literal_attribute("country", string),
-	{ok, Ford} = graphdb_instance:create_instance("Ford", ClassNref, 5),
+	{ok, Ford, _} = graphdb_instance:create_instance("Ford", ClassNref, 5),
 	set_avp(Ford, TestAttr, "USA"),
-	{ok, Taurus} = graphdb_instance:create_instance("Taurus", ClassNref, 5),
+	{ok, Taurus, _} = graphdb_instance:create_instance("Taurus", ClassNref, 5),
 	{ok, {MakesNref, MadeByNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", instance),
 	ok = graphdb_instance:add_relationship(Taurus, MadeByNref, Ford, MakesNref),
@@ -863,7 +925,7 @@ resolve_value_from_connected(_Config) ->
 %%-----------------------------------------------------------------------------
 resolve_value_not_found(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Empty", 3),
-	{ok, InstNref} = graphdb_instance:create_instance("E1", ClassNref, 5),
+	{ok, InstNref, _} = graphdb_instance:create_instance("E1", ClassNref, 5),
 	?assertEqual(not_found,
 		graphdb_instance:resolve_value(InstNref, 99999)).
 
@@ -874,7 +936,7 @@ resolve_value_priority_local_over_class(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Color", 3),
 	{ok, TestAttr} = graphdb_attr:create_literal_attribute("hue", string),
 	set_avp(ClassNref, TestAttr, "class_hue"),
-	{ok, InstNref} = graphdb_instance:create_instance("C1", ClassNref, 5),
+	{ok, InstNref, _} = graphdb_instance:create_instance("C1", ClassNref, 5),
 	set_avp(InstNref, TestAttr, "local_hue"),
 	?assertMatch({ok, "local_hue", _},
 		graphdb_instance:resolve_value(InstNref, TestAttr)).
@@ -886,9 +948,9 @@ resolve_value_priority_class_over_ancestor(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Part", 3),
 	{ok, TestAttr} = graphdb_attr:create_literal_attribute("weight", string),
 	set_avp(ClassNref, TestAttr, "class_weight"),
-	{ok, Parent} = graphdb_instance:create_instance("P1", ClassNref, 5),
+	{ok, Parent, _} = graphdb_instance:create_instance("P1", ClassNref, 5),
 	set_avp(Parent, TestAttr, "parent_weight"),
-	{ok, Child} = graphdb_instance:create_instance("C1", ClassNref, Parent),
+	{ok, Child, _} = graphdb_instance:create_instance("C1", ClassNref, Parent),
 	%% Child has no local value; class has weight; parent has weight
 	%% Class (priority 2) should win over parent (priority 3)
 	?assertMatch({ok, "class_weight", _},
@@ -900,10 +962,10 @@ resolve_value_priority_class_over_ancestor(_Config) ->
 resolve_value_priority_ancestor_over_connected(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Org", 3),
 	{ok, TestAttr} = graphdb_attr:create_literal_attribute("region", string),
-	{ok, Parent} = graphdb_instance:create_instance("Parent", ClassNref, 5),
+	{ok, Parent, _} = graphdb_instance:create_instance("Parent", ClassNref, 5),
 	set_avp(Parent, TestAttr, "ancestor_region"),
-	{ok, Child} = graphdb_instance:create_instance("Child", ClassNref, Parent),
-	{ok, Peer} = graphdb_instance:create_instance("Peer", ClassNref, 5),
+	{ok, Child, _} = graphdb_instance:create_instance("Child", ClassNref, Parent),
+	{ok, Peer, _} = graphdb_instance:create_instance("Peer", ClassNref, 5),
 	set_avp(Peer, TestAttr, "peer_region"),
 	{ok, {LinksNref, LinkedByNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Links", "LinkedBy", instance),
@@ -925,7 +987,7 @@ resolve_value_walks_class_taxonomy(_Config) ->
 	{ok, TestAttr}   = graphdb_attr:create_literal_attribute("kingdom", string),
 	%% Bind kingdom only on the topmost class
 	set_avp(AnimalNref, TestAttr, "Animalia"),
-	{ok, Rex} = graphdb_instance:create_instance("Rex", DogNref, 5),
+	{ok, Rex, _} = graphdb_instance:create_instance("Rex", DogNref, 5),
 	?assertMatch({ok, "Animalia", _},
 		graphdb_instance:resolve_value(Rex, TestAttr)).
 
@@ -939,7 +1001,7 @@ resolve_value_local_class_overrides_taxonomy_ancestor(_Config) ->
 	{ok, TestAttr}   = graphdb_attr:create_literal_attribute("class_color", string),
 	set_avp(AnimalNref, TestAttr, "from_animal"),
 	set_avp(DogNref,    TestAttr, "from_dog"),
-	{ok, Rex} = graphdb_instance:create_instance("Rex", DogNref, 5),
+	{ok, Rex, _} = graphdb_instance:create_instance("Rex", DogNref, 5),
 	?assertMatch({ok, "from_dog", _},
 		graphdb_instance:resolve_value(Rex, TestAttr)).
 
@@ -953,7 +1015,7 @@ resolve_value_p4_ignores_compositional_arc(_Config) ->
 	{ok, TestAttr}  = graphdb_attr:create_literal_attribute("color", string),
 	%% Bind color directly on the Projects category (nref 5)
 	set_avp(5, TestAttr, "category_color"),
-	{ok, InstNref} = graphdb_instance:create_instance("W1", ClassNref, 5),
+	{ok, InstNref, _} = graphdb_instance:create_instance("W1", ClassNref, 5),
 	%% Local: no.  Class: no.  Ancestors: P3 stops at category 5
 	%% (non-instance).  P4 must not pick up category 5's AVP via the
 	%% parent_arc — only true connection arcs count.
@@ -968,7 +1030,7 @@ resolve_value_source_local(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
 	{ok, AttrNref}  = graphdb_attr:create_literal_attribute("weight", number),
 	ok = graphdb_class:add_qualifying_characteristic(ClassNref, AttrNref),
-	{ok, InstNref}  = graphdb_instance:create_instance(
+	{ok, InstNref, _}  = graphdb_instance:create_instance(
 						"Taurus", ClassNref, ?NREF_PROJECTS),
 	set_avp(InstNref, AttrNref, 3500),
 	?assertEqual({ok, 3500, local},
@@ -983,7 +1045,7 @@ resolve_value_source_class(_Config) ->
 	{ok, AttrN}  = graphdb_attr:create_literal_attribute("weight", number),
 	ok = graphdb_class:add_qualifying_characteristic(Veh, AttrN),
 	ok = graphdb_class:bind_qc_value(Veh, AttrN, 3500),
-	{ok, InstN}  = graphdb_instance:create_instance(
+	{ok, InstN, _}  = graphdb_instance:create_instance(
 						"Taurus", Veh, ?NREF_PROJECTS),
 	?assertEqual({ok, 3500, {class, Veh}},
 		graphdb_instance:resolve_value(InstN, AttrN)).
@@ -995,12 +1057,12 @@ resolve_value_source_class(_Config) ->
 resolve_value_source_ancestor(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Part", ?NREF_CLASSES),
 	{ok, TestAttr}  = graphdb_attr:create_literal_attribute("location", string),
-	{ok, Car}       = graphdb_instance:create_instance(
+	{ok, Car, _}       = graphdb_instance:create_instance(
 						"Car", ClassNref, ?NREF_PROJECTS),
 	set_avp(Car, TestAttr, "garage"),
-	{ok, Engine}    = graphdb_instance:create_instance(
+	{ok, Engine, _}    = graphdb_instance:create_instance(
 						"Engine", ClassNref, Car),
-	{ok, Block}     = graphdb_instance:create_instance(
+	{ok, Block, _}     = graphdb_instance:create_instance(
 						"Block", ClassNref, Engine),
 	?assertEqual({ok, "garage", {compositional, Car}},
 		graphdb_instance:resolve_value(Block, TestAttr)).
@@ -1012,10 +1074,10 @@ resolve_value_source_ancestor(_Config) ->
 resolve_value_source_connected(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Org", ?NREF_CLASSES),
 	{ok, TestAttr}  = graphdb_attr:create_literal_attribute("country", string),
-	{ok, Ford}      = graphdb_instance:create_instance(
+	{ok, Ford, _}      = graphdb_instance:create_instance(
 						"Ford", ClassNref, ?NREF_PROJECTS),
 	set_avp(Ford, TestAttr, "USA"),
-	{ok, Taurus}    = graphdb_instance:create_instance(
+	{ok, Taurus, _}    = graphdb_instance:create_instance(
 						"Taurus", ClassNref, ?NREF_PROJECTS),
 	{ok, {MakesNref, MadeByNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", instance),
@@ -1035,7 +1097,7 @@ resolve_value_source_connected(_Config) ->
 add_class_membership_basic(_Config) ->
 	{ok, ClassA} = graphdb_class:create_class("Vehicle", 3),
 	{ok, ClassB} = graphdb_class:create_class("Toy", 3),
-	{ok, Inst}   = graphdb_instance:create_instance("ToyCar", ClassA, 5),
+	{ok, Inst, _}   = graphdb_instance:create_instance("ToyCar", ClassA, 5),
 	?assertEqual({ok, [ClassA]}, graphdb_instance:class_memberships(Inst)),
 	?assertEqual(ok, graphdb_instance:add_class_membership(Inst, ClassB)),
 	?assertEqual({ok, [ClassA, ClassB]},
@@ -1047,7 +1109,7 @@ add_class_membership_basic(_Config) ->
 add_class_membership_writes_arcs(_Config) ->
 	{ok, ClassA} = graphdb_class:create_class("A", 3),
 	{ok, ClassB} = graphdb_class:create_class("B", 3),
-	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
 	ok = graphdb_instance:add_class_membership(Inst, ClassB),
 
 	%% Instance -> ClassB (char=29, reciprocal=30)
@@ -1077,7 +1139,7 @@ add_class_membership_writes_arcs(_Config) ->
 add_class_membership_idempotent(_Config) ->
 	{ok, ClassA} = graphdb_class:create_class("A", 3),
 	{ok, ClassB} = graphdb_class:create_class("B", 3),
-	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
 	ok = graphdb_instance:add_class_membership(Inst, ClassB),
 	RelsBefore = mnesia:table_info(relationships, size),
 	ok = graphdb_instance:add_class_membership(Inst, ClassB),
@@ -1107,7 +1169,7 @@ add_class_membership_rejects_non_instance(_Config) ->
 %%-----------------------------------------------------------------------------
 add_class_membership_rejects_missing_class(_Config) ->
 	{ok, ClassA} = graphdb_class:create_class("A", 3),
-	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
 	?assertEqual({error, class_not_found},
 		graphdb_instance:add_class_membership(Inst, 99999)).
 
@@ -1116,7 +1178,7 @@ add_class_membership_rejects_missing_class(_Config) ->
 %%-----------------------------------------------------------------------------
 add_class_membership_rejects_non_class_target(_Config) ->
 	{ok, ClassA} = graphdb_class:create_class("A", 3),
-	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
 	%% Nref 6 (Names) is an attribute node
 	?assertMatch({error, {not_a_class, attribute}},
 		graphdb_instance:add_class_membership(Inst, 6)).
@@ -1129,7 +1191,7 @@ add_class_membership_rejects_non_class_target(_Config) ->
 add_class_membership_refuses_abstract_class(_Config) ->
 	{ok, #{instantiable := Inst}} = graphdb_attr:seeded_nrefs(),
 	{ok, ClassA}   = graphdb_class:create_class("A", 3),
-	{ok, Instance} = graphdb_instance:create_instance("X", ClassA, 5),
+	{ok, Instance, _} = graphdb_instance:create_instance("X", ClassA, 5),
 	{ok, Abstract} = graphdb_class:create_class("Meta", 3,
 		[#{attribute => Inst, value => false}]),
 	RelsBefore = mnesia:table_info(relationships, size),
@@ -1142,7 +1204,7 @@ add_class_membership_refuses_abstract_class(_Config) ->
 %%-----------------------------------------------------------------------------
 class_memberships_initial(_Config) ->
 	{ok, ClassA} = graphdb_class:create_class("A", 3),
-	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
 	?assertEqual({ok, [ClassA]}, graphdb_instance:class_memberships(Inst)).
 
 
@@ -1159,7 +1221,7 @@ resolve_value_unique_across_two_classes(_Config) ->
 	{ok, ClassB} = graphdb_class:create_class("Tag", 3),
 	{ok, Attr}   = graphdb_attr:create_literal_attribute("badge", string),
 	set_avp(ClassA, Attr, "blue_badge"),
-	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
 	ok = graphdb_instance:add_class_membership(Inst, ClassB),
 	?assertMatch({ok, "blue_badge", _},
 		graphdb_instance:resolve_value(Inst, Attr)).
@@ -1174,7 +1236,7 @@ resolve_value_same_value_two_classes(_Config) ->
 	{ok, Attr}   = graphdb_attr:create_literal_attribute("colour", string),
 	set_avp(ClassA, Attr, "red"),
 	set_avp(ClassB, Attr, "red"),
-	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
 	ok = graphdb_instance:add_class_membership(Inst, ClassB),
 	?assertMatch({ok, "red", _},
 		graphdb_instance:resolve_value(Inst, Attr)).
@@ -1189,7 +1251,7 @@ resolve_value_ambiguous_two_classes(_Config) ->
 	{ok, Attr}   = graphdb_attr:create_literal_attribute("flavour", string),
 	set_avp(ClassA, Attr, "sweet"),
 	set_avp(ClassB, Attr, "salty"),
-	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
 	ok = graphdb_instance:add_class_membership(Inst, ClassB),
 	Result = graphdb_instance:resolve_value(Inst, Attr),
 	?assertMatch({error, {ambiguous_class_value, Attr, _}}, Result),
@@ -1208,7 +1270,7 @@ resolve_value_local_overrides_ambiguity(_Config) ->
 	{ok, Attr}   = graphdb_attr:create_literal_attribute("flavour", string),
 	set_avp(ClassA, Attr, "sweet"),
 	set_avp(ClassB, Attr, "salty"),
-	{ok, Inst}   = graphdb_instance:create_instance("X", ClassA, 5),
+	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
 	ok = graphdb_instance:add_class_membership(Inst, ClassB),
 	set_avp(Inst, Attr, "umami"),
 	?assertMatch({ok, "umami", _},
@@ -1227,7 +1289,7 @@ resolve_value_ambiguity_via_taxonomy(_Config) ->
 	{ok, Attr}      = graphdb_attr:create_literal_attribute("origin", string),
 	set_avp(AnimalCls, Attr, "biological"),
 	set_avp(ToyCls,    Attr, "manufactured"),
-	{ok, Inst} = graphdb_instance:create_instance("Plushie", MammalCls, 5),
+	{ok, Inst, _} = graphdb_instance:create_instance("Plushie", MammalCls, 5),
 	ok = graphdb_instance:add_class_membership(Inst, ToyCls),
 	Result = graphdb_instance:resolve_value(Inst, Attr),
 	?assertMatch({error, {ambiguous_class_value, Attr, _}}, Result),
@@ -1235,6 +1297,128 @@ resolve_value_ambiguity_via_taxonomy(_Config) ->
 	?assertEqual(
 		lists:sort([{AnimalCls, "biological"}, {ToyCls, "manufactured"}]),
 		lists:sort(Hits)).
+
+
+%%=============================================================================
+%% Firing Tests (B2)
+%%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% No rules attached — create_instance succeeds with an empty report.
+%%-----------------------------------------------------------------------------
+firing_no_rules_baseline(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Plain", 3),
+	{ok, Nref, Report} = graphdb_instance:create_instance("p1", ClassNref, 5),
+	?assert(is_integer(Nref)),
+	?assertEqual([], Report).
+
+%%-----------------------------------------------------------------------------
+%% One mandatory rule (mult=1) fires a single child and reports it.
+%%-----------------------------------------------------------------------------
+firing_single_mandatory(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, 1),
+	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
+	%% one Bolt child created, reported fired under the rule
+	{ok, Kids} = graphdb_instance:children(Root),
+	?assertEqual(1, length(Kids)),
+	[#{rule := _, outcomes := [#{owner := Root, status := fired,
+								 child := ChildNref}]}] = Report,
+	?assert(lists:member(ChildNref,
+		[N || {node, N, _, _, _, _} <- Kids])).
+
+%%-----------------------------------------------------------------------------
+%% Multiplicity=3 fires three children; report carries 3 outcomes indexed 1-3;
+%% the deployment in the report reflects the real rule deployment.
+%%-----------------------------------------------------------------------------
+firing_mandatory_mult(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, 3),
+	{ok, _Root, [#{deployment := Dep, outcomes := Outs}]} =
+		graphdb_instance:create_instance("car", Owner, 5),
+	?assertEqual(3, length(Outs)),
+	?assertEqual([1, 2, 3], [maps:get(index, O) || O <- Outs]),
+	%% B2-D6: report carries the rule's real deployment map
+	?assertEqual(3, maps:get(multiplicity, Dep)),
+	?assertEqual(mandatory, maps:get(mode, Dep)).
+
+%%-----------------------------------------------------------------------------
+%% Two-level cascade: Owner->Bolt->Widget all written atomically.
+%%-----------------------------------------------------------------------------
+firing_mandatory_cascade_atomic(Config) ->
+	{Owner, Bolt, Widget} = ?config(obw, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, 1),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "BW", Bolt, Widget, mandatory, 1),
+	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
+	{ok, [BoltInst]} = graphdb_instance:children(Root),
+	BoltNref = element(2, BoltInst),
+	{ok, [_Widget]} = graphdb_instance:children(BoltNref),
+	%% both rules report a fired outcome
+	?assertEqual(2, length(Report)).
+
+%%-----------------------------------------------------------------------------
+%% A mandatory rule targeting an abstract class fails; the transaction rolls
+%% back (nothing written) and the report contains a failed outcome.
+%%-----------------------------------------------------------------------------
+firing_mandatory_failure_rolls_back(Config) ->
+	{Owner, Abstract} = ?config(oa, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OA", Owner, Abstract, mandatory, 1),
+	Before = mnesia:table_info(nodes, size),
+	{error, {class_not_instantiable, Abstract}, Report} =
+		graphdb_instance:create_instance("car", Owner, 5),
+	?assertEqual(Before, mnesia:table_info(nodes, size)),   %% nothing written
+	%% culprit rule has a failed outcome in the report
+	?assert(lists:any(
+		fun(#{outcomes := Os}) ->
+			lists:any(fun(#{status := S}) -> S =:= failed end, Os)
+		end, Report)).
+
+
+%%-----------------------------------------------------------------------------
+%% An auto rule fires best-effort post-commit; root is created and the auto
+%% child appears in the compositional tree.
+%%-----------------------------------------------------------------------------
+firing_auto_best_effort(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OBauto", Owner, Bolt, auto, 1),
+	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
+	{ok, [_]} = graphdb_instance:children(Root),       %% auto child created
+	?assertEqual(#{fired => 1, failed => 0, not_attempted => 0},
+				 graphdb_instance:summarize(Report)).
+
+%%-----------------------------------------------------------------------------
+%% An auto rule targeting an abstract class fails (best-effort); the root
+%% instance survives and the report carries one failed outcome.
+%%-----------------------------------------------------------------------------
+firing_auto_failure_survives(Config) ->
+	{Owner, Abstract} = ?config(oa, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OAauto", Owner, Abstract, auto, 1),
+	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
+	?assert(is_integer(Root)),                         %% root survived
+	?assertEqual(#{fired => 0, failed => 1, not_attempted => 0},
+				 graphdb_instance:summarize(Report)).
+
+%%-----------------------------------------------------------------------------
+%% Owner -auto-> Bolt; Bolt -mandatory-> Widget.  The auto Bolt and its
+%% mandatory Widget both fire; the merged report carries two fired outcomes.
+%%-----------------------------------------------------------------------------
+firing_auto_cascade_merges(Config) ->
+	{Owner, Bolt, Widget} = ?config(obw, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OBauto", Owner, Bolt, auto, 1),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "BW", Bolt, Widget, mandatory, 1),
+	{ok, _Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
+	%% the auto Bolt and its mandatory Widget both fired
+	?assertEqual(#{fired => 2, failed => 0, not_attempted => 0},
+				 graphdb_instance:summarize(Report)).
 
 
 %%=============================================================================
