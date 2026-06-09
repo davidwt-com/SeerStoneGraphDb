@@ -170,10 +170,18 @@ alongside auto firing. For each instance plan node:
      `graphdb_rules:rule_child_name/4` (the existing `name_pattern`
      `{i}` machinery).
    - `unbounded` (§4 decision OI-B3-1): emit a **single** `proposed`
-     outcome with `index => unbounded` and the fallback name (no `{i}`
-     substitution). The caller decides how many to actually create.
+     outcome with `index => unbounded` and a *representative* name
+     resolved at index 1 (`rule_child_name(Rule, ChildClass, 1, 1)`). The
+     caller decides how many to actually create.
 5. Build a rule-centric report entry `#{rule, deployment, outcomes}`,
    exactly the B2 shape, and merge it into the report.
+
+**No instantiability guard.** Unlike `mandatory` (fails) and `auto`
+(failed outcome), `fire_propose/2` does **not** check
+`graphdb_class:is_instantiable/1` on the proposed child class. A proposal
+creates nothing, so an abstract target cannot break the transaction; it is
+the caller's responsibility to validate when it chooses to materialise a
+proposal. Keeps the propose path side-effect-free and simple.
 
 `fire_propose/2` calls **no** `do_create_instance` and opens **no**
 transaction — it is pure report construction over already-resolved class
@@ -239,13 +247,13 @@ These are **intentionally minimal defaults**. They are documented here
 propose-with-options feature (richer multiplicity, caller selection
 hints, interactive confirmation sessions) can find and supersede them.
 
-| ID        | Decision                                                                                                                                                                  |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **OI-B3-1** | **Unbounded multiplicity + propose ⇒ a single `proposed` outcome** with `index => unbounded`. Enumerating ∞ proposals is meaningless, and (unlike mandatory/auto) there is no materialisation to fail. The caller decides cardinality. |
+| ID          | Decision                                                                                                                                                                                                                                                       |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OI-B3-1** | **Unbounded multiplicity + propose ⇒ a single `proposed` outcome** with `index => unbounded`. Enumerating ∞ proposals is meaningless, and (unlike mandatory/auto) there is no materialisation to fail. The caller decides cardinality.                         |
 | **OI-B3-2** | **On-path cycle cut applies to propose.** A proposal whose child class is already on the root→here path is skipped, reusing B2-D5. Keeps reports free of self-ancestral noise; one `lists:member/2` check. Nothing breaks either way since nothing is created. |
-| **OI-B3-3** | **Always-in-report; no session flag, no confirm API.** Supersedes the §11 interactive-flag sketch (see §1.3). Deferred, not deleted. |
-| **OI-B3-4** | **Additive proposals.** Class + ancestor propose rules for the same child class both surface; collapse/precedence is B5. |
-| **OI-B3-5** | **Shallow.** No recursion into proposed children; propose contributes one proposal per (rule × multiplicity index). |
+| **OI-B3-3** | **Always-in-report; no session flag, no confirm API.** Supersedes the §11 interactive-flag sketch (see §1.3). Deferred, not deleted.                                                                                                                           |
+| **OI-B3-4** | **Additive proposals.** Class + ancestor propose rules for the same child class both surface; collapse/precedence is B5.                                                                                                                                       |
+| **OI-B3-5** | **Shallow.** No recursion into proposed children; propose contributes one proposal per (rule × multiplicity index).                                                                                                                                            |
 
 Each of OI-B3-1, OI-B3-2, OI-B3-5 carries a `%% B3 OI-B3-N:` comment at
 its enforcement point in code, plus a one-line forward-compat note that a
@@ -255,14 +263,14 @@ propose-with-options request may supersede it.
 
 ## 5. Files touched
 
-| File                                         | Change                                                                                                  |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `apps/graphdb/src/graphdb_rules.erl`         | `leaf_plan/4` adds `propose_rules => []`; `plan_rules/4` propose clause accumulates instead of dropping. |
-| `apps/graphdb/src/graphdb_instance.erl`      | Add `fire_propose/2` (peer of `fire_auto/2`), wire into post-commit; `proposed` status; `summarize/1` count. |
-| `apps/graphdb/test/graphdb_rules_SUITE.erl`  | Plan-tree cases: propose accumulator, multiplicity unexpanded, mixed mandatory+auto+propose, on-path.   |
-| `apps/graphdb/test/graphdb_instance_SUITE.erl` | Firing cases: `proposed` outcomes present, child NOT materialised, unbounded single outcome, summarize. |
-| `docs/diagrams/ontology-tree.md`             | No change (no new seeds).                                                                                |
-| `ARCHITECTURE.md`, `apps/graphdb/CLAUDE.md`, `README.md`, `TASKS.md`, parent design | Status + test-count refresh; mark B3 landed, propose surfaced. |
+| File                                                                                | Change                                                                                                       |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `apps/graphdb/src/graphdb_rules.erl`                                                | `leaf_plan/4` adds `propose_rules => []`; `plan_rules/4` propose clause accumulates instead of dropping.     |
+| `apps/graphdb/src/graphdb_instance.erl`                                             | Add `fire_propose/2` (peer of `fire_auto/2`), wire into post-commit; `proposed` status; `summarize/1` count. |
+| `apps/graphdb/test/graphdb_rules_SUITE.erl`                                         | Plan-tree cases: propose accumulator, multiplicity unexpanded, mixed mandatory+auto+propose, on-path.        |
+| `apps/graphdb/test/graphdb_instance_SUITE.erl`                                      | Firing cases: `proposed` outcomes present, child NOT materialised, unbounded single outcome, summarize.      |
+| `docs/diagrams/ontology-tree.md`                                                    | No change (no new seeds).                                                                                    |
+| `ARCHITECTURE.md`, `apps/graphdb/CLAUDE.md`, `README.md`, `TASKS.md`, parent design | Status + test-count refresh; mark B3 landed, propose surfaced.                                               |
 
 No schema change, no new seeds, no supervision-tree change.
 
