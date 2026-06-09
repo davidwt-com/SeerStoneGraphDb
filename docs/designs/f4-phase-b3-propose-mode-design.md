@@ -233,10 +233,11 @@ outcome map otherwise:
 ### 3.5 Error path
 
 Unchanged from B2. If a **mandatory** rule fails, `create_instance/3`
-returns `{error, Reason, Report}` where the whole plan (including any
-propose rules in `plan_so_far`) collapses to `not_attempted` outcomes.
-Propose proposals are surfaced as `proposed` **only on the success
-path**, where the root and its mandatory subtree committed.
+returns `{error, Reason, Report}` where `walk_not_attempted/2` collapses
+the unreached **mandatory** subtree to `not_attempted` outcomes; propose
+(and auto) rules do **not** appear on the error path at all. Propose
+proposals are surfaced as `proposed` **only on the success path**, where
+the root and its mandatory subtree committed.
 
 ---
 

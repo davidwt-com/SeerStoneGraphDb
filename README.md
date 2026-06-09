@@ -29,7 +29,7 @@ underway:
 | `graphdb_language`     | Fully implemented — M6 multilingual overlay (language registration, dialect chains, per-language overlay tables, label resolution, translation hooks)                                                                                                       |
 | `graphdb_query`        | Implemented — F3 query language (parse/execute, snapshot-semantics sessions, path finding)                                                                                                                                                                  |
 
-**475 tests** (105 EUnit + 370 Common Test) — all passing. See
+**476 tests** (105 EUnit + 371 Common Test) — all passing. See
 `TASKS.md` for the prioritised task list.
 
 ---
@@ -243,7 +243,7 @@ Priority order — each step applies only to attributes not yet resolved by a hi
 | `graphdb_mgr_SUITE`       | CT    | 28    | Bootstrap init, read ops, category guard, write stubs, cache audit/repair                                                                                                                                                                      |
 | `graphdb_attr_SUITE`      | CT    | 37    | Attribute create/lookup, seeding, relationship types, atomic reciprocal pair (M4), literal sub-groups, `attribute_type`/`instantiable` markers                                                                                                 |
 | `graphdb_class_SUITE`     | CT    | 49    | Class create, QC (qualifying characteristics), lookups, hierarchy, multi-inheritance (H3), inheritance, templates, abstract classes (L9)                                                                                                       |
-| `graphdb_instance_SUITE`  | CT    | 75    | Instance create (incl. F4 B2 composition rule firing and B3 propose-mode outcomes), relationships (incl. M3 validation, M5 per-arc AVPs — attribute-value pairs), lookups, hierarchy, four-level inheritance, multi-class membership (H4 + H5) |
+| `graphdb_instance_SUITE`  | CT    | 76    | Instance create (incl. F4 B2 composition rule firing and B3 propose-mode outcomes), relationships (incl. M3 validation, M5 per-arc AVPs — attribute-value pairs), lookups, hierarchy, four-level inheritance, multi-class membership (H4 + H5) |
 | `graphdb_language_SUITE`  | CT    | 27    | M6 multilingual overlay: language/dialect registration, per-language overlay tables, label resolution, translation hooks                                                                                                                       |
 | `graphdb_query_SUITE`     | CT    | 43    | F3 query language: parse/execute, snapshot-semantics sessions, `#cont_path{}` resume, path finding                                                                                                                                             |
 | `graphdb_rules_SUITE`     | CT    | 63    | F4 rule meta-ontology seeding, composition/connection rule create/retrieve, validation catalog, `effective_rules_for_class/2` taxonomy walk (B1), composition firing engine (B2), propose mode (B3)                                            |

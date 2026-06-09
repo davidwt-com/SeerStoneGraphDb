@@ -141,7 +141,8 @@
 	firing_propose_multiplicity_unbounded/1,
 	firing_propose_on_path_cut/1,
 	firing_propose_summarize/1,
-	firing_propose_with_mandatory_and_auto/1
+	firing_propose_with_mandatory_and_auto/1,
+	firing_propose_owner_is_materialised_child/1
 ]).
 
 
@@ -246,7 +247,8 @@ groups() ->
 			firing_propose_multiplicity_unbounded,
 			firing_propose_on_path_cut,
 			firing_propose_summarize,
-			firing_propose_with_mandatory_and_auto
+			firing_propose_with_mandatory_and_auto,
+			firing_propose_owner_is_materialised_child
 		]}
 	].
 
@@ -312,7 +314,8 @@ setup_firing_fixtures(TC, Config) ->
 				   firing_propose_multiplicity_unbounded,
 				   firing_propose_on_path_cut,
 				   firing_propose_summarize,
-				   firing_propose_with_mandatory_and_auto],
+				   firing_propose_with_mandatory_and_auto,
+				   firing_propose_owner_is_materialised_child],
 	case lists:member(TC, FiringTests) of
 		true ->
 			{ok, #{instantiable := InstAttr}} = graphdb_attr:seeded_nrefs(),
@@ -1548,6 +1551,31 @@ firing_propose_with_mandatory_and_auto(Config) ->
 	?assertEqual(2, length(Kids)),
 	?assertEqual(#{fired => 2, failed => 0, not_attempted => 0, proposed => 1},
 				 graphdb_instance:summarize(Report)).
+
+%%-----------------------------------------------------------------------------
+%% B3: a propose rule on a MANDATORY child's class surfaces a proposed outcome
+%% whose owner is the materialised child (NOT the root) — proves owner rides
+%% proposals at depth, not just at the requested-instance level.
+%%-----------------------------------------------------------------------------
+firing_propose_owner_is_materialised_child(Config) ->
+	{Owner, Bolt, Widget} = ?config(obw, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, 1),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "BWpropose", Bolt, Widget, propose, 1),
+	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
+	%% the materialised mandatory child
+	{ok, [BoltInst]} = graphdb_instance:children(Root),
+	BoltNref = element(2, BoltInst),
+	%% find the proposed outcome across all rule reports
+	Proposed = [O || #{outcomes := Os} <- Report, O <- Os,
+					 maps:get(status, O) =:= proposed],
+	?assertEqual(1, length(Proposed)),
+	[PO] = Proposed,
+	?assertEqual(Widget, maps:get(proposed_class, PO)),
+	%% owner is the materialised Bolt child, NOT the root
+	?assertEqual(BoltNref, maps:get(owner, PO)),
+	?assertNotEqual(Root, maps:get(owner, PO)).
 
 
 %%=============================================================================
