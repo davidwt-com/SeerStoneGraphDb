@@ -649,8 +649,9 @@ been considered yet, so there is no report to carry.)
 - **OI-B2-1 (→ B5).** Horizontal precedence when a class and an ancestor
   carry rules for the same child class. B2 fires both; B5 decides
   collapse/precedence and removes the duplicate-name collision.
-- **OI-B2-2 (→ B3).** `propose`-mode rules are skipped by B2. B3 surfaces
-  the abstract plan (B2-D3) to the caller as proposals.
+- **OI-B2-2 (RESOLVED by B3).** `propose`-mode rules surface as
+  `proposed` outcomes in the create_instance report (always-in-report;
+  no session flag). See `docs/designs/f4-phase-b3-propose-mode-design.md`.
 - **OI-B2-3 (deferred).** `add_class_membership/2` does not fire rules.
   Whether adding a class to an existing instance should retroactively
   materialise its mandatory composition is left open; B2 fires only on

@@ -806,13 +806,13 @@ Phase B (the rule-*firing* engine) is itself split into five
 independently shippable divisions, each with its own brainstorm →
 design → plan → implement cycle:
 
-| Div    | Subject                                                                        | Depends on | Design                                                  |
-| ------ | ------------------------------------------------------------------------------ | ---------- | ------------------------------------------------------- |
-| **B1** | `effective_rules_for_class/2` — read-side taxonomy walk (no firing)            | A          | `docs/designs/f4-phase-b1-effective-rules-design.md`    |
-| **B2** | Composition firing engine — `mandatory` + `auto`; cascade; return-shape change | B1         | `docs/designs/f4-phase-b2-composition-firing-design.md` |
-| **B3** | `propose` mode + interactive/non-interactive session flag (`graphdb_query`)    | B2         | —                                                       |
-| **B4** | Connection firing engine (Mandatory Connections, §10)                          | B1         | —                                                       |
-| **B5** | Horizontal conflict resolution / precedence (OI-2) — rules at one class level  | B2         | —                                                       |
+| Div    | Subject                                                                           | Depends on | Design                                                  |
+| ------ | --------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------- |
+| **B1** | `effective_rules_for_class/2` — read-side taxonomy walk (no firing)               | A          | `docs/designs/f4-phase-b1-effective-rules-design.md`    |
+| **B2** | Composition firing engine — `mandatory` + `auto`; cascade; return-shape change    | B1         | `docs/designs/f4-phase-b2-composition-firing-design.md` |
+| **B3** | `propose` mode — proposals always surfaced in the create report (no session flag) | B2         | `docs/designs/f4-phase-b3-propose-mode-design.md`       |
+| **B4** | Connection firing engine (Mandatory Connections, §10)                             | B1         | —                                                       |
+| **B5** | Horizontal conflict resolution / precedence (OI-2) — rules at one class level     | B2         | —                                                       |
 
 **OI-B2. Composition firing engine — RESOLVED (B2).**
 

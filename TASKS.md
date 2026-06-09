@@ -627,7 +627,7 @@ the `applies_to` connection arc. Retrieval is direct-attachment only.
 `graphdb_rules` moved to the last child of `graphdb_sup`. 37 CT cases
 added (`graphdb_rules_SUITE`).
 
-### F4 Phases B–F — Rule-firing engine — PARTIALLY DONE (B1+B2 landed)
+### F4 Phases B–F — Rule-firing engine — PARTIALLY DONE (B1+B2+B3 landed)
 
 The remaining phases build the engine that consumes the Phase A data
 model: the instantiation engine, composition-rule firing at
@@ -648,10 +648,16 @@ learning.
   Report}` (3-tuple on firing path). `plan_composition_firing/2` is a
   pure-read helper reused by B3. Design:
   `docs/designs/f4-phase-b2-composition-firing-design.md`.
-- **B3** `propose` mode + session flag; **B4** connection firing;
-  **B5** horizontal conflict precedence — OUTSTANDING.
+- **B3 — `propose` mode — DONE.** `propose`-mode composition rules
+  materialise nothing; they surface as `proposed` outcomes in the
+  `create_instance/3` report (always-in-report — no session flag). A
+  caller accepts a proposal by issuing an ordinary `create_instance/3`
+  for the proposed class. Design:
+  `docs/designs/f4-phase-b3-propose-mode-design.md`.
+- **B4** connection firing; **B5** horizontal conflict precedence —
+  OUTSTANDING.
 
-**Evidence:** `apps/graphdb/src/graphdb_rules.erl` Phases A+B1+B2 are
+**Evidence:** `apps/graphdb/src/graphdb_rules.erl` Phases A+B1+B2+B3 are
 implemented.
 
 **Scope (Phases B–F):**

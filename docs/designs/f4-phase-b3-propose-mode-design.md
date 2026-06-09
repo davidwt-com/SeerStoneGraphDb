@@ -5,7 +5,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 # F4 Phase B / Division B3 — Propose Mode — Design
 
-**Status:** Specified. No implementation has begun.
+**Status:** Implemented (PR pending).
 
 **Parent design:** `docs/designs/f4-graphdb-rules-design.md` (F4 Phase A
 landed; B1 landed via PR #33; B2 landed via PR #34). This is the third
