@@ -499,15 +499,33 @@ survives.
   could eventually drop its explicit reciprocal arg). Touches `graphdb_attr`
   seeding; broader than B4.
 - **OI-B4-3 (candidate division — promoted from OI-B2-3).** **Multi-class
-  instance creation.** Let `create_instance` (and a composition rule's child
-  spec) accept a **class list**, with B1's gather unioned across the list,
-  so all classes' composition + connection rules fire atomically at create
-  time. This is the principled successor to "`add_class_membership/2` does
-  not fire rules" — better than retroactive firing because it keeps all
-  firing inside `create_instance`'s transaction model. Touches B1 + B2 + B4
-  together; taken up deliberately, not folded into B4. Genuine post-hoc
-  **reclassification** firing (adding a class to an already-existing
-  instance) remains a further, separate deferral.
+  instance creation.** An instance that belongs to several classes should
+  have all of those classes' composition + connection rules fire atomically
+  at create time. This is the principled successor to "`add_class_membership/2`
+  does not fire rules" — better than retroactive firing because it keeps all
+  firing inside `create_instance`'s transaction model. The future
+  brainstorming for this division owns the mechanism; **the favoured
+  direction (David, 2026-06-10) is *not* signature widening:**
+
+  - `create_instance` is expected to **stay single-class** — the instance is
+    always driven by one **primary** class. Multi-class-ness is **ontology,
+    not call-site arity:** a rule *on the primary class* declares that its
+    instances are also instances of class X (consistent with F4's thesis
+    that behaviour lives in stored rules, not API shape, and with the §10
+    "obligation rides on the class" model).
+  - The load-bearing question is therefore **gather transitivity, not a new
+    argument:** when `effective_rules_for_class/2` (B1) encounters a rule
+    that confers membership in class X, does it **recurse into X's effective
+    rules** and fold them into the same firing pass? That turns "multi-class"
+    from a signature problem into a B1 transitive-gather problem — a cleaner
+    seam that never touches the entry-point arity.
+
+  (The earlier framing — `create_instance` and a composition rule's child
+  spec accept a **class list** with B1 unioning across it — is recorded as
+  the rejected alternative.) Touches B1 + B2 + B4 together; taken up
+  deliberately, not folded into B4. Genuine post-hoc **reclassification**
+  firing (adding a class to an already-existing instance) remains a further,
+  separate deferral.
 - **OI-B2-4 (RESOLVED by B4).** Connection rules are now fired by
   `create_instance`.
 
