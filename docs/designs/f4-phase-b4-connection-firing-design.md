@@ -114,12 +114,42 @@ ConnContext :: #{rule           => #node{},               %% the ConnectionRule 
                  target_class     => integer(),           %% content AVP
                  mode             => mandatory | auto | propose,
                  multiplicity     => pos_integer() | unbounded,
-                 source           => integer()}           %% pre-allocated new-instance nref
+                 source           => integer(),           %% nref of the instance whose rule fires
+                                                          %%   (root OR a composition descendant)
+                 root_parent      => integer() | undefined, %% the ParentNref arg to this
+                                                          %%   create_instance call — STABLE across
+                                                          %%   the whole cascade (B4-D2a)
+                 root_source      => integer()}           %% nref of the top-level instance being
+                                                          %%   created — STABLE across the cascade
 
 Decision :: {connect, [Target]} | defer
 Target   :: integer()                       %% TargetNref
           | {integer(), {FwdAVPs, RevAVPs}} %% TargetNref + per-connection metadata
 ```
+
+**`source` vs `root_parent` / `root_source` (B4-D2a).** `source` is rebound
+per firing instance — for a composition descendant it is the descendant's
+own nref. The resolver, however, often needs the **originating call's**
+context to drive a search pattern, and that context must **not** drift as
+firing recurses into descendants. Two stable anchors are therefore carried
+unchanged down the cascade (exactly as the resolver fun itself is threaded
+unchanged, §3.1):
+
+- **`root_parent`** — the `ParentNref` argument the caller passed to
+  `create_instance`: the pre-existing compositional anchor the whole new
+  subtree hangs under. Unlike `source` (and `root_source`), this node is
+  **already committed and fully readable** at RESOLVE time, so it is the
+  natural anchor for a Mnesia-backed search ("find a `Manufacturer` in the
+  same `Factory` as the parent"). It is `undefined` only if the call created
+  a parentless top-level instance.
+- **`root_source`** — the nref of the top-level instance this
+  `create_instance` call is creating (the root of the cascade). Identity
+  only: like `source` it is uncommitted during RESOLVE, but it lets a
+  resolver correlate every descendant firing back to the one create that
+  triggered them.
+
+Both are identical to `source` when the rule fires for the root instance
+itself; they diverge only for composition descendants.
 
 - The engine calls the resolver **once per effective ConnectionRule** (not
   per index). The returned list's length is the number of connections the
@@ -373,14 +403,16 @@ do_create_instance(Name, ClassNref, ParentNref, InstAttr, OnPath, Resolver):
 ```
 
 The public `create_instance/3` calls this with `Resolver = report_only`;
-`create_instance/4` passes the caller's resolver. The resolver threads
-**unchanged** down the composition cascade so a composition descendant's
-connection rules use the same strategy.
+`create_instance/4` passes the caller's resolver. The resolver — **and the
+`root_parent` / `root_source` anchors** — thread **unchanged** down the
+composition cascade, so a composition descendant's connection rules use the
+same strategy and see the same originating-call context (B4-D2a), never the
+descendant's own immediate parent.
 
 ### 3.2 Connection RESOLVE (per materialised instance, post-allocation)
 
 ```
-resolve_connections(Scope, InstNode, SourceNref, Resolver):
+resolve_connections(Scope, InstNode, SourceNref, RootParent, RootSource, Resolver):
     {ok, Levels} = effective_rules_for_class(Scope, InstNode.class)     %% B1
     ConnRules = [ {R, Dep} || {R, Dep} <- flatten(Levels),
                               kind_of(R) == 'ConnectionRule' ]
@@ -390,7 +422,8 @@ resolve_connections(Scope, InstNode, SourceNref, Resolver):
         TClass = content_avp(Rule, target_class_nref)
         Ctx    = #{rule=>Rule, characterization=>Char, reciprocal=>Recip,
                    target_class=>TClass, mode=>Dep.mode,
-                   multiplicity=>Dep.multiplicity, source=>SourceNref}
+                   multiplicity=>Dep.multiplicity, source=>SourceNref,
+                   root_parent=>RootParent, root_source=>RootSource}   %% B4-D2a, stable
         case Resolver(Ctx) of
             defer ->
                 emit outcome status by mode = (mandatory -> required;
@@ -479,6 +512,7 @@ survives.
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | B4-D1 | Connection firing connects to **existing** instances — never creates a target.                                                         |
 | B4-D2 | Resolver = caller-supplied callback fun; one call per rule; returns `{connect, [Target]} \| defer`. `/3` = `report_only` (`defer` all). |
+| B4-D2a | `ConnContext` carries stable originating-call anchors `root_parent` (the committed, readable `ParentNref` arg) and `root_source` (top-level new-instance nref), threaded **unchanged** down the cascade so a descendant's resolver still sees the original call's context, not the descendant's immediate parent. |
 | B4-D3 | Reciprocal is **ConnectionRule content** (`reciprocal_nref` AVP); `create_connection_rule/8,/9` gain the param (breaking vs Phase A `/7,/8`). |
 | B4-D4 | Firing wires into B2's PLAN/EXECUTE/POST-COMMIT; **committed** mandatory connections enforce in the root txn; `defer` never fails (the `/3` escape). |
 | B4-D5 | Multiplicity = constraint on the resolver's list (cap for `pos_int`, none for `unbounded`); **no cascade, no cycle guard**.             |
