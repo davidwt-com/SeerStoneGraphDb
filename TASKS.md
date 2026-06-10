@@ -678,6 +678,13 @@ implemented.
   - *Connection-pattern learning*: on connection creation, record the
     (source class, template, target class, connection type) tuple;
     accumulate into connection rules.
+  - *Report-driven learning*: treat the firing report B2–B4 already emit
+    (the `proposed` / `auto` / `required` / `connected` / `not_connected`
+    outcomes) as a feedback signal. Observe which proposals a caller
+    accepts versus ignores, and which `required` connections get satisfied
+    after the fact, then feed the accumulated signal back into the rule
+    set — adjusting a rule's `mode` / `multiplicity`, or promoting a
+    recurring manually-made pattern into a new rule.
 
 - All rules stored as typed data in the ontology (kind = `class` with
   an `is_rule = true` AVP, or a new `kind = rule` — same decision
