@@ -618,8 +618,8 @@ fire_auto(#{nref := Nref, class := Class, auto_rules := Autos,
 %%-----------------------------------------------------------------------------
 %% fire_one_auto(RuleNode, Deploy, OwnerNref, OnPath1, Acc) -> report()
 %%
-%% Check order matches design §3.3: instantiable, then unbounded, then the
-%% vertical-cycle cut, then expansion.
+%% Check order: instantiable, then the vertical-cycle cut, then expansion.
+%% mints Min children post-commit (B-prep).
 %%-----------------------------------------------------------------------------
 fire_one_auto(RuleNode, Deploy, OwnerNref, OnPath1, Acc) ->
 	ChildClass = graphdb_rules:rule_child_class(RuleNode),
@@ -629,17 +629,11 @@ fire_one_auto(RuleNode, Deploy, OwnerNref, OnPath1, Acc) ->
 				#{owner => OwnerNref, index => 1, status => failed,
 				  reason => {class_not_instantiable, ChildClass}});
 		_ ->        %% true (or {error,_} -> treated as fireable; create reports)
-			case maps:get(multiplicity, Deploy, 1) of
-				unbounded ->
-					add_outcome(Acc, RuleNode, Deploy,
-						#{owner => OwnerNref, index => 1, status => failed,
-						  reason => unbounded_multiplicity_not_fireable});
-				Mult ->
-					case lists:member(ChildClass, OnPath1) of
-						true  -> Acc;       %% vertical cycle cut (B2-D5)
-						false -> fire_auto_children(RuleNode, Deploy, ChildClass,
-											Mult, 1, OwnerNref, OnPath1, Acc)
-					end
+			{Min, _Max} = maps:get(multiplicity, Deploy, {1, 1}),
+			case lists:member(ChildClass, OnPath1) of
+				true  -> Acc;       %% vertical cycle cut (B2-D5)
+				false -> fire_auto_children(RuleNode, Deploy, ChildClass,
+									Min, 1, OwnerNref, OnPath1, Acc)
 			end
 	end.
 
@@ -713,38 +707,30 @@ fire_one_propose(RuleNode, Deploy, OwnerNref, OnPath1, Acc) ->
 		true ->
 			Acc;
 		false ->
-			case maps:get(multiplicity, Deploy, 1) of
-				unbounded ->
-					%% B3 OI-B3-1: unbounded propose => a single proposal with
-					%% index=unbounded; the caller decides cardinality.  Name is
-					%% a representative resolved at index 1.  Supersedable by
-					%% propose-with-options.
-					Name = graphdb_rules:rule_child_name(RuleNode, ChildClass,
-														 1, 1),
-					add_outcome(Acc, RuleNode, Deploy,
-						#{owner => OwnerNref, index => unbounded,
-						  status => proposed, proposed_class => ChildClass,
-						  name => Name});
-				Mult ->
-					propose_children(RuleNode, Deploy, ChildClass, Mult, 1,
-									 OwnerNref, Acc)
-			end
+			%% B-prep: propose surfaces Min proposed outcomes, each carrying
+			%% max => Max so the report keeps the open-ended ceiling (Max may
+			%% be `unbounded').  Generalises the old index=unbounded sentinel.
+			{Min, Max} = maps:get(multiplicity, Deploy, {1, 1}),
+			propose_children(RuleNode, Deploy, ChildClass, Min, Max, 1,
+							 OwnerNref, Acc)
 	end.
 
 %%-----------------------------------------------------------------------------
-%% propose_children(RuleNode, Deploy, ChildClass, Mult, I, OwnerNref, Acc)
+%% propose_children(RuleNode, Deploy, ChildClass, Count, Max, I, OwnerNref, Acc)
 %%   -> report()
-%% Emits one `proposed` outcome per multiplicity index 1..Mult.
+%% Emits one `proposed' outcome per index 1..Count (Count = Min), each carrying
+%% max => Max (Max may be `unbounded').
 %%-----------------------------------------------------------------------------
-propose_children(_RuleNode, _Deploy, _ChildClass, Mult, I, _OwnerNref, Acc)
-		when I > Mult ->
+propose_children(_RuleNode, _Deploy, _ChildClass, Count, _Max, I, _OwnerNref, Acc)
+		when I > Count ->
 	Acc;
-propose_children(RuleNode, Deploy, ChildClass, Mult, I, OwnerNref, Acc) ->
-	Name = graphdb_rules:rule_child_name(RuleNode, ChildClass, I, Mult),
+propose_children(RuleNode, Deploy, ChildClass, Count, Max, I, OwnerNref, Acc) ->
+	Name = graphdb_rules:rule_child_name(RuleNode, ChildClass, I, Count),
 	Acc1 = add_outcome(Acc, RuleNode, Deploy,
 		#{owner => OwnerNref, index => I, status => proposed,
-		  proposed_class => ChildClass, name => Name}),
-	propose_children(RuleNode, Deploy, ChildClass, Mult, I + 1, OwnerNref, Acc1).
+		  proposed_class => ChildClass, name => Name, max => Max}),
+	propose_children(RuleNode, Deploy, ChildClass, Count, Max, I + 1, OwnerNref,
+					 Acc1).
 
 
 %%-----------------------------------------------------------------------------
