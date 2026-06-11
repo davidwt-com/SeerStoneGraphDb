@@ -31,7 +31,7 @@
 %%---------------------------------------------------------------------
 %% Rev A Date: April 2026 Author: (completion of Dallas Noyes's design)
 %% Initial implementation: compositional hierarchy over Mnesia.
-%% Provides create_instance/3, add_relationship/4, get_instance/1,
+%% Provides create_instance/3,4, add_relationship/4, get_instance/1,
 %% children/1, compositional_ancestors/1, resolve_value/2.
 %%---------------------------------------------------------------------
 -module(graphdb_instance).
@@ -498,14 +498,18 @@ fire_create(Name, ClassNref, ParentNref, Ctx) ->
 	case graphdb_rules:plan_composition_firing(?RULE_SCOPE, ClassNref) of
 		{ok, PlanTree} ->
 			case execute(Name, ClassNref, ParentNref, Ctx, PlanTree) of
-				{ok, RootNref, MandOutcomes, InstPlan} ->
+				{ok, RootNref, MandOutcomes, InstPlan, AutoConnPlan} ->
 					Ctx1 = bind_root_source(Ctx, RootNref),
-					AutoReport    = fire_auto(InstPlan, Ctx1),
-					ProposeReport = fire_propose(InstPlan,
-									maps:get(on_path, Ctx1)),
-					{ok, RootNref,
-					 merge_reports(merge_reports(MandOutcomes, AutoReport),
-								   ProposeReport)};
+					AutoReport     = fire_auto(InstPlan, Ctx1),
+					ProposeReport  = fire_propose(InstPlan,
+									 maps:get(on_path, Ctx1)),
+					ConnAutoReport = fire_connections(AutoConnPlan),
+					Merged = merge_reports(
+						merge_reports(
+							merge_reports(MandOutcomes, AutoReport),
+							ProposeReport),
+						ConnAutoReport),
+					{ok, RootNref, Merged};
 				{error, R, Report} ->
 					{error, R, Report}
 			end;
@@ -527,28 +531,144 @@ bind_root_source(Ctx, RootNref) ->
 	end.
 
 %%-----------------------------------------------------------------------------
-%% execute(RootName, RootClass, RootParent, OnPath, PlanTree)
-%%     -> {ok, RootNref, MandOutcomes, InstPlan} | {error, Reason, report()}
+%% execute(RootName, RootClass, RootParent, Ctx, PlanTree)
+%%     -> {ok, RootNref, MandOutcomes, InstPlan, AutoConnPlan}
+%%      | {error, Reason, report()}
 %%
-%% Allocates every node's nrefs/ids OUTSIDE the transaction, writes the
-%% root and the whole mandatory subtree in ONE Mnesia transaction.
+%% Allocates every node's nrefs/ids OUTSIDE the transaction, RESOLVEs the
+%% connection rules for the mandatory subtree (B4), then writes the root, the
+%% whole mandatory composition subtree, and any committed mandatory connection
+%% rows in ONE Mnesia transaction.  Returns the InstPlan plus the AutoConnPlan
+%% (the post-commit auto-connection write list — empty in this task).
 %%-----------------------------------------------------------------------------
-execute(RootName, _RootClass, RootParent, _Ctx, PlanTree) ->
+execute(RootName, _RootClass, RootParent, Ctx, PlanTree) ->
 	%% Annotate the plan tree with allocated nrefs (root uses caller's Name).
 	InstPlan = allocate_plan(PlanTree#{name => RootName}),
-	{Writes, Outcomes} = plan_writes(InstPlan, RootParent),
-	Txn = fun() ->
-		lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
-					  Writes)
-	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok} ->
-			{ok, maps:get(nref, InstPlan), Outcomes, InstPlan};
-		{aborted, R} ->
-			{error, R,
-			 report_not_attempted(R,
-				#{plan_so_far => PlanTree, culprit => undefined})}
+	{Writes, CompOutcomes} = plan_writes(InstPlan, RootParent),
+	RootNref = maps:get(nref, InstPlan),
+	Ctx1 = bind_root_source(Ctx, RootNref),
+	case resolve_connections(InstPlan, Ctx1) of
+		{ok, MandRows, AutoConnPlan, ConnReport} ->
+			Txn = fun() ->
+				lists:foreach(
+					fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
+					Writes ++ MandRows)
+			end,
+			case mnesia:transaction(Txn) of
+				{atomic, ok} ->
+					{ok, RootNref,
+					 merge_reports(CompOutcomes, ConnReport),
+					 InstPlan, AutoConnPlan};
+				{aborted, R} ->
+					{error, R,
+					 report_not_attempted(R,
+						#{plan_so_far => PlanTree, culprit => undefined})}
+			end;
+		{error, Reason, ConnReport} ->
+			%% Mandatory-connection shortfall in RESOLVE: nothing written (we
+			%% never entered the txn).  Composition subtree becomes
+			%% not_attempted; the connection culprit/siblings are in ConnReport.
+			CompNA = report_not_attempted(Reason,
+				#{plan_so_far => InstPlan, culprit => undefined}),
+			{error, Reason, merge_reports(CompNA, ConnReport)}
 	end.
+
+%%=============================================================================
+%% Connection Firing -- RESOLVE (B4)
+%%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% resolve_connections(InstPlan, Ctx)
+%%   -> {ok, MandRows, AutoConnPlan, ConnReport}
+%%    | {error, Reason, ConnReport}
+%%
+%% Walks the instantiated plan tree (root + mandatory composition descendants)
+%% pre-order; for each instance consults its effective connection rules.  In this
+%% task only the defer/propose branches are implemented (no writes); later tasks
+%% add the {connect, List} mandatory/auto branches.
+%%-----------------------------------------------------------------------------
+resolve_connections(InstPlan, Ctx) ->
+	Nodes = flatten_plan(InstPlan),
+	resolve_nodes(Nodes, Ctx, {[], [], []}).
+
+%% flatten_plan(InstPlanNode) -> [{Nref, ClassNref}]  (root first, pre-order)
+flatten_plan(#{nref := N, class := C, mandatory_children := Kids}) ->
+	[{N, C} | lists:flatmap(fun flatten_plan/1, Kids)].
+
+%% resolve_nodes(Nodes, Ctx, {MandRows, AutoPlan, Report})
+%% Rows/Auto/Report all accumulate in forward order (the connect branches
+%% append), so no reversal is needed; Mnesia write order within the txn is
+%% irrelevant.
+resolve_nodes([], _Ctx, {Rows, Auto, Rep}) ->
+	{ok, Rows, Auto, Rep};
+resolve_nodes([{SourceNref, Class} | Rest], Ctx, Acc) ->
+	{ok, ConnRules} =
+		graphdb_rules:effective_connection_rules(?RULE_SCOPE, Class),
+	case resolve_rules(ConnRules, SourceNref, Ctx, Acc) of
+		{ok, Acc1}          -> resolve_nodes(Rest, Ctx, Acc1);
+		{error, _, _} = Err -> Err
+	end.
+
+%% resolve_rules(Rules, SourceNref, Ctx, Acc) -> {ok, Acc'} | {error, R, Report}
+%% Acc = {MandRows, AutoPlan, Report}.  First-failure-aborts (mirrors plan_rules).
+resolve_rules([], _SourceNref, _Ctx, Acc) ->
+	{ok, Acc};
+resolve_rules([{Rule, Deploy, Spec} | Rest], SourceNref, Ctx, Acc) ->
+	Mode = maps:get(mode, Deploy, mandatory),
+	case Mode of
+		propose ->
+			%% propose connection rules are advisory: surface `proposed`, never
+			%% consult the resolver, never connect (mirrors B3 propose).
+			Acc1 = add_conn_outcome(Acc, Rule, Deploy,
+				conn_outcome_base(SourceNref, Spec, proposed)),
+			resolve_rules(Rest, SourceNref, Ctx, Acc1);
+		_ ->
+			Resolver = maps:get(resolver, Ctx),
+			case Resolver(conn_context(Rule, Deploy, Spec, SourceNref, Ctx)) of
+				defer ->
+					Status = case Mode of
+								 mandatory -> required;
+								 auto      -> not_connected
+							 end,
+					Acc1 = add_conn_outcome(Acc, Rule, Deploy,
+						conn_outcome_base(SourceNref, Spec, Status)),
+					resolve_rules(Rest, SourceNref, Ctx, Acc1)
+				%% {connect, List} clause added in a later task (mandatory/auto)
+			end
+	end.
+
+%% conn_context(Rule, Deploy, Spec, SourceNref, Ctx) -> ConnContext (B4-D2/D2a)
+conn_context(Rule, Deploy, Spec, SourceNref, Ctx) ->
+	#{rule             => Rule,
+	  characterization => maps:get(characterization, Spec),
+	  reciprocal       => maps:get(reciprocal, Spec),
+	  target_class     => maps:get(target_class, Spec),
+	  mode             => maps:get(mode, Deploy, mandatory),
+	  multiplicity     => maps:get(multiplicity, Deploy, {1, 1}),
+	  source           => SourceNref,
+	  root_parent      => maps:get(root_parent, Ctx),
+	  root_source      => maps:get(root_source, Ctx)}.
+
+%% conn_outcome_base(SourceNref, Spec, Status) -> connection_outcome()
+%% The shared shape for non-connect outcomes (required/not_connected/proposed):
+%% index 1, no target.
+conn_outcome_base(SourceNref, Spec, Status) ->
+	#{source => SourceNref, index => 1, status => Status,
+	  characterization => maps:get(characterization, Spec),
+	  target_class => maps:get(target_class, Spec)}.
+
+%% add_conn_outcome({Rows, Auto, Rep}, Rule, Deploy, Outcome) -> Acc'
+add_conn_outcome({Rows, Auto, Rep}, Rule, Deploy, Outcome) ->
+	{Rows, Auto, add_outcome(Rep, Rule, Deploy, Outcome)}.
+
+%%-----------------------------------------------------------------------------
+%% fire_connections(AutoConnPlan) -> report()
+%%
+%% POST-COMMIT best-effort writer for `auto` connections (B4).  Empty until a
+%% later B4 task; an empty plan yields an empty report.
+%%-----------------------------------------------------------------------------
+fire_connections([]) ->
+	[].
 
 %%-----------------------------------------------------------------------------
 %% allocate_plan(PlanNode) -> InstPlanNode (same tree + nref per node)
@@ -1474,10 +1594,13 @@ walk_not_attempted(#{mandatory_children := Kids}, Acc0) ->
 
 %%-----------------------------------------------------------------------------
 %% summarize(Report) -> #{fired => N, failed => M, not_attempted => K,
-%%                        proposed => P}
+%%                        proposed => P, connected => C, required => Rq,
+%%                        not_connected => Nc}
 %%-----------------------------------------------------------------------------
 summarize(Report) ->
 	Outs = [O || #{outcomes := Os} <- Report, O <- Os],
 	Count = fun(S) -> length([1 || #{status := X} <- Outs, X =:= S]) end,
 	#{fired => Count(fired), failed => Count(failed),
-	  not_attempted => Count(not_attempted), proposed => Count(proposed)}.
+	  not_attempted => Count(not_attempted), proposed => Count(proposed),
+	  connected => Count(connected), required => Count(required),
+	  not_connected => Count(not_connected)}.
