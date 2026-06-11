@@ -104,6 +104,7 @@
 	creates_connection_rule_minimal/1,
 	creates_connection_rule_with_template/1,
 	instance_to_class_membership_to_connection_rule/1,
+	connection_rule_stores_reciprocal/1,
 	%% validation
 	class_not_found_rejected/1,
 	not_a_class_rejected/1,
@@ -112,6 +113,7 @@
 	referenced_not_a_class_rejected/1,
 	characterization_not_found_rejected/1,
 	not_a_relationship_attribute_rejected/1,
+	reciprocal_not_a_relationship_attribute_rejected/1,
 	template_not_found_rejected/1,
 	not_a_template_rejected/1,
 	invalid_mode_rejected/1,
@@ -186,7 +188,8 @@ groups() ->
 		{connection, [], [
 			creates_connection_rule_minimal,
 			creates_connection_rule_with_template,
-			instance_to_class_membership_to_connection_rule
+			instance_to_class_membership_to_connection_rule,
+			connection_rule_stores_reciprocal
 		]},
 		{validation, [], [
 			class_not_found_rejected,
@@ -196,6 +199,7 @@ groups() ->
 			referenced_not_a_class_rejected,
 			characterization_not_found_rejected,
 			not_a_relationship_attribute_rejected,
+			reciprocal_not_a_relationship_attribute_rejected,
 			template_not_found_rejected,
 			not_a_template_rejected,
 			invalid_mode_rejected,
@@ -609,9 +613,9 @@ plan_propose_at_mandatory_child(Config) ->
 creates_connection_rule_minimal(_Config) ->
 	Source = make_class("Order"),
 	Target = make_class("Customer"),
-	Char   = make_rel_char("placed_by", "placed"),
+	{Char, Recip} = make_rel_pair("placed_by", "placed"),
 	{ok, RuleNref} = graphdb_rules:create_connection_rule(
-		environment, "order-placed-by-customer", Source, Char, Target,
+		environment, "order-placed-by-customer", Source, Char, Recip, Target,
 		mandatory, {1, 1}),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	CharAttr   = maps:get(characterization_nref_attr, S),
@@ -625,10 +629,10 @@ creates_connection_rule_minimal(_Config) ->
 creates_connection_rule_with_template(_Config) ->
 	Source = make_class("Order"),
 	Target = make_class("Customer"),
-	Char   = make_rel_char("placed_by", "placed"),
+	{Char, Recip} = make_rel_pair("placed_by", "placed"),
 	{ok, DT} = graphdb_class:default_template(Source),
 	{ok, RuleNref} = graphdb_rules:create_connection_rule(
-		environment, "order-placed-by-customer", Source, Char, Target,
+		environment, "order-placed-by-customer", Source, Char, Recip, Target,
 		propose, {1, unbounded}, DT),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	TemplateAttr = maps:get(template_nref_attr, S),
@@ -638,14 +642,26 @@ creates_connection_rule_with_template(_Config) ->
 instance_to_class_membership_to_connection_rule(_Config) ->
 	Source = make_class("Order"),
 	Target = make_class("Customer"),
-	Char   = make_rel_char("placed_by", "placed"),
+	{Char, Recip} = make_rel_pair("placed_by", "placed"),
 	{ok, RuleNref} = graphdb_rules:create_connection_rule(
-		environment, "order-placed-by-customer", Source, Char, Target,
+		environment, "order-placed-by-customer", Source, Char, Recip, Target,
 		mandatory, {1, 1}),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	Conn = maps:get(connection_rule, S),
 	I2C = read_arc(RuleNref, ?ARC_INST_TO_CLASS, Conn),
 	?assertEqual(instantiation, I2C#relationship.kind).
+
+connection_rule_stores_reciprocal(_Config) ->
+	Source = make_class("Order"),
+	Target = make_class("Customer"),
+	{Char, Recip} = make_rel_pair("placed_by", "placed"),
+	{ok, RuleNref} = graphdb_rules:create_connection_rule(
+		environment, "order-placed-by", Source, Char, Recip, Target,
+		mandatory, {1, 1}),
+	{ok, S} = graphdb_rules:seeded_nrefs(),
+	RecipAttr = maps:get(reciprocal_nref_attr, S),
+	{ok, #node{attribute_value_pairs = AVPs}} = node_read2(RuleNref),
+	?assert(lists:member(#{attribute => RecipAttr, value => Recip}, AVPs)).
 
 
 %%=============================================================================
@@ -700,10 +716,11 @@ referenced_not_a_class_rejected(_Config) ->
 characterization_not_found_rejected(_Config) ->
 	Source = make_class("Order"),
 	Target = make_class("Customer"),
+	Recip  = make_rel_char("placed", "placed_by"),
 	Before = table_size(nodes),
 	?assertEqual({error, characterization_not_found},
 		graphdb_rules:create_connection_rule(
-			environment, "x", Source, 999999, Target, mandatory, {1, 1})),
+			environment, "x", Source, 999999, Recip, Target, mandatory, {1, 1})),
 	?assertEqual(Before, table_size(nodes)).
 
 not_a_relationship_attribute_rejected(_Config) ->
@@ -711,10 +728,22 @@ not_a_relationship_attribute_rejected(_Config) ->
 	Target = make_class("Customer"),
 	%% a literal attribute, not a relationship attribute
 	{ok, Lit} = graphdb_attr:create_literal_attribute("weight", integer),
+	Recip  = make_rel_char("placed", "placed_by"),
 	Before = table_size(nodes),
 	?assertEqual({error, not_a_relationship_attribute},
 		graphdb_rules:create_connection_rule(
-			environment, "x", Source, Lit, Target, mandatory, {1, 1})),
+			environment, "x", Source, Lit, Recip, Target, mandatory, {1, 1})),
+	?assertEqual(Before, table_size(nodes)).
+
+reciprocal_not_a_relationship_attribute_rejected(_Config) ->
+	Source = make_class("Order"),
+	Target = make_class("Customer"),
+	Char   = make_rel_char("placed_by", "placed"),
+	{ok, Lit} = graphdb_attr:create_literal_attribute("weight2", integer),
+	Before = table_size(nodes),
+	?assertEqual({error, reciprocal_not_a_relationship_attribute},
+		graphdb_rules:create_connection_rule(
+			environment, "x", Source, Char, Lit, Target, mandatory, {1, 1})),
 	?assertEqual(Before, table_size(nodes)).
 
 template_not_found_rejected(_Config) ->
@@ -806,11 +835,11 @@ rules_for_class_returns_all_kinds(_Config) ->
 	Car   = make_class("Car"),
 	Eng   = make_class("Engine"),
 	Maker = make_class("Manufacturer"),
-	Char  = make_rel_char("made_by", "makes"),
+	{Char, Recip} = make_rel_pair("made_by", "makes"),
 	{ok, R1} = graphdb_rules:create_composition_rule(
 		environment, "has-engine", Car, Eng, mandatory, {1, 1}),
 	{ok, R2} = graphdb_rules:create_connection_rule(
-		environment, "made-by", Car, Char, Maker, mandatory, {1, 1}),
+		environment, "made-by", Car, Char, Recip, Maker, mandatory, {1, 1}),
 	{ok, Rules} = graphdb_rules:rules_for_class(environment, Car),
 	Nrefs = [N#node.nref || N <- Rules],
 	?assertEqual(lists:sort([R1, R2]), lists:sort(Nrefs)).
@@ -819,11 +848,11 @@ composition_rules_for_class_filters_by_kind(_Config) ->
 	Car   = make_class("Car"),
 	Eng   = make_class("Engine"),
 	Maker = make_class("Manufacturer"),
-	Char  = make_rel_char("made_by", "makes"),
+	{Char, Recip} = make_rel_pair("made_by", "makes"),
 	{ok, R1} = graphdb_rules:create_composition_rule(
 		environment, "has-engine", Car, Eng, mandatory, {1, 1}),
 	{ok, _R2} = graphdb_rules:create_connection_rule(
-		environment, "made-by", Car, Char, Maker, mandatory, {1, 1}),
+		environment, "made-by", Car, Char, Recip, Maker, mandatory, {1, 1}),
 	{ok, Comp} = graphdb_rules:composition_rules_for_class(environment, Car),
 	?assertEqual([R1], [N#node.nref || N <- Comp]).
 
@@ -831,11 +860,11 @@ connection_rules_for_class_filters_by_kind(_Config) ->
 	Car   = make_class("Car"),
 	Eng   = make_class("Engine"),
 	Maker = make_class("Manufacturer"),
-	Char  = make_rel_char("made_by", "makes"),
+	{Char, Recip} = make_rel_pair("made_by", "makes"),
 	{ok, _R1} = graphdb_rules:create_composition_rule(
 		environment, "has-engine", Car, Eng, mandatory, {1, 1}),
 	{ok, R2} = graphdb_rules:create_connection_rule(
-		environment, "made-by", Car, Char, Maker, mandatory, {1, 1}),
+		environment, "made-by", Car, Char, Recip, Maker, mandatory, {1, 1}),
 	{ok, Conn} = graphdb_rules:connection_rules_for_class(environment, Car),
 	?assertEqual([R2], [N#node.nref || N <- Conn]).
 
@@ -886,10 +915,10 @@ project_scope_rejected_on_create(_Config) ->
 			{project, 1}, "x", Parent, Child, mandatory, {1, 1})),
 	Source = make_class("Order"),
 	Target = make_class("Customer"),
-	Char   = make_rel_char("placed_by", "placed"),
+	{Char, Recip} = make_rel_pair("placed_by", "placed"),
 	?assertEqual({error, project_rules_not_yet_supported},
 		graphdb_rules:create_connection_rule(
-			{project, 1}, "x", Source, Char, Target, mandatory, {1, 1})).
+			{project, 1}, "x", Source, Char, Recip, Target, mandatory, {1, 1})).
 
 project_scope_returns_empty_on_retrieve(_Config) ->
 	Car = make_class("Car"),
@@ -918,8 +947,8 @@ mixed_rules_on_one_class(_Config) ->
 	Sun   = make_class("Sunroof"),
 	Maker = make_class("Manufacturer"),
 	Deal  = make_class("Dealer"),
-	MadeBy = make_rel_char("made_by", "makes"),
-	SoldBy = make_rel_char("sold_by", "sells"),
+	{MadeBy, MadeByRev} = make_rel_pair("made_by", "makes"),
+	{SoldBy, SoldByRev} = make_rel_pair("sold_by", "sells"),
 	{ok, DT} = graphdb_class:default_template(Car),
 	{ok, _} = graphdb_rules:create_composition_rule(
 		environment, "engine", Car, Eng, mandatory, {1, 1}),
@@ -928,9 +957,9 @@ mixed_rules_on_one_class(_Config) ->
 	{ok, _} = graphdb_rules:create_composition_rule(
 		environment, "sunroof", Car, Sun, propose, {1, 1}),
 	{ok, _} = graphdb_rules:create_connection_rule(
-		environment, "made-by", Car, MadeBy, Maker, mandatory, {1, 1}, DT),
+		environment, "made-by", Car, MadeBy, MadeByRev, Maker, mandatory, {1, 1}, DT),
 	{ok, _} = graphdb_rules:create_connection_rule(
-		environment, "sold-by", Car, SoldBy, Deal, propose, {1, unbounded}),
+		environment, "sold-by", Car, SoldBy, SoldByRev, Deal, propose, {1, unbounded}),
 	{ok, All}  = graphdb_rules:rules_for_class(environment, Car),
 	{ok, Comp} = graphdb_rules:composition_rules_for_class(environment, Car),
 	{ok, Conn} = graphdb_rules:connection_rules_for_class(environment, Car),
@@ -1112,11 +1141,11 @@ mixed_kinds_returned(_Config) ->
 	Car   = make_class("Car"),
 	Eng   = make_class("Engine"),
 	Maker = make_class("Manufacturer"),
-	Char  = make_rel_char("made_by", "makes"),
+	{Char, Recip} = make_rel_pair("made_by", "makes"),
 	{ok, RComp} = graphdb_rules:create_composition_rule(
 		environment, "has-engine", Car, Eng, mandatory, {1, 1}),
 	{ok, RConn} = graphdb_rules:create_connection_rule(
-		environment, "made-by", Car, Char, Maker, mandatory, {1, 1}),
+		environment, "made-by", Car, Char, Recip, Maker, mandatory, {1, 1}),
 	{ok, Levels} = graphdb_rules:effective_rules_for_class(environment, Car),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	Comp = maps:get(composition_rule, S),
@@ -1318,6 +1347,13 @@ make_rel_char(Name, Recip) ->
 	{ok, {Fwd, _Rev}} =
 		graphdb_attr:create_relationship_attribute_pair(Name, Recip, class),
 	Fwd.
+
+%% make_rel_pair(Name, Recip) -> {FwdNref, RevNref}
+%% Creates a reciprocal relationship-attribute pair and returns both nrefs.
+make_rel_pair(Name, Recip) ->
+	{ok, {Fwd, Rev}} =
+		graphdb_attr:create_relationship_attribute_pair(Name, Recip, instance),
+	{Fwd, Rev}.
 
 %% level_nrefs(Levels) -> [integer()]
 %% The ordered list of attaching-class nrefs in an effective_rules result.

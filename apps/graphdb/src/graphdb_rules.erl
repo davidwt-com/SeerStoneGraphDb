@@ -92,8 +92,8 @@
 		create_composition_rule/6,
 		create_composition_rule/7,
 		create_composition_rule/8,
-		create_connection_rule/7,
 		create_connection_rule/8,
+		create_connection_rule/9,
 		get_rule/2,
 		rules_for_class/2,
 		composition_rules_for_class/2,
@@ -188,30 +188,30 @@ create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult,
 		 Mode, Mult, TemplateNref, Opts}).
 
 %%-----------------------------------------------------------------------------
-%% create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
-%%                        Mult)
-%% create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
-%%                        Mult, TemplateNref)
+%% create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
+%%                        Mode, Mult)
+%% create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
+%%                        Mode, Mult, TemplateNref)
 %%     -> {ok, RuleNref} | {error, term()}
 %%
 %% Creates a connection rule: a kind=instance node whose class membership is
 %% the seeded ConnectionRule meta-class.  Rule content (characterization_nref,
-%% target_class_nref, optional template_nref) lives on the node; rule
-%% deployment (Template, mode, multiplicity) lives on the applies_to
-%% connection arc from the owning (source) class to the rule instance.  Scope
-%% environment writes to the shared ontology; {project, _} is not yet
-%% supported.
+%% reciprocal_nref, target_class_nref, optional template_nref) lives on the
+%% node; rule deployment (Template, mode, multiplicity) lives on the applies_to
+%% connection arc from the owning (source) class to the rule instance.  Recip is
+%% the reverse arc label (B4-D3): the arc as seen from the target back.  Scope
+%% environment writes to the shared ontology; {project, _} is not supported.
 %%-----------------------------------------------------------------------------
-create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
-					   Mult) ->
-	create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
-						   Mult, undefined).
+create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
+					   Mode, Mult) ->
+	create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
+						   Mode, Mult, undefined).
 
-create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
-					   Mult, TemplateNref) ->
+create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
+					   Mode, Mult, TemplateNref) ->
 	gen_server:call(?MODULE,
-		{create_connection_rule, Scope, Name, SourceClass, Char, TargetClass,
-		 Mode, Mult, TemplateNref}).
+		{create_connection_rule, Scope, Name, SourceClass, Char, Recip,
+		 TargetClass, Mode, Mult, TemplateNref}).
 
 %%-----------------------------------------------------------------------------
 %% get_rule(Scope, RuleNref) -> {ok, #node{}} | not_found
@@ -420,12 +420,14 @@ handle_call({create_composition_rule, {project, _}, _, _, _, _, _, _, _},
 			_From, State) ->
 	{reply, {error, project_rules_not_yet_supported}, State};
 handle_call({create_connection_rule, environment, Name, SourceClass, Char,
-			 TargetClass, Mode, Mult, TemplateNref}, _From, State) ->
-	Reply = case validate_connection(SourceClass, Char, TargetClass, Mode,
-									 Mult, TemplateNref) of
+			 Recip, TargetClass, Mode, Mult, TemplateNref}, _From, State) ->
+	Reply = case validate_connection(SourceClass, Char, Recip, TargetClass,
+									 Mode, Mult, TemplateNref) of
 		ok ->
 			ContentAVPs = [#{attribute => State#state.characterization_nref_attr,
 							 value => Char},
+						   #{attribute => State#state.reciprocal_nref_attr,
+							 value => Recip},
 						   #{attribute => State#state.target_class_nref_attr,
 							 value => TargetClass}
 						   | optional_template_avp(TemplateNref, State)],
@@ -435,7 +437,7 @@ handle_call({create_connection_rule, environment, Name, SourceClass, Char,
 			Err
 	end,
 	{reply, Reply, State};
-handle_call({create_connection_rule, {project, _}, _, _, _, _, _, _, _},
+handle_call({create_connection_rule, {project, _}, _, _, _, _, _, _, _, _},
 			_From, State) ->
 	{reply, {error, project_rules_not_yet_supported}, State};
 handle_call({get_rule, environment, RuleNref}, _From, State) ->
@@ -613,15 +615,17 @@ validate_composition(ParentClass, ChildClass, Mode, Mult, TemplateNref) ->
 		fun() -> validate_template(TemplateNref) end
 	]).
 
-%% validate_connection(SourceClass, Char, TargetClass, Mode, Mult,
+%% validate_connection(SourceClass, Char, Recip, TargetClass, Mode, Mult,
 %%                     TemplateNref) -> ok | {error, atom()}
-validate_connection(SourceClass, Char, TargetClass, Mode, Mult, TemplateNref) ->
+validate_connection(SourceClass, Char, Recip, TargetClass, Mode, Mult,
+					TemplateNref) ->
 	chain([
 		fun() -> validate_mode(Mode) end,
 		fun() -> validate_multiplicity(Mult) end,
 		fun() -> validate_owning_class(SourceClass) end,
 		fun() -> validate_referenced_class(TargetClass) end,
 		fun() -> validate_characterization(Char) end,
+		fun() -> validate_reciprocal(Recip) end,
 		fun() -> validate_template(TemplateNref) end
 	]).
 
@@ -687,6 +691,19 @@ validate_characterization(Nref) ->
 			case graphdb_attr:attribute_type_of(Nref) of
 				{ok, relationship} -> ok;
 				_                  -> {error, not_a_relationship_attribute}
+			end
+	end.
+
+%% validate_reciprocal(Nref) -> ok | {error, atom()}
+%% The reciprocal must exist and be a relationship attribute.
+validate_reciprocal(Nref) ->
+	case mnesia:dirty_read(nodes, Nref) of
+		[] ->
+			{error, reciprocal_not_found};
+		[#node{}] ->
+			case graphdb_attr:attribute_type_of(Nref) of
+				{ok, relationship} -> ok;
+				_                  -> {error, reciprocal_not_a_relationship_attribute}
 			end
 	end.
 
