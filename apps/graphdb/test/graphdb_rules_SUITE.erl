@@ -108,6 +108,7 @@
 	not_a_template_rejected/1,
 	invalid_mode_rejected/1,
 	invalid_multiplicity_rejected/1,
+	multiplicity_range_validation/1,
 	failed_validation_consumes_no_nref/1,
 	%% retrieval
 	rules_for_class_returns_all_kinds/1,
@@ -190,6 +191,7 @@ groups() ->
 			not_a_template_rejected,
 			invalid_mode_rejected,
 			invalid_multiplicity_rejected,
+			multiplicity_range_validation,
 			failed_validation_consumes_no_nref
 		]},
 		{retrieval, [], [
@@ -733,6 +735,31 @@ invalid_multiplicity_rejected(_Config) ->
 		graphdb_rules:create_composition_rule(
 			environment, "x", Parent, Child, mandatory, "lots")),
 	?assertEqual(Before, table_size(nodes)).
+
+%% B-prep BP-D4: the {Min, Max} validation catalogue.
+multiplicity_range_validation(_Config) ->
+	Parent = make_class("Car"),
+	Child  = make_class("Engine"),
+	Ok = fun(Mult) ->
+		{ok, _} = graphdb_rules:create_composition_rule(
+			environment, "ok", Parent, Child, auto, Mult)
+	end,
+	Bad = fun(Mult) ->
+		?assertEqual({error, invalid_multiplicity},
+			graphdb_rules:create_composition_rule(
+				environment, "bad", Parent, Child, auto, Mult))
+	end,
+	%% accepted
+	Ok({1, 1}),
+	Ok({0, 3}),
+	Ok({2, unbounded}),
+	%% rejected
+	Bad({3, 1}),        %% Max < Min
+	Bad({1, 0}),        %% Max < 1
+	Bad({0, 0}),        %% Max < 1
+	Bad(5),             %% bare integer
+	Bad(unbounded),     %% bare unbounded
+	Bad({a, b}).        %% non-integers
 
 failed_validation_consumes_no_nref(_Config) ->
 	Parent = make_class("Car"),
