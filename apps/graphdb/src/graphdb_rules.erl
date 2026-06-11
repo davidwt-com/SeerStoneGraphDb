@@ -99,6 +99,7 @@
 		composition_rules_for_class/2,
 		connection_rules_for_class/2,
 		effective_rules_for_class/2,
+		effective_connection_rules/2,
 		list_rules/1,
 		plan_composition_firing/2,
 		rule_child_class/1,
@@ -267,6 +268,22 @@ connection_rules_for_class(Scope, ClassNref) ->
 %%-----------------------------------------------------------------------------
 effective_rules_for_class(Scope, ClassNref) ->
 	gen_server:call(?MODULE, {effective_rules_for_class, Scope, ClassNref}).
+
+%%-----------------------------------------------------------------------------
+%% effective_connection_rules(Scope, ClassNref) ->
+%%     {ok, [{RuleNode :: #node{}, Deployment :: map(),
+%%            ConnSpec :: #{characterization := integer(),
+%%                          reciprocal := integer(),
+%%                          target_class := integer()}}]}
+%%
+%% The effective rules of ClassNref (self + taxonomy ancestors, nearest-first;
+%% B1) filtered to the ConnectionRule meta-class, each paired with its applies_to
+%% deployment and a ConnSpec decoded from the rule node's content AVPs.  The B4
+%% firing engine consumes this during create_instance.  Additive -- a rule reached
+%% from two ancestors appears twice (precedence is B5).  {project, _} -> {ok, []}.
+%%-----------------------------------------------------------------------------
+effective_connection_rules(Scope, ClassNref) ->
+	gen_server:call(?MODULE, {effective_connection_rules, Scope, ClassNref}).
 
 %%-----------------------------------------------------------------------------
 %% list_rules(Scope) -> {ok, [#node{}]}
@@ -460,6 +477,10 @@ handle_call({rules_for_class, {project, _}, _}, _From, State) ->
 handle_call({effective_rules_for_class, environment, ClassNref}, _From, State) ->
 	{reply, {ok, effective_rules(ClassNref, State)}, State};
 handle_call({effective_rules_for_class, {project, _}, _}, _From, State) ->
+	{reply, {ok, []}, State};
+handle_call({effective_connection_rules, environment, ClassNref}, _From, State) ->
+	{reply, {ok, connection_specs(ClassNref, State)}, State};
+handle_call({effective_connection_rules, {project, _}, _}, _From, State) ->
 	{reply, {ok, []}, State};
 handle_call({rules_for_class_kind, environment, ClassNref, MetaKey}, _From,
 			State) ->
@@ -937,6 +958,28 @@ composition_pairs(ClassNref, State) ->
 %% is_composition_rule(Node, State) -> boolean()
 is_composition_rule(#node{classes = Classes}, State) ->
 	lists:member(State#state.composition_rule_nref, Classes).
+
+%% connection_specs(ClassNref, State) -> [{#node{}, Deployment, ConnSpec}]
+%% Effective rules (self + ancestors, nearest-first) filtered to ConnectionRule,
+%% each paired with its deployment and decoded content spec.  Order preserved.
+connection_specs(ClassNref, State) ->
+	[ {RuleNode, Deploy, connection_spec(RuleNode, State)}
+	  || {_Level, Pairs} <- effective_rules(ClassNref, State),
+		 {RuleNode, Deploy} <- Pairs,
+		 is_connection_rule(RuleNode, State) ].
+
+%% is_connection_rule(Node, State) -> boolean()
+is_connection_rule(#node{classes = Classes}, State) ->
+	lists:member(State#state.connection_rule_nref, Classes).
+
+%% connection_spec(RuleNode, State) -> #{characterization, reciprocal, target_class}
+connection_spec(RuleNode, State) ->
+	#{characterization =>
+		  content_avp_value(RuleNode, State#state.characterization_nref_attr),
+	  reciprocal =>
+		  content_avp_value(RuleNode, State#state.reciprocal_nref_attr),
+	  target_class =>
+		  content_avp_value(RuleNode, State#state.target_class_nref_attr)}.
 
 %% plan_rules(Pairs, OnPath1, State, Acc) -> {ok, PlanNode} | {error, R, Failure}
 %% First-failure-aborts (B2-D6): a mandatory violation stops planning.

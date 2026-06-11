@@ -57,6 +57,15 @@
 ]).
 
 %%---------------------------------------------------------------------
+%% Effective connection-rule test case exports (B4 Task 3)
+%%---------------------------------------------------------------------
+-export([
+	effective_connection_rules_returns_specs/1,
+	effective_connection_rules_excludes_composition/1,
+	effective_connection_rules_project_scope_empty/1
+]).
+
+%%---------------------------------------------------------------------
 %% Plan firing test case exports (B2 Task 3)
 %%---------------------------------------------------------------------
 -export([
@@ -230,7 +239,10 @@ groups() ->
 			mixed_kinds_returned,
 			project_scope_empty,
 			unknown_class_empty,
-			non_class_nref_empty
+			non_class_nref_empty,
+			effective_connection_rules_returns_specs,
+			effective_connection_rules_excludes_composition,
+			effective_connection_rules_project_scope_empty
 		]},
 		{cache_audit, [], [
 			verify_caches_passes_after_rule_creation
@@ -1179,6 +1191,36 @@ non_class_nref_empty(_Config) ->
 	%% ancestors/1 -> {error, not_a_class}, mapped to [].
 	?assertEqual({ok, []},
 		graphdb_rules:effective_rules_for_class(environment, ?NREF_NAMES)).
+
+effective_connection_rules_returns_specs(_Config) ->
+	Source = make_class("Car"),
+	Target = make_class("Manufacturer"),
+	{Char, Recip} = make_rel_pair("made_by", "manufactures"),
+	{ok, RuleNref} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Source, Char, Recip, Target,
+		mandatory, {1, 1}),
+	{ok, Triples} = graphdb_rules:effective_connection_rules(environment, Source),
+	[{RuleNode, Deploy, Spec}] = Triples,
+	?assertEqual(RuleNref, RuleNode#node.nref),
+	?assertEqual(mandatory, maps:get(mode, Deploy)),
+	?assertEqual({1, 1}, maps:get(multiplicity, Deploy)),
+	?assertEqual(Char,   maps:get(characterization, Spec)),
+	?assertEqual(Recip,  maps:get(reciprocal, Spec)),
+	?assertEqual(Target, maps:get(target_class, Spec)).
+
+effective_connection_rules_excludes_composition(_Config) ->
+	Parent = make_class("Engine"),
+	Child  = make_class("Cylinder"),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "EC", Parent, Child, mandatory, {1, 1}),
+	%% a composition rule must NOT appear among connection rules
+	?assertEqual({ok, []},
+		graphdb_rules:effective_connection_rules(environment, Parent)).
+
+effective_connection_rules_project_scope_empty(_Config) ->
+	Source = make_class("Car"),
+	?assertEqual({ok, []},
+		graphdb_rules:effective_connection_rules({project, p1}, Source)).
 
 
 %%=============================================================================
