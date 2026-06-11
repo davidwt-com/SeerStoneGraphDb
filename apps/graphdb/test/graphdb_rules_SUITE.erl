@@ -76,6 +76,13 @@
 ]).
 
 %%---------------------------------------------------------------------
+%% B4 Task 1 test case exports
+%%---------------------------------------------------------------------
+-export([
+	seeds_reciprocal_literal/1
+]).
+
+%%---------------------------------------------------------------------
 %% Test cases
 %%---------------------------------------------------------------------
 -export([
@@ -86,6 +93,7 @@
 	seeds_applies_to_pair/1,
 	seeded_nrefs_returns_all_thirteen/1,
 	name_pattern_is_seeded/1,
+	seeds_reciprocal_literal/1,
 	%% composition
 	creates_composition_rule_minimal/1,
 	creates_composition_rule_with_template/1,
@@ -164,7 +172,8 @@ groups() ->
 			seeds_literal_attributes_under_rule_literals,
 			seeds_applies_to_pair,
 			seeded_nrefs_returns_all_thirteen,
-			name_pattern_is_seeded
+			name_pattern_is_seeded,
+			seeds_reciprocal_literal
 		]},
 		{composition, [], [
 			creates_composition_rule_minimal,
@@ -430,6 +439,7 @@ seeded_nrefs_returns_all_thirteen(_Config) ->
 				applies_to, applied_by, rule_literals_group,
 				child_class_nref_attr, target_class_nref_attr,
 				template_nref_attr, characterization_nref_attr,
+				reciprocal_nref_attr,
 				mode_attr, multiplicity_attr, name_pattern],
 	lists:foreach(fun(K) -> ?assert(maps:is_key(K, S)) end, Expected),
 	?assertEqual(length(Expected), maps:size(S)).
@@ -442,6 +452,17 @@ name_pattern_is_seeded(_Config) ->
 	%% it lives under the Rule Literals group
 	RuleLit = maps:get(rule_literals_group, Seeds),
 	{ok, NP} = graphdb_attr:find_attribute_by_name(RuleLit, "name_pattern").
+
+seeds_reciprocal_literal(_Config) ->
+	{ok, S} = graphdb_rules:seeded_nrefs(),
+	Recip = maps:get(reciprocal_nref_attr, S),
+	?assert(is_integer(Recip)),
+	%% distinct from the characterization literal it sits beside
+	?assertNotEqual(maps:get(characterization_nref_attr, S), Recip),
+	%% it is a child of the Rule Literals sub-group
+	RuleLit = maps:get(rule_literals_group, S),
+	{ok, Recip2} = graphdb_attr:find_attribute_by_name(RuleLit, "reciprocal_nref"),
+	?assertEqual(Recip, Recip2).
 
 
 %%=============================================================================

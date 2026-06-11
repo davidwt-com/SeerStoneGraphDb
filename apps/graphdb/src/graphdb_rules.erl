@@ -132,6 +132,7 @@
 	target_class_nref_attr,
 	template_nref_attr,
 	characterization_nref_attr,
+	reciprocal_nref_attr,
 	mode_attr,
 	multiplicity_attr,
 	name_pattern_attr
@@ -148,7 +149,7 @@ start_link() ->
 %%-----------------------------------------------------------------------------
 %% seeded_nrefs() -> {ok, #{rule => integer(), ...}}
 %%
-%% Returns the twelve nrefs this worker seeded/located at init/1, keyed
+%% Returns the thirteen nrefs this worker seeded/located at init/1, keyed
 %% by stable atom names shared with the design and the test suite.
 %%-----------------------------------------------------------------------------
 seeded_nrefs() ->
@@ -340,6 +341,7 @@ init([]) ->
 		TargetClassAttr= ensure_seed("target_class_nref",     RuleLitGrp),
 		TemplateAttr   = ensure_seed("template_nref",         RuleLitGrp),
 		CharAttr       = ensure_seed("characterization_nref", RuleLitGrp),
+		ReciprocalAttr = ensure_seed("reciprocal_nref",       RuleLitGrp),
 		ModeAttr       = ensure_seed("mode",                  RuleLitGrp),
 		MultAttr       = ensure_seed("multiplicity",          RuleLitGrp),
 		NamePatternAttr= ensure_seed("name_pattern",          RuleLitGrp),
@@ -367,6 +369,7 @@ init([]) ->
 			target_class_nref_attr     = TargetClassAttr,
 			template_nref_attr         = TemplateAttr,
 			characterization_nref_attr = CharAttr,
+			reciprocal_nref_attr       = ReciprocalAttr,
 			mode_attr                  = ModeAttr,
 			multiplicity_attr          = MultAttr,
 			name_pattern_attr          = NamePatternAttr
@@ -393,6 +396,7 @@ handle_call(seeded_nrefs, _From, State) ->
 		target_class_nref_attr     => State#state.target_class_nref_attr,
 		template_nref_attr         => State#state.template_nref_attr,
 		characterization_nref_attr => State#state.characterization_nref_attr,
+		reciprocal_nref_attr       => State#state.reciprocal_nref_attr,
 		mode_attr                  => State#state.mode_attr,
 		multiplicity_attr          => State#state.multiplicity_attr,
 		name_pattern               => State#state.name_pattern_attr
