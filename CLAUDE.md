@@ -275,7 +275,7 @@ A logical bidirectional edge is two `relationship` rows written atomically (one 
 
 These are outstanding items — all previously known bugs have been fixed.
 
-- **`graphdb_rules` rule-firing engine** — F4 Phase A (rule meta-ontology + create/retrieve data model) is implemented; the firing engine (Phases B–F) remains outstanding (TASKS.md F4)
+- **`graphdb_rules` rule-firing engine** — F4 Phases A, B1, B2, B3, and B4 are implemented (rule meta-ontology + create/retrieve; taxonomy walk; composition firing; propose mode; connection firing). Phase B5 (precedence) and Phases C–F remain outstanding (TASKS.md F4)
 - **`graphdb_mgr` write operations** — `create_attribute/3`, `create_class/2`, `create_instance/3`, `add_relationship/4`, `delete_node/1`, `update_node_avps/2` return `{error, not_implemented}` pending L4 routing work
 - **`dictionary_server` and `term_server`** — stubs not yet wired to `dictionary_imp` (TASKS.md Task 7)
 - **`seerstone:start/2` and `nref:start/2`**, **`code_change/3`** — deferred (TASKS.md E2, E3)

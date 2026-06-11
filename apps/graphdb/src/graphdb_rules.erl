@@ -92,13 +92,14 @@
 		create_composition_rule/6,
 		create_composition_rule/7,
 		create_composition_rule/8,
-		create_connection_rule/7,
 		create_connection_rule/8,
+		create_connection_rule/9,
 		get_rule/2,
 		rules_for_class/2,
 		composition_rules_for_class/2,
 		connection_rules_for_class/2,
 		effective_rules_for_class/2,
+		effective_connection_rules/2,
 		list_rules/1,
 		plan_composition_firing/2,
 		rule_child_class/1,
@@ -132,6 +133,7 @@
 	target_class_nref_attr,
 	template_nref_attr,
 	characterization_nref_attr,
+	reciprocal_nref_attr,
 	mode_attr,
 	multiplicity_attr,
 	name_pattern_attr
@@ -148,7 +150,7 @@ start_link() ->
 %%-----------------------------------------------------------------------------
 %% seeded_nrefs() -> {ok, #{rule => integer(), ...}}
 %%
-%% Returns the twelve nrefs this worker seeded/located at init/1, keyed
+%% Returns the thirteen nrefs this worker seeded/located at init/1, keyed
 %% by stable atom names shared with the design and the test suite.
 %%-----------------------------------------------------------------------------
 seeded_nrefs() ->
@@ -187,30 +189,30 @@ create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult,
 		 Mode, Mult, TemplateNref, Opts}).
 
 %%-----------------------------------------------------------------------------
-%% create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
-%%                        Mult)
-%% create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
-%%                        Mult, TemplateNref)
+%% create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
+%%                        Mode, Mult)
+%% create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
+%%                        Mode, Mult, TemplateNref)
 %%     -> {ok, RuleNref} | {error, term()}
 %%
 %% Creates a connection rule: a kind=instance node whose class membership is
 %% the seeded ConnectionRule meta-class.  Rule content (characterization_nref,
-%% target_class_nref, optional template_nref) lives on the node; rule
-%% deployment (Template, mode, multiplicity) lives on the applies_to
-%% connection arc from the owning (source) class to the rule instance.  Scope
-%% environment writes to the shared ontology; {project, _} is not yet
-%% supported.
+%% reciprocal_nref, target_class_nref, optional template_nref) lives on the
+%% node; rule deployment (Template, mode, multiplicity) lives on the applies_to
+%% connection arc from the owning (source) class to the rule instance.  Recip is
+%% the reverse arc label (B4-D3): the arc as seen from the target back.  Scope
+%% environment writes to the shared ontology; {project, _} is not supported.
 %%-----------------------------------------------------------------------------
-create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
-					   Mult) ->
-	create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
-						   Mult, undefined).
+create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
+					   Mode, Mult) ->
+	create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
+						   Mode, Mult, undefined).
 
-create_connection_rule(Scope, Name, SourceClass, Char, TargetClass, Mode,
-					   Mult, TemplateNref) ->
+create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
+					   Mode, Mult, TemplateNref) ->
 	gen_server:call(?MODULE,
-		{create_connection_rule, Scope, Name, SourceClass, Char, TargetClass,
-		 Mode, Mult, TemplateNref}).
+		{create_connection_rule, Scope, Name, SourceClass, Char, Recip,
+		 TargetClass, Mode, Mult, TemplateNref}).
 
 %%-----------------------------------------------------------------------------
 %% get_rule(Scope, RuleNref) -> {ok, #node{}} | not_found
@@ -266,6 +268,22 @@ connection_rules_for_class(Scope, ClassNref) ->
 %%-----------------------------------------------------------------------------
 effective_rules_for_class(Scope, ClassNref) ->
 	gen_server:call(?MODULE, {effective_rules_for_class, Scope, ClassNref}).
+
+%%-----------------------------------------------------------------------------
+%% effective_connection_rules(Scope, ClassNref) ->
+%%     {ok, [{RuleNode :: #node{}, Deployment :: map(),
+%%            ConnSpec :: #{characterization := integer(),
+%%                          reciprocal := integer(),
+%%                          target_class := integer()}}]}
+%%
+%% The effective rules of ClassNref (self + taxonomy ancestors, nearest-first;
+%% B1) filtered to the ConnectionRule meta-class, each paired with its applies_to
+%% deployment and a ConnSpec decoded from the rule node's content AVPs.  The B4
+%% firing engine consumes this during create_instance.  Additive -- a rule reached
+%% from two ancestors appears twice (precedence is B5).  {project, _} -> {ok, []}.
+%%-----------------------------------------------------------------------------
+effective_connection_rules(Scope, ClassNref) ->
+	gen_server:call(?MODULE, {effective_connection_rules, Scope, ClassNref}).
 
 %%-----------------------------------------------------------------------------
 %% list_rules(Scope) -> {ok, [#node{}]}
@@ -340,6 +358,7 @@ init([]) ->
 		TargetClassAttr= ensure_seed("target_class_nref",     RuleLitGrp),
 		TemplateAttr   = ensure_seed("template_nref",         RuleLitGrp),
 		CharAttr       = ensure_seed("characterization_nref", RuleLitGrp),
+		ReciprocalAttr = ensure_seed("reciprocal_nref",       RuleLitGrp),
 		ModeAttr       = ensure_seed("mode",                  RuleLitGrp),
 		MultAttr       = ensure_seed("multiplicity",          RuleLitGrp),
 		NamePatternAttr= ensure_seed("name_pattern",          RuleLitGrp),
@@ -367,6 +386,7 @@ init([]) ->
 			target_class_nref_attr     = TargetClassAttr,
 			template_nref_attr         = TemplateAttr,
 			characterization_nref_attr = CharAttr,
+			reciprocal_nref_attr       = ReciprocalAttr,
 			mode_attr                  = ModeAttr,
 			multiplicity_attr          = MultAttr,
 			name_pattern_attr          = NamePatternAttr
@@ -393,6 +413,7 @@ handle_call(seeded_nrefs, _From, State) ->
 		target_class_nref_attr     => State#state.target_class_nref_attr,
 		template_nref_attr         => State#state.template_nref_attr,
 		characterization_nref_attr => State#state.characterization_nref_attr,
+		reciprocal_nref_attr       => State#state.reciprocal_nref_attr,
 		mode_attr                  => State#state.mode_attr,
 		multiplicity_attr          => State#state.multiplicity_attr,
 		name_pattern               => State#state.name_pattern_attr
@@ -416,12 +437,14 @@ handle_call({create_composition_rule, {project, _}, _, _, _, _, _, _, _},
 			_From, State) ->
 	{reply, {error, project_rules_not_yet_supported}, State};
 handle_call({create_connection_rule, environment, Name, SourceClass, Char,
-			 TargetClass, Mode, Mult, TemplateNref}, _From, State) ->
-	Reply = case validate_connection(SourceClass, Char, TargetClass, Mode,
-									 Mult, TemplateNref) of
+			 Recip, TargetClass, Mode, Mult, TemplateNref}, _From, State) ->
+	Reply = case validate_connection(SourceClass, Char, Recip, TargetClass,
+									 Mode, Mult, TemplateNref) of
 		ok ->
 			ContentAVPs = [#{attribute => State#state.characterization_nref_attr,
 							 value => Char},
+						   #{attribute => State#state.reciprocal_nref_attr,
+							 value => Recip},
 						   #{attribute => State#state.target_class_nref_attr,
 							 value => TargetClass}
 						   | optional_template_avp(TemplateNref, State)],
@@ -431,7 +454,7 @@ handle_call({create_connection_rule, environment, Name, SourceClass, Char,
 			Err
 	end,
 	{reply, Reply, State};
-handle_call({create_connection_rule, {project, _}, _, _, _, _, _, _, _},
+handle_call({create_connection_rule, {project, _}, _, _, _, _, _, _, _, _},
 			_From, State) ->
 	{reply, {error, project_rules_not_yet_supported}, State};
 handle_call({get_rule, environment, RuleNref}, _From, State) ->
@@ -454,6 +477,10 @@ handle_call({rules_for_class, {project, _}, _}, _From, State) ->
 handle_call({effective_rules_for_class, environment, ClassNref}, _From, State) ->
 	{reply, {ok, effective_rules(ClassNref, State)}, State};
 handle_call({effective_rules_for_class, {project, _}, _}, _From, State) ->
+	{reply, {ok, []}, State};
+handle_call({effective_connection_rules, environment, ClassNref}, _From, State) ->
+	{reply, {ok, connection_specs(ClassNref, State)}, State};
+handle_call({effective_connection_rules, {project, _}, _}, _From, State) ->
 	{reply, {ok, []}, State};
 handle_call({rules_for_class_kind, environment, ClassNref, MetaKey}, _From,
 			State) ->
@@ -609,15 +636,17 @@ validate_composition(ParentClass, ChildClass, Mode, Mult, TemplateNref) ->
 		fun() -> validate_template(TemplateNref) end
 	]).
 
-%% validate_connection(SourceClass, Char, TargetClass, Mode, Mult,
+%% validate_connection(SourceClass, Char, Recip, TargetClass, Mode, Mult,
 %%                     TemplateNref) -> ok | {error, atom()}
-validate_connection(SourceClass, Char, TargetClass, Mode, Mult, TemplateNref) ->
+validate_connection(SourceClass, Char, Recip, TargetClass, Mode, Mult,
+					TemplateNref) ->
 	chain([
 		fun() -> validate_mode(Mode) end,
 		fun() -> validate_multiplicity(Mult) end,
 		fun() -> validate_owning_class(SourceClass) end,
 		fun() -> validate_referenced_class(TargetClass) end,
 		fun() -> validate_characterization(Char) end,
+		fun() -> validate_reciprocal(Recip) end,
 		fun() -> validate_template(TemplateNref) end
 	]).
 
@@ -683,6 +712,19 @@ validate_characterization(Nref) ->
 			case graphdb_attr:attribute_type_of(Nref) of
 				{ok, relationship} -> ok;
 				_                  -> {error, not_a_relationship_attribute}
+			end
+	end.
+
+%% validate_reciprocal(Nref) -> ok | {error, atom()}
+%% The reciprocal must exist and be a relationship attribute.
+validate_reciprocal(Nref) ->
+	case mnesia:dirty_read(nodes, Nref) of
+		[] ->
+			{error, reciprocal_not_found};
+		[#node{}] ->
+			case graphdb_attr:attribute_type_of(Nref) of
+				{ok, relationship} -> ok;
+				_                  -> {error, reciprocal_not_a_relationship_attribute}
 			end
 	end.
 
@@ -916,6 +958,28 @@ composition_pairs(ClassNref, State) ->
 %% is_composition_rule(Node, State) -> boolean()
 is_composition_rule(#node{classes = Classes}, State) ->
 	lists:member(State#state.composition_rule_nref, Classes).
+
+%% connection_specs(ClassNref, State) -> [{#node{}, Deployment, ConnSpec}]
+%% Effective rules (self + ancestors, nearest-first) filtered to ConnectionRule,
+%% each paired with its deployment and decoded content spec.  Order preserved.
+connection_specs(ClassNref, State) ->
+	[ {RuleNode, Deploy, connection_spec(RuleNode, State)}
+	  || {_Level, Pairs} <- effective_rules(ClassNref, State),
+		 {RuleNode, Deploy} <- Pairs,
+		 is_connection_rule(RuleNode, State) ].
+
+%% is_connection_rule(Node, State) -> boolean()
+is_connection_rule(#node{classes = Classes}, State) ->
+	lists:member(State#state.connection_rule_nref, Classes).
+
+%% connection_spec(RuleNode, State) -> #{characterization, reciprocal, target_class}
+connection_spec(RuleNode, State) ->
+	#{characterization =>
+		  content_avp_value(RuleNode, State#state.characterization_nref_attr),
+	  reciprocal =>
+		  content_avp_value(RuleNode, State#state.reciprocal_nref_attr),
+	  target_class =>
+		  content_avp_value(RuleNode, State#state.target_class_nref_attr)}.
 
 %% plan_rules(Pairs, OnPath1, State, Acc) -> {ok, PlanNode} | {error, R, Failure}
 %% First-failure-aborts (B2-D6): a mandatory violation stops planning.

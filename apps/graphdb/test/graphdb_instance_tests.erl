@@ -116,5 +116,6 @@ summarize_counts_test() ->
 	R2 = graphdb_instance:add_outcome(R1, Rule, Dep,
 			#{owner => 5, index => 1, status => proposed, proposed_class => 9,
 			  name => "P"}),
-	?assertEqual(#{fired => 1, failed => 1, not_attempted => 0, proposed => 1},
+	?assertEqual(#{fired => 1, failed => 1, not_attempted => 0, proposed => 1,
+				   connected => 0, required => 0, not_connected => 0},
 				 graphdb_instance:summarize(R2)).

@@ -5,7 +5,24 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 # F4 Phase B / Division B4 — Connection Firing Engine — Design
 
-**Status:** Specified. No implementation has begun.
+**Status:** Implemented. See plan
+`docs/superpowers/plans/2026-06-11-f4-phase-b4-connection-firing.md`.
+
+**Known report-completeness limitations (deferred, documented per the
+implementation review):**
+
+- An EXECUTE-transaction abort renders composition outcomes `not_attempted`
+  but does not separately render planned connection outcomes (parity with
+  B2's untested abort path).
+- If a mandatory-connection shortfall aborts a create that also had an
+  *earlier* `auto` connection rule queued on the same source, that auto
+  rule's queued connection is dropped with no `not_attempted` outcome.
+- The auto post-commit path asserts a `connected` outcome on a successful
+  forward+reverse write but tests only the forward arc (mandatory tests both
+  directions).
+
+These are report-fidelity gaps on rare paths, not engine-correctness bugs;
+no machinery was built for them.
 
 **Parent design:** `docs/designs/f4-graphdb-rules-design.md` (F4 Phase A
 landed; B1 landed via PR #33; B2 landed via PR #34; B3 landed via PR #35).

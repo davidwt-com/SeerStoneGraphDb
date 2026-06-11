@@ -150,7 +150,29 @@
 	firing_mandatory_min_zero_mints_none/1,
 	firing_mandatory_min_unbounded_mints_min/1,
 	firing_auto_mints_min/1,
-	firing_auto_min_zero_unbounded/1
+	firing_auto_min_zero_unbounded/1,
+	%% B4 connection firing
+	firing_conn_report_only_mandatory/1,
+	firing_conn_report_only_auto/1,
+	firing_conn_report_only_propose/1,
+	firing_conn_explicit_defer/1,
+	firing_conn_summarize/1,
+	%% B4 mandatory commit path
+	firing_conn_mandatory_connected/1,
+	firing_conn_mandatory_shortfall_fails/1,
+	firing_conn_mandatory_invalid_target_fails/1,
+	firing_conn_mandatory_caps_at_max/1,
+	firing_conn_rollback_discriminable_composition/1,
+	firing_conn_rollback_discriminable_connection/1,
+	firing_conn_descendant_in_root_txn/1,
+	%% B4 auto connection post-commit
+	firing_conn_auto_connected/1,
+	firing_conn_auto_invalid_survives/1,
+	%% B4 target validation (B4-D6)
+	firing_conn_subclass_target_accepted/1,
+	firing_conn_missing_target_fails/1,
+	firing_conn_non_instance_target_fails/1,
+	firing_conn_resolver_avps_stamped/1
 ]).
 
 
@@ -263,7 +285,25 @@ groups() ->
 			firing_propose_with_mandatory_and_auto,
 			firing_propose_owner_is_materialised_child,
 			firing_propose_carries_max,
-			firing_propose_min_zero_surfaces_none
+			firing_propose_min_zero_surfaces_none,
+			firing_conn_report_only_mandatory,
+			firing_conn_report_only_auto,
+			firing_conn_report_only_propose,
+			firing_conn_explicit_defer,
+			firing_conn_summarize,
+			firing_conn_mandatory_connected,
+			firing_conn_mandatory_shortfall_fails,
+			firing_conn_mandatory_invalid_target_fails,
+			firing_conn_mandatory_caps_at_max,
+			firing_conn_rollback_discriminable_composition,
+			firing_conn_rollback_discriminable_connection,
+			firing_conn_descendant_in_root_txn,
+			firing_conn_auto_connected,
+			firing_conn_auto_invalid_survives,
+			firing_conn_subclass_target_accepted,
+			firing_conn_missing_target_fails,
+			firing_conn_non_instance_target_fails,
+			firing_conn_resolver_avps_stamped
 		]}
 	].
 
@@ -1435,7 +1475,8 @@ firing_auto_best_effort(Config) ->
 		environment, "OBauto", Owner, Bolt, auto, {1, 1}),
 	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	{ok, [_]} = graphdb_instance:children(Root),       %% auto child created
-	?assertEqual(#{fired => 1, failed => 0, not_attempted => 0, proposed => 0},
+	?assertEqual(#{fired => 1, failed => 0, not_attempted => 0, proposed => 0,
+				   connected => 0, required => 0, not_connected => 0},
 				 graphdb_instance:summarize(Report)).
 
 %%-----------------------------------------------------------------------------
@@ -1448,7 +1489,8 @@ firing_auto_failure_survives(Config) ->
 		environment, "OAauto", Owner, Abstract, auto, {1, 1}),
 	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	?assert(is_integer(Root)),                         %% root survived
-	?assertEqual(#{fired => 0, failed => 1, not_attempted => 0, proposed => 0},
+	?assertEqual(#{fired => 0, failed => 1, not_attempted => 0, proposed => 0,
+				   connected => 0, required => 0, not_connected => 0},
 				 graphdb_instance:summarize(Report)).
 
 %%-----------------------------------------------------------------------------
@@ -1463,7 +1505,8 @@ firing_auto_cascade_merges(Config) ->
 		environment, "BW", Bolt, Widget, mandatory, {1, 1}),
 	{ok, _Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	%% the auto Bolt and its mandatory Widget both fired
-	?assertEqual(#{fired => 2, failed => 0, not_attempted => 0, proposed => 0},
+	?assertEqual(#{fired => 2, failed => 0, not_attempted => 0, proposed => 0,
+				   connected => 0, required => 0, not_connected => 0},
 				 graphdb_instance:summarize(Report)).
 
 %%-----------------------------------------------------------------------------
@@ -1550,7 +1593,8 @@ firing_propose_summarize(Config) ->
 	{ok, _} = graphdb_rules:create_composition_rule(
 		environment, "OBpropose", Owner, Bolt, propose, {2, 2}),
 	{ok, _Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
-	?assertEqual(#{fired => 0, failed => 0, not_attempted => 0, proposed => 2},
+	?assertEqual(#{fired => 0, failed => 0, not_attempted => 0, proposed => 2,
+				   connected => 0, required => 0, not_connected => 0},
 				 graphdb_instance:summarize(Report)).
 
 %%-----------------------------------------------------------------------------
@@ -1572,7 +1616,8 @@ firing_propose_with_mandatory_and_auto(Config) ->
 	%% two children materialised (mandatory Bolt + auto Widget), Gizmo is not
 	{ok, Kids} = graphdb_instance:children(Root),
 	?assertEqual(2, length(Kids)),
-	?assertEqual(#{fired => 2, failed => 0, not_attempted => 0, proposed => 1},
+	?assertEqual(#{fired => 2, failed => 0, not_attempted => 0, proposed => 1,
+				   connected => 0, required => 0, not_connected => 0},
 				 graphdb_instance:summarize(Report)).
 
 %%-----------------------------------------------------------------------------
@@ -1649,7 +1694,8 @@ firing_mandatory_min_zero_mints_none(Config) ->
 	{ok, _} = graphdb_rules:create_composition_rule(
 		environment, "OB0-3", Owner, Bolt, mandatory, {0, 3}),
 	{ok, _Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
-	?assertEqual(#{fired => 0, failed => 0, not_attempted => 0, proposed => 0},
+	?assertEqual(#{fired => 0, failed => 0, not_attempted => 0, proposed => 0,
+				   connected => 0, required => 0, not_connected => 0},
 				 graphdb_instance:summarize(Report)).
 
 %%-----------------------------------------------------------------------------
@@ -1761,3 +1807,336 @@ do_delete_dir(Dir) ->
 		false ->
 			ok
 	end.
+
+
+%%=============================================================================
+%% B4 Connection Firing Tests
+%%=============================================================================
+%% These cases build their own classes (NOT via setup_firing_fixtures) and
+%% exercise the RESOLVE defer-path: report-only (/3) and explicit defer-all (/4)
+%% resolvers surface effective connection rules as required/not_connected/
+%% proposed outcomes; nothing is connected.
+
+%% /3 report-only: a mandatory connection rule surfaces as `required`, nothing
+%% connected, create succeeds (the /3 mandatory escape, B4-D4).
+firing_conn_report_only_mandatory(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	{ok, Root, Report} = graphdb_instance:create_instance("car1", Src, 5),
+	?assert(is_integer(Root)),                          %% create succeeded
+	?assertEqual([], b4_conn_targets(Root, Char)),      %% nothing connected
+	O = b4_single_outcome(Report),
+	?assertEqual(required, maps:get(status, O)),
+	?assertEqual(Root, maps:get(source, O)),
+	?assertEqual(Char, maps:get(characterization, O)),
+	?assertEqual(Tgt,  maps:get(target_class, O)),
+	?assertNot(maps:is_key(target, O)).                 %% no target on a non-connect
+
+firing_conn_report_only_auto(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, auto, {1, 1}),
+	{ok, _Root, Report} = graphdb_instance:create_instance("car1", Src, 5),
+	?assertEqual(not_connected, maps:get(status, b4_single_outcome(Report))).
+
+firing_conn_report_only_propose(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, propose, {1, 1}),
+	{ok, Root, Report} = graphdb_instance:create_instance("car1", Src, 5),
+	?assertEqual([], b4_conn_targets(Root, Char)),
+	?assertEqual(proposed, maps:get(status, b4_single_outcome(Report))).
+
+%% /4 with an explicit defer-all resolver behaves exactly like /3 report-only.
+firing_conn_explicit_defer(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	R = fun(_Ctx) -> defer end,
+	{ok, Root, Report} = graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual([], b4_conn_targets(Root, Char)),
+	?assertEqual(required, maps:get(status, b4_single_outcome(Report))).
+
+%% summarize counts the connection statuses alongside the composition ones.
+firing_conn_summarize(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	{ok, _Root, Report} = graphdb_instance:create_instance("car1", Src, 5),
+	S = graphdb_instance:summarize(Report),
+	?assertEqual(1, maps:get(required, S)),
+	?assertEqual(0, maps:get(connected, S)),
+	?assertEqual(0, maps:get(not_connected, S)).
+
+
+%%=============================================================================
+%% B4 Mandatory Commit Path Tests
+%%=============================================================================
+
+%% mandatory + committing resolver: arc pair written in the root txn; outcome
+%% `connected`; reverse arc reaches the source.
+firing_conn_mandatory_connected(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	Target = b4_target_instance("acme", Tgt),
+	R = fun(_Ctx) -> {connect, [Target]} end,
+	{ok, Root, Report} = graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual([Target], b4_conn_targets(Root, Char)),       %% forward arc
+	?assertEqual([Root], b4_conn_targets(Target, Recip)),      %% reverse arc
+	O = b4_single_outcome(Report),
+	?assertEqual(connected, maps:get(status, O)),
+	?assertEqual(Target, maps:get(target, O)),
+	?assertEqual(Root,   maps:get(source, O)).
+
+%% mandatory shortfall: resolver commits an empty list (< Min=1) -> create fails,
+%% nothing written.
+firing_conn_mandatory_shortfall_fails(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, RuleNref} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	R = fun(_Ctx) -> {connect, []} end,
+	Before = mnesia:table_info(nodes, size),
+	{error, {mandatory_connection_unsatisfied, RuleNref}, Report} =
+		graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual(Before, mnesia:table_info(nodes, size)),      %% nothing written
+	?assert(lists:any(
+		fun(#{outcomes := Os}) ->
+			lists:any(fun(#{status := S}) -> S =:= failed end, Os)
+		end, Report)).
+
+%% mandatory + invalid target (wrong class) -> create fails, nothing written.
+firing_conn_mandatory_invalid_target_fails(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	{ok, Other} = graphdb_class:create_class("Other", 3),
+	Wrong = b4_target_instance("wrong", Other),               %% not a Mfr
+	R = fun(_Ctx) -> {connect, [Wrong]} end,
+	Before = mnesia:table_info(nodes, size),
+	{error, {invalid_connection_target, _}, _Report} =
+		graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual(Before, mnesia:table_info(nodes, size)).
+
+%% multiplicity {1,2}: resolver returns 3 valid -> exactly 2 written (cap=Max).
+firing_conn_mandatory_caps_at_max(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 2}),
+	T1 = b4_target_instance("m1", Tgt),
+	T2 = b4_target_instance("m2", Tgt),
+	T3 = b4_target_instance("m3", Tgt),
+	R = fun(_Ctx) -> {connect, [T1, T2, T3]} end,
+	{ok, Root, _Report} = graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual(2, length(b4_conn_targets(Root, Char))).
+
+%% rollback cause is discriminable: a class carrying BOTH a mandatory composition
+%% rule (abstract child) and a mandatory connection rule.  The composition
+%% shortfall aborts in PLAN, before RESOLVE -> culprit is a composition outcome
+%% (has `child`/no `target`) and no connection outcome was produced.
+firing_conn_rollback_discriminable_composition(_Config) ->
+	{ok, InstAttr}  = b4_inst_attr(),
+	{ok, Src}       = graphdb_class:create_class("Car", 3),
+	{ok, Abstract}  = graphdb_class:create_class("Abs", 3,
+		[#{attribute => InstAttr, value => false}]),
+	{ok, Tgt}       = graphdb_class:create_class("Mfr", 3),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("made_by", "makes",
+														instance),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "CA", Src, Abstract, mandatory, {1, 1}),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "CM", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	Mfr = b4_target_instance("acme", Tgt),
+	R = fun(_Ctx) -> {connect, [Mfr]} end,
+	{error, {class_not_instantiable, Abstract}, Report} =
+		graphdb_instance:create_instance("car1", Src, 5, R),
+	%% the lone failed outcome is a COMPOSITION culprit: carries no connection keys
+	Failed = [O || #{outcomes := Os} <- Report, #{status := failed} = O <- Os],
+	?assertEqual(1, length(Failed)),
+	[F] = Failed,
+	?assertNot(maps:is_key(target, F)),
+	?assertNot(maps:is_key(characterization, F)).
+
+%% the mirror case: composition planned cleanly, connection shortfall aborts in
+%% RESOLVE -> culprit is a CONNECTION outcome (carries characterization), and the
+%% composition outcomes are all not_attempted.
+firing_conn_rollback_discriminable_connection(_Config) ->
+	{ok, Src}  = graphdb_class:create_class("Car", 3),
+	{ok, Bolt} = graphdb_class:create_class("Bolt", 3),
+	{ok, Tgt}  = graphdb_class:create_class("Mfr", 3),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("made_by", "makes",
+														instance),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "CB", Src, Bolt, mandatory, {1, 1}),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "CM", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	R = fun(_Ctx) -> {connect, []} end,                  %% shortfall
+	Before = mnesia:table_info(nodes, size),
+	{error, {mandatory_connection_unsatisfied, _}, Report} =
+		graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual(Before, mnesia:table_info(nodes, size)),
+	%% lone failed outcome is a CONNECTION culprit (has characterization);
+	%% the composition Bolt rule is not_attempted.
+	Failed = [O || #{outcomes := Os} <- Report, #{status := failed} = O <- Os],
+	[F] = Failed,
+	?assert(maps:is_key(characterization, F)),
+	?assert(lists:any(
+		fun(#{outcomes := Os}) ->
+			lists:any(fun(#{status := S}) -> S =:= not_attempted end, Os)
+		end, Report)).
+
+%% a mandatory connection rule on a mandatory COMPOSITION descendant fires in the
+%% same root txn; outcome source = the descendant nref.
+firing_conn_descendant_in_root_txn(_Config) ->
+	{ok, Owner} = graphdb_class:create_class("Owner", 3),
+	{ok, Bolt}  = graphdb_class:create_class("Bolt", 3),
+	{ok, Tgt}   = graphdb_class:create_class("Mfr", 3),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("made_by", "makes",
+														instance),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, {1, 1}),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "BM", Bolt, Char, Recip, Tgt, mandatory, {1, 1}),
+	Mfr = b4_target_instance("acme", Tgt),
+	R = fun(_Ctx) -> {connect, [Mfr]} end,
+	{ok, Root, Report} = graphdb_instance:create_instance("car1", Owner, 5, R),
+	{ok, [BoltInst]} = graphdb_instance:children(Root),
+	BoltNref = element(2, BoltInst),
+	?assertEqual([Mfr], b4_conn_targets(BoltNref, Char)),
+	%% the connected outcome's source is the Bolt descendant, not the root
+	Connected = [O || #{outcomes := Os} <- Report,
+					  #{status := connected} = O <- Os],
+	[C] = Connected,
+	?assertEqual(BoltNref, maps:get(source, C)).
+
+
+%%=============================================================================
+%% B4 Auto Connection Post-Commit Tests
+%%=============================================================================
+
+%% auto + committing resolver: target connected post-commit; root survives.
+firing_conn_auto_connected(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, auto, {1, 1}),
+	Target = b4_target_instance("acme", Tgt),
+	R = fun(_Ctx) -> {connect, [Target]} end,
+	{ok, Root, Report} = graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual([Target], b4_conn_targets(Root, Char)),
+	?assertEqual(connected, maps:get(status, b4_single_outcome(Report))).
+
+%% auto + invalid target: survives as a failed outcome; root still created.
+firing_conn_auto_invalid_survives(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, auto, {1, 1}),
+	{ok, Other} = graphdb_class:create_class("Other", 3),
+	Wrong = b4_target_instance("wrong", Other),
+	R = fun(_Ctx) -> {connect, [Wrong]} end,
+	{ok, Root, Report} = graphdb_instance:create_instance("car1", Src, 5, R),
+	?assert(is_integer(Root)),
+	?assertEqual([], b4_conn_targets(Root, Char)),
+	?assertEqual(failed, maps:get(status, b4_single_outcome(Report))).
+
+
+%%=============================================================================
+%% B4 Target Validation Tests (B4-D6)
+%%=============================================================================
+
+%% a target that is an instance of a SUBCLASS of target_class is accepted.
+firing_conn_subclass_target_accepted(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, SubMfr} = graphdb_class:create_class("SubMfr", Tgt),   %% subclass of Mfr
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	Target = b4_target_instance("acme", SubMfr),
+	R = fun(_Ctx) -> {connect, [Target]} end,
+	{ok, Root, Report} = graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual([Target], b4_conn_targets(Root, Char)),
+	?assertEqual(connected, maps:get(status, b4_single_outcome(Report))).
+
+%% a missing target nref on a mandatory rule fails the create; nothing written.
+firing_conn_missing_target_fails(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	R = fun(_Ctx) -> {connect, [999999]} end,
+	Before = mnesia:table_info(nodes, size),
+	{error, {invalid_connection_target, {target_not_found, 999999}}, _Report} =
+		graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual(Before, mnesia:table_info(nodes, size)).
+
+%% a non-instance target (a class nref) on a mandatory rule fails the create.
+firing_conn_non_instance_target_fails(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	R = fun(_Ctx) -> {connect, [Tgt]} end,             %% Tgt is a class, not an instance
+	Before = mnesia:table_info(nodes, size),
+	{error, {invalid_connection_target, {target_not_an_instance, Tgt}}, _R} =
+		graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual(Before, mnesia:table_info(nodes, size)).
+
+%% resolver-supplied per-direction AVPs are stamped on the written arc.
+firing_conn_resolver_avps_stamped(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	Target = b4_target_instance("acme", Tgt),
+	FwdAVP = #{attribute => Char, value => "fwd-meta"},
+	RevAVP = #{attribute => Recip, value => "rev-meta"},
+	R = fun(_Ctx) -> {connect, [{Target, {[FwdAVP], [RevAVP]}}]} end,
+	{ok, Root, _Report} = graphdb_instance:create_instance("car1", Src, 5, R),
+	Fwd = b4_conn_arc(Root, Char),
+	Rev = b4_conn_arc(Target, Recip),
+	?assert(lists:member(FwdAVP, Fwd#relationship.avps)),
+	?assert(lists:member(RevAVP, Rev#relationship.avps)).
+
+
+%%=============================================================================
+%% B4 helpers
+%%=============================================================================
+
+%% the single outgoing connection arc (#relationship{}) from Source with char.
+b4_conn_arc(Source, Char) ->
+	Arcs = mnesia:dirty_index_read(relationships, Source,
+								   #relationship.source_nref),
+	[Arc] = [A || A <- Arcs,
+			 A#relationship.kind =:= connection,
+			 A#relationship.characterization =:= Char],
+	Arc.
+
+%% the seeded instantiable marker nref (for building abstract classes).
+b4_inst_attr() ->
+	{ok, #{instantiable := InstAttr}} = graphdb_attr:seeded_nrefs(),
+	{ok, InstAttr}.
+
+%% make a pre-existing target instance of class Tgt, parented at Projects (5).
+b4_target_instance(Name, Tgt) ->
+	{ok, Nref, _} = graphdb_instance:create_instance(Name, Tgt, 5),
+	Nref.
+
+%% make a (Source, Target, Char, Recip) connection fixture; returns nrefs.
+b4_conn_classes(SrcName, TgtName, Fwd, Rev) ->
+	{ok, Src} = graphdb_class:create_class(SrcName, 3),
+	{ok, Tgt} = graphdb_class:create_class(TgtName, 3),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair(Fwd, Rev, instance),
+	{Src, Tgt, Char, Recip}.
+
+%% the single connection outcome in a report (asserts exactly one rule, one out).
+b4_single_outcome(Report) ->
+	[#{outcomes := [Outcome]}] = Report,
+	Outcome.
+
+%% outgoing connection arc targets from Source with characterization Char.
+b4_conn_targets(Source, Char) ->
+	Arcs = mnesia:dirty_index_read(relationships, Source,
+								   #relationship.source_nref),
+	[A#relationship.target_nref || A <- Arcs,
+	 A#relationship.kind =:= connection,
+	 A#relationship.characterization =:= Char].

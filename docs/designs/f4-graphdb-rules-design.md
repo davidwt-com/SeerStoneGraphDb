@@ -236,6 +236,7 @@ via `applies_to` arc:
 
 ```
 AVP characterization_nref :: integer()  [required]
+AVP reciprocal_nref       :: integer()  [required]  (B4-D3: reverse arc label)
 AVP target_class_nref     :: integer()  [required]
 AVP template_nref         :: integer()  [optional]
 ```
@@ -821,7 +822,7 @@ design → plan → implement cycle:
 | **B1** | `effective_rules_for_class/2` — read-side taxonomy walk (no firing)               | A          | `docs/designs/f4-phase-b1-effective-rules-design.md`    |
 | **B2** | Composition firing engine — `mandatory` + `auto`; cascade; return-shape change    | B1         | `docs/designs/f4-phase-b2-composition-firing-design.md` |
 | **B3** | `propose` mode — proposals always surfaced in the create report (no session flag) | B2         | `docs/designs/f4-phase-b3-propose-mode-design.md`       |
-| **B4** | Connection firing engine (Mandatory Connections, §10)                             | B1         | —                                                       |
+| **B4** | Connection firing engine (Mandatory Connections, §10) — **DONE**                  | B1, B2     | `docs/designs/f4-phase-b4-connection-firing-design.md`  |
 | **B5** | Horizontal conflict resolution / precedence (OI-2) — rules at one class level     | B2         | —                                                       |
 
 **OI-B2. Composition firing engine — RESOLVED (B2).**
@@ -835,6 +836,28 @@ failure; pre-plan validation errors return `{error, Reason}` (2-tuple).
 Report is rule-centric: `[#{rule, deployment, outcomes}]`.
 `plan_composition_firing/2` is a pure-read helper reused by B3.
 See `docs/designs/f4-phase-b2-composition-firing-design.md`.
+
+**OI-B4. Connection firing engine — RESOLVED (B4).**
+
+`graphdb_instance:create_instance/4` threads a caller-supplied **resolver**;
+after the composition subtree is allocated, a **RESOLVE** step consults each
+materialised instance's effective ConnectionRules (via
+`graphdb_rules:effective_connection_rules/2`) and writes connection arc pairs
+to **existing** target instances — `mandatory` in the root transaction, `auto`
+post-commit, `defer`/`propose` reported only. `create_instance/3` keeps
+report-only semantics (built-in `report_only` defer-all resolver). This
+**resolves OI-B2-4** ("connection rules fired by `create_instance`"). The
+ConnectionRule content gains a `reciprocal_nref` AVP (B4-D3). The successor
+capability **OI-B4-3 (multi-class instance creation)** — firing all of an
+instance's classes' rules atomically at create, via transitive
+`effective_rules_for_class/2` gather rather than signature widening — is a
+candidate division, not folded into B4. See
+`docs/designs/f4-phase-b4-connection-firing-design.md` (B4-D1…D7, §7).
+
+The pre-decomposition §B narrative immediately below predates the B2/B3/B4
+divisions (it still sketches an interactive session-flag that B3 dropped and
+lists ConnectionRule firing as future); it is retained as historical context
+and reconciled by the division designs above.
 
 The composition engine described below is the **B2** division; B1 is
 the read-side prerequisite that gathers the rules it fires.

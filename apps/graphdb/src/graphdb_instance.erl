@@ -31,7 +31,7 @@
 %%---------------------------------------------------------------------
 %% Rev A Date: April 2026 Author: (completion of Dallas Noyes's design)
 %% Initial implementation: compositional hierarchy over Mnesia.
-%% Provides create_instance/3, add_relationship/4, get_instance/1,
+%% Provides create_instance/3,4, add_relationship/4, get_instance/1,
 %% children/1, compositional_ancestors/1, resolve_value/2.
 %%---------------------------------------------------------------------
 -module(graphdb_instance).
@@ -119,6 +119,7 @@
 		start_link/0,
 		%% Creators
 		create_instance/3,
+		create_instance/4,
 		add_relationship/4,
 		add_relationship/5,
 		add_relationship/6,
@@ -181,7 +182,23 @@ start_link() ->
 %%   - compositional parent→child arc pair (char=28/27)
 %%-----------------------------------------------------------------------------
 create_instance(Name, ClassNref, ParentNref) ->
-	gen_server:call(?MODULE, {create_instance, Name, ClassNref, ParentNref}).
+	create_instance(Name, ClassNref, ParentNref, fun report_only/1).
+
+%%-----------------------------------------------------------------------------
+%% create_instance(Name, ClassNref, ParentNref, Resolver) ->
+%%     {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
+%%
+%% As /3, but threads a connection Resolver (B4).  /3 uses the built-in
+%% report_only resolver (defer-all): every connection rule surfaces as a report
+%% outcome and nothing is connected.
+%%-----------------------------------------------------------------------------
+create_instance(Name, ClassNref, ParentNref, Resolver)
+		when is_function(Resolver, 1) ->
+	gen_server:call(?MODULE,
+		{create_instance, Name, ClassNref, ParentNref, Resolver}).
+
+%% report_only(ConnContext) -> defer   (the built-in /3 resolver, B4-D2)
+report_only(_Ctx) -> defer.
 
 
 %%-----------------------------------------------------------------------------
@@ -355,10 +372,11 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Creators
 %%-----------------------------------------------------------------------------
-handle_call({create_instance, Name, ClassNref, ParentNref}, _From,
+handle_call({create_instance, Name, ClassNref, ParentNref, Resolver}, _From,
 		#state{instantiable_nref = InstAttr} = State) ->
-	{reply, do_create_instance(Name, ClassNref, ParentNref, InstAttr, []),
-		State};
+	Ctx = #{inst_attr => InstAttr, on_path => [], resolver => Resolver,
+			root_parent => ParentNref, root_source => undefined},
+	{reply, do_create_instance(Name, ClassNref, ParentNref, Ctx), State};
 
 handle_call({add_relationship, S, C, T, R, TemplateSpec, AVPSpec},
 		_From, State) ->
@@ -443,22 +461,24 @@ find_avp_value([_ | Rest], AttrNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_create_instance(Name, ClassNref, ParentNref, InstAttr, OnPath)
+%% do_create_instance(Name, ClassNref, ParentNref, Ctx)
 %%     -> {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
 %% The unifying internal entry (B2-D2): every cascade level flows through
-%% here, never the gen_server API (that would deadlock).  OnPath is the
-%% class path for the on-path cycle guard.  Validates the class (must be
-%% kind=class and instantiable) and parent (must exist); pre-PLAN errors
-%% return a 2-tuple {error, Reason} (no report).  Post-PLAN paths return
-%% 3-tuples.
+%% here, never the gen_server API (that would deadlock).  Ctx carries
+%% inst_attr, on_path (the class path for the on-path cycle guard), resolver,
+%% and the stable root_parent / root_source anchors (B4-D2a).  Validates the
+%% class (must be kind=class and instantiable) and parent (must exist);
+%% pre-PLAN errors return a 2-tuple {error, Reason} (no report).  Post-PLAN
+%% paths return 3-tuples.
 %%-----------------------------------------------------------------------------
-do_create_instance(Name, ClassNref, ParentNref, InstAttr, OnPath) ->
+do_create_instance(Name, ClassNref, ParentNref, Ctx) ->
+	InstAttr = maps:get(inst_attr, Ctx),
 	case do_validate_class(ClassNref, InstAttr) of
 		ok ->
 			case do_validate_parent(ParentNref) of
 				ok ->
-					fire_create(Name, ClassNref, ParentNref, OnPath);
+					fire_create(Name, ClassNref, ParentNref, Ctx);
 				{error, _} = Err ->
 					Err            %% pre-PLAN root error: 2-tuple (no report)
 			end;
@@ -467,23 +487,29 @@ do_create_instance(Name, ClassNref, ParentNref, InstAttr, OnPath) ->
 	end.
 
 %%-----------------------------------------------------------------------------
-%% fire_create(Name, ClassNref, ParentNref, OnPath)
+%% fire_create(Name, ClassNref, ParentNref, Ctx)
 %%     -> {ok, Nref, report()} | {error, Reason, report()}
 %%
 %% PLAN → EXECUTE → POST-COMMIT (B2-D1/D2/D3).  Calls graphdb_rules for the
 %% abstract plan tree, then executes the mandatory subtree atomically, then
 %% fires auto children best-effort post-commit.
 %%-----------------------------------------------------------------------------
-fire_create(Name, ClassNref, ParentNref, OnPath) ->
+fire_create(Name, ClassNref, ParentNref, Ctx) ->
 	case graphdb_rules:plan_composition_firing(?RULE_SCOPE, ClassNref) of
 		{ok, PlanTree} ->
-			case execute(Name, ClassNref, ParentNref, OnPath, PlanTree) of
-				{ok, RootNref, MandOutcomes, InstPlan} ->
-					AutoReport    = fire_auto(InstPlan, OnPath),
-					ProposeReport = fire_propose(InstPlan, OnPath),
-					{ok, RootNref,
-					 merge_reports(merge_reports(MandOutcomes, AutoReport),
-								   ProposeReport)};
+			case execute(Name, ClassNref, ParentNref, Ctx, PlanTree) of
+				{ok, RootNref, MandOutcomes, InstPlan, AutoConnPlan} ->
+					Ctx1 = bind_root_source(Ctx, RootNref),
+					AutoReport     = fire_auto(InstPlan, Ctx1),
+					ProposeReport  = fire_propose(InstPlan,
+									 maps:get(on_path, Ctx1)),
+					ConnAutoReport = fire_connections(AutoConnPlan),
+					Merged = merge_reports(
+						merge_reports(
+							merge_reports(MandOutcomes, AutoReport),
+							ProposeReport),
+						ConnAutoReport),
+					{ok, RootNref, Merged};
 				{error, R, Report} ->
 					{error, R, Report}
 			end;
@@ -492,28 +518,338 @@ fire_create(Name, ClassNref, ParentNref, OnPath) ->
 	end.
 
 %%-----------------------------------------------------------------------------
-%% execute(RootName, RootClass, RootParent, OnPath, PlanTree)
-%%     -> {ok, RootNref, MandOutcomes, InstPlan} | {error, Reason, report()}
+%% bind_root_source(Ctx, RootNref) -> Ctx'
 %%
-%% Allocates every node's nrefs/ids OUTSIDE the transaction, writes the
-%% root and the whole mandatory subtree in ONE Mnesia transaction.
+%% At the top level root_source is undefined -> bind it to the freshly
+%% allocated root nref; for a threaded descendant it is already set and
+%% kept unchanged (B4-D2a).
 %%-----------------------------------------------------------------------------
-execute(RootName, _RootClass, RootParent, _OnPath, PlanTree) ->
+bind_root_source(Ctx, RootNref) ->
+	case maps:get(root_source, Ctx) of
+		undefined -> Ctx#{root_source => RootNref};
+		_         -> Ctx
+	end.
+
+%%-----------------------------------------------------------------------------
+%% execute(RootName, RootClass, RootParent, Ctx, PlanTree)
+%%     -> {ok, RootNref, MandOutcomes, InstPlan, AutoConnPlan}
+%%      | {error, Reason, report()}
+%%
+%% Allocates every node's nrefs/ids OUTSIDE the transaction, RESOLVEs the
+%% connection rules for the mandatory subtree (B4), then writes the root, the
+%% whole mandatory composition subtree, and any committed mandatory connection
+%% rows in ONE Mnesia transaction.  Returns the InstPlan plus the AutoConnPlan
+%% (the post-commit auto-connection write list — empty in this task).
+%%-----------------------------------------------------------------------------
+execute(RootName, _RootClass, RootParent, Ctx, PlanTree) ->
 	%% Annotate the plan tree with allocated nrefs (root uses caller's Name).
 	InstPlan = allocate_plan(PlanTree#{name => RootName}),
-	{Writes, Outcomes} = plan_writes(InstPlan, RootParent),
-	Txn = fun() ->
-		lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
-					  Writes)
-	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok} ->
-			{ok, maps:get(nref, InstPlan), Outcomes, InstPlan};
-		{aborted, R} ->
-			{error, R,
-			 report_not_attempted(R,
-				#{plan_so_far => PlanTree, culprit => undefined})}
+	{Writes, CompOutcomes} = plan_writes(InstPlan, RootParent),
+	RootNref = maps:get(nref, InstPlan),
+	Ctx1 = bind_root_source(Ctx, RootNref),
+	case resolve_connections(InstPlan, Ctx1) of
+		{ok, MandRows, AutoConnPlan, ConnReport} ->
+			Txn = fun() ->
+				lists:foreach(
+					fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
+					Writes ++ MandRows)
+			end,
+			case mnesia:transaction(Txn) of
+				{atomic, ok} ->
+					{ok, RootNref,
+					 merge_reports(CompOutcomes, ConnReport),
+					 InstPlan, AutoConnPlan};
+				{aborted, R} ->
+					{error, R,
+					 report_not_attempted(R,
+						#{plan_so_far => PlanTree, culprit => undefined})}
+			end;
+		{error, Reason, ConnReport} ->
+			%% Mandatory-connection shortfall in RESOLVE: nothing written (we
+			%% never entered the txn).  Composition subtree becomes
+			%% not_attempted; the connection culprit/siblings are in ConnReport.
+			CompNA = report_not_attempted(Reason,
+				#{plan_so_far => InstPlan, culprit => undefined}),
+			{error, Reason, merge_reports(CompNA, ConnReport)}
 	end.
+
+%%=============================================================================
+%% Connection Firing -- RESOLVE (B4)
+%%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% resolve_connections(InstPlan, Ctx)
+%%   -> {ok, MandRows, AutoConnPlan, ConnReport}
+%%    | {error, Reason, ConnReport}
+%%
+%% Walks the instantiated plan tree (root + mandatory composition descendants)
+%% pre-order; for each instance consults its effective connection rules.  In this
+%% task only the defer/propose branches are implemented (no writes); later tasks
+%% add the {connect, List} mandatory/auto branches.
+%%-----------------------------------------------------------------------------
+resolve_connections(InstPlan, Ctx) ->
+	Nodes = flatten_plan(InstPlan),
+	resolve_nodes(Nodes, Ctx, {[], [], []}).
+
+%% flatten_plan(InstPlanNode) -> [{Nref, ClassNref}]  (root first, pre-order)
+flatten_plan(#{nref := N, class := C, mandatory_children := Kids}) ->
+	[{N, C} | lists:flatmap(fun flatten_plan/1, Kids)].
+
+%% resolve_nodes(Nodes, Ctx, {MandRows, AutoPlan, Report})
+%% Rows/Auto/Report all accumulate in forward order (the connect branches
+%% append), so no reversal is needed; Mnesia write order within the txn is
+%% irrelevant.
+resolve_nodes([], _Ctx, {Rows, Auto, Rep}) ->
+	{ok, Rows, Auto, Rep};
+resolve_nodes([{SourceNref, Class} | Rest], Ctx, Acc) ->
+	{ok, ConnRules} =
+		graphdb_rules:effective_connection_rules(?RULE_SCOPE, Class),
+	case resolve_rules(ConnRules, SourceNref, Ctx, Acc) of
+		{ok, Acc1}          -> resolve_nodes(Rest, Ctx, Acc1);
+		{error, _, _} = Err -> Err
+	end.
+
+%% resolve_rules(Rules, SourceNref, Ctx, Acc) -> {ok, Acc'} | {error, R, Report}
+%% Acc = {MandRows, AutoPlan, Report}.  First-failure-aborts (mirrors plan_rules).
+resolve_rules([], _SourceNref, _Ctx, Acc) ->
+	{ok, Acc};
+resolve_rules([{Rule, Deploy, Spec} | Rest], SourceNref, Ctx, Acc) ->
+	Mode = maps:get(mode, Deploy, mandatory),
+	case Mode of
+		propose ->
+			%% propose connection rules are advisory: surface `proposed`, never
+			%% consult the resolver, never connect (mirrors B3 propose).
+			Acc1 = add_conn_outcome(Acc, Rule, Deploy,
+				conn_outcome_base(SourceNref, Spec, proposed)),
+			resolve_rules(Rest, SourceNref, Ctx, Acc1);
+		_ ->
+			Resolver = maps:get(resolver, Ctx),
+			case Resolver(conn_context(Rule, Deploy, Spec, SourceNref, Ctx)) of
+				defer ->
+					Status = case Mode of
+								 mandatory -> required;
+								 auto      -> not_connected
+							 end,
+					Acc1 = add_conn_outcome(Acc, Rule, Deploy,
+						conn_outcome_base(SourceNref, Spec, Status)),
+					resolve_rules(Rest, SourceNref, Ctx, Acc1);
+				{connect, List} ->
+					connect_targets(Mode, List, Rule, Deploy, Spec, SourceNref,
+									Rest, Ctx, Acc)
+			end
+	end.
+
+%%-----------------------------------------------------------------------------
+%% connect_targets(Mode, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx, Acc)
+%%   -> {ok, Acc'} | {error, Reason, Report}
+%%
+%% Validates the resolver-returned targets, applies the {Min, Max} range, and
+%% routes by mode.  In B4 Task 5 only `mandatory` is implemented (validate +
+%% abort, build root-txn rows, tentative `connected` outcomes); `auto` is added
+%% in a later task.
+%%-----------------------------------------------------------------------------
+connect_targets(mandatory, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
+		{Rows, Auto, Rep}) ->
+	TClass = maps:get(target_class, Spec),
+	case partition_targets(List, TClass, SourceNref) of
+		{error, Reason} ->
+			%% an invalid target on a committed mandatory rule aborts the create
+			{error, {invalid_connection_target, Reason},
+			 conn_fail({invalid_connection_target, Reason}, Rule, Spec, Rep)};
+		{ok, Valid} ->
+			{Min, Max} = maps:get(multiplicity, Deploy, {1, 1}),
+			case length(Valid) < Min of
+				true ->
+					Reason = {mandatory_connection_unsatisfied, Rule#node.nref},
+					{error, Reason, conn_fail(Reason, Rule, Spec, Rep)};
+				false ->
+					ToWrite = cap(Valid, Max),
+					Template = maps:get(template, Deploy),
+					{NewRows, NewOuts} =
+						mandatory_rows(ToWrite, SourceNref, Spec, Template),
+					Rep1 = lists:foldl(
+						fun(O, R) -> add_outcome(R, Rule, Deploy, O) end,
+						Rep, NewOuts),
+					resolve_rules(Rest, SourceNref, Ctx,
+								  {Rows ++ NewRows, Auto, Rep1})
+			end
+	end;
+
+connect_targets(auto, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
+		{Rows, Auto, Rep}) ->
+	TClass = maps:get(target_class, Spec),
+	{Valid, Invalid} = split_valid(List, TClass, SourceNref),
+	%% auto does NOT enforce the floor (B4-D5) -- Min is ignored; only Max caps.
+	{_Min, Max} = maps:get(multiplicity, Deploy, {1, 1}),
+	ToConnect = cap(Valid, Max),
+	Char = maps:get(characterization, Spec),
+	%% invalid targets are immediate `failed` outcomes (create survives)
+	Rep1 = lists:foldl(
+		fun({_T, Reason}, R) ->
+			add_outcome(R, Rule, Deploy,
+				#{source => SourceNref, index => 1, status => failed,
+				  reason => Reason, characterization => Char,
+				  target_class => TClass})
+		end, Rep, Invalid),
+	%% valid targets are queued for the post-commit writer
+	AutoEntry = #{rule => Rule, deploy => Deploy, spec => Spec,
+				  source => SourceNref, template => maps:get(template, Deploy),
+				  targets => ToConnect},
+	resolve_rules(Rest, SourceNref, Ctx, {Rows, Auto ++ [AutoEntry], Rep1}).
+
+%% split_valid(List, TClass, SourceNref) ->
+%%     {Valid :: [Target], Invalid :: [{Target, Reason}]}
+%% For AUTO: partition rather than abort -- invalids are reported, valids written.
+split_valid(List, TClass, SourceNref) ->
+	lists:foldr(
+		fun(T, {Vs, Is}) ->
+			case validate_target(T, TClass, SourceNref) of
+				ok              -> {[T | Vs], Is};
+				{error, Reason} -> {Vs, [{T, Reason} | Is]}
+			end
+		end, {[], []}, List).
+
+%% partition_targets(List, TargetClass, SourceNref) -> {ok, [Target]} | {error, R}
+%% For a MANDATORY rule: the first invalid target aborts with its reason; an
+%% all-valid list returns the (order-preserved) valid targets.
+partition_targets([], _TClass, _SourceNref) ->
+	{ok, []};
+partition_targets([T | Rest], TClass, SourceNref) ->
+	case validate_target(T, TClass, SourceNref) of
+		ok ->
+			case partition_targets(Rest, TClass, SourceNref) of
+				{ok, Vs}         -> {ok, [T | Vs]};
+				{error, _} = Err -> Err
+			end;
+		{error, Reason} ->
+			{error, Reason}
+	end.
+
+%% cap(List, Max) -> List'  (truncate to at most Max; unbounded keeps all)
+cap(List, unbounded) -> List;
+cap(List, Max)       -> lists:sublist(List, Max).
+
+%% mandatory_rows(Targets, SourceNref, Spec, Template) -> {Rows, Outcomes}
+%% Builds the connection rows for each target plus a (tentative) `connected`
+%% outcome indexed 1..N.  Outcomes are returned to the report only on commit.
+mandatory_rows(Targets, SourceNref, Spec, Template) ->
+	Char   = maps:get(characterization, Spec),
+	Recip  = maps:get(reciprocal, Spec),
+	TClass = maps:get(target_class, Spec),
+	{Rows, Outs, _} = lists:foldl(
+		fun(T, {RAcc, OAcc, I}) ->
+			TNref = target_nref(T),
+			Rows0 = build_connection_rows(SourceNref, Char, TNref, Recip,
+										  Template, target_avps(T)),
+			Out = #{source => SourceNref, index => I, status => connected,
+					target => TNref, characterization => Char,
+					target_class => TClass},
+			{RAcc ++ Rows0, OAcc ++ [Out], I + 1}
+		end, {[], [], 1}, Targets),
+	{Rows, Outs}.
+
+%% conn_fail(Reason, CulpritRule, Spec, RepAcc) -> Report
+%% Mandatory-connection abort report: every already-emitted connection outcome
+%% becomes not_attempted; the culprit gets one `failed` carrying its connection
+%% keys (so the rollback cause is discriminable by rule kind, B4-D7).
+conn_fail(Reason, CulpritRule, Spec, RepAcc) ->
+	NA = [ RR#{outcomes => [#{index => 1, status => not_attempted}
+							|| _ <- Os]}
+		   || #{outcomes := Os} = RR <- RepAcc ],
+	add_outcome(NA, CulpritRule, #{},
+		#{index => 1, status => failed, reason => Reason,
+		  characterization => maps:get(characterization, Spec),
+		  target_class => maps:get(target_class, Spec)}).
+
+%%-----------------------------------------------------------------------------
+%% validate_target(Target, TargetClass, SourceNref) -> ok | {error, Reason}
+%%
+%% Target is a bare nref or {Nref, {Fwd, Rev}}.  Valid iff the nref exists, is a
+%% kind=instance node, and is an instance of TargetClass or a subclass of it.
+%% No self-check is needed: the source is uncommitted at RESOLVE, so a readable
+%% instance is necessarily distinct from it (B4-D6).
+%%-----------------------------------------------------------------------------
+validate_target(Target, TargetClass, _SourceNref) ->
+	Nref = target_nref(Target),
+	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = instance, classes = Classes}] ->
+			case lists:any(
+					fun(C) -> graphdb_class:class_in_ancestry(TargetClass, C) end,
+					Classes) of
+				true  -> ok;
+				false -> {error, {target_class_mismatch, Nref, TargetClass}}
+			end;
+		[#node{}] -> {error, {target_not_an_instance, Nref}};
+		[]        -> {error, {target_not_found, Nref}}
+	end.
+
+%% target_nref(Target) -> integer()
+target_nref(Nref) when is_integer(Nref)             -> Nref;
+target_nref({Nref, {_F, _R}}) when is_integer(Nref) -> Nref.
+
+%% target_avps(Target) -> {FwdAVPs, RevAVPs}
+target_avps(Nref) when is_integer(Nref) -> {[], []};
+target_avps({_Nref, {Fwd, Rev}})        -> {Fwd, Rev}.
+
+%% conn_context(Rule, Deploy, Spec, SourceNref, Ctx) -> ConnContext (B4-D2/D2a)
+conn_context(Rule, Deploy, Spec, SourceNref, Ctx) ->
+	#{rule             => Rule,
+	  characterization => maps:get(characterization, Spec),
+	  reciprocal       => maps:get(reciprocal, Spec),
+	  target_class     => maps:get(target_class, Spec),
+	  mode             => maps:get(mode, Deploy, mandatory),
+	  multiplicity     => maps:get(multiplicity, Deploy, {1, 1}),
+	  source           => SourceNref,
+	  root_parent      => maps:get(root_parent, Ctx),
+	  root_source      => maps:get(root_source, Ctx)}.
+
+%% conn_outcome_base(SourceNref, Spec, Status) -> connection_outcome()
+%% The shared shape for non-connect outcomes (required/not_connected/proposed):
+%% index 1, no target.
+conn_outcome_base(SourceNref, Spec, Status) ->
+	#{source => SourceNref, index => 1, status => Status,
+	  characterization => maps:get(characterization, Spec),
+	  target_class => maps:get(target_class, Spec)}.
+
+%% add_conn_outcome({Rows, Auto, Rep}, Rule, Deploy, Outcome) -> Acc'
+add_conn_outcome({Rows, Auto, Rep}, Rule, Deploy, Outcome) ->
+	{Rows, Auto, add_outcome(Rep, Rule, Deploy, Outcome)}.
+
+%%-----------------------------------------------------------------------------
+%% fire_connections(AutoConnPlan) -> report()
+%%
+%% POST-COMMIT best-effort writer for `auto` connections (B4).  Writes each
+%% queued auto connection in its own transaction; a successful write is a
+%% `connected` outcome, a write failure is a `failed` outcome that never rolls
+%% the instance back (B4-D4/D7).  An empty plan yields an empty report.
+%%-----------------------------------------------------------------------------
+fire_connections(AutoConnPlan) ->
+	lists:foldl(fun fire_auto_connection/2, [], AutoConnPlan).
+
+%% fire_auto_connection(AutoEntry, Acc) -> report()
+fire_auto_connection(#{rule := Rule, deploy := Deploy, spec := Spec,
+					   source := SourceNref, template := Template,
+					   targets := Targets}, Acc) ->
+	Char   = maps:get(characterization, Spec),
+	Recip  = maps:get(reciprocal, Spec),
+	TClass = maps:get(target_class, Spec),
+	{_I, Acc1} = lists:foldl(
+		fun(T, {I, A}) ->
+			TNref = target_nref(T),
+			Outcome = case write_connection_arcs(SourceNref, Char, TNref, Recip,
+												 Template, target_avps(T)) of
+				ok ->
+					#{source => SourceNref, index => I, status => connected,
+					  target => TNref, characterization => Char,
+					  target_class => TClass};
+				{error, Reason} ->
+					#{source => SourceNref, index => I, status => failed,
+					  reason => Reason, characterization => Char,
+					  target_class => TClass}
+			end,
+			{I + 1, add_outcome(A, Rule, Deploy, Outcome)}
+		end, {1, Acc}, Targets),
+	Acc1.
 
 %%-----------------------------------------------------------------------------
 %% allocate_plan(PlanNode) -> InstPlanNode (same tree + nref per node)
@@ -597,31 +933,39 @@ instance_records(Nref, ClassNref, Name, ParentNref) ->
 	 {relationships, P2C}, {relationships, C2P}].
 
 %%-----------------------------------------------------------------------------
-%% fire_auto(InstPlan, OnPath) -> report()
+%% fire_auto(InstPlan, Ctx) -> report()
 %%
 %% POST-COMMIT best-effort auto firing.  Walks the instantiated plan tree and
-%% fires each node's auto rules by recursing do_create_instance/5 (never the
-%% gen_server API — self-call deadlock).  Merges sub-reports additively.
-%% Failures are recorded in the report but do not abort the root instance.
+%% fires each node's auto rules by recursing do_create_instance/4 (never the
+%% gen_server API — self-call deadlock).  Pushes the node's class onto Ctx's
+%% on_path as the walk descends.  Merges sub-reports additively.  Failures are
+%% recorded in the report but do not abort the root instance.
 %%-----------------------------------------------------------------------------
 fire_auto(#{nref := Nref, class := Class, auto_rules := Autos,
-			mandatory_children := Kids}, OnPath) ->
-	OnPath1 = [Class | OnPath],
+			mandatory_children := Kids}, Ctx) ->
+	Ctx1 = push_on_path(Ctx, Class),
 	Here = lists:foldl(
 		fun({RuleNode, Deploy}, Acc) ->
-			fire_one_auto(RuleNode, Deploy, Nref, OnPath1, Acc)
+			fire_one_auto(RuleNode, Deploy, Nref, Ctx1, Acc)
 		end, [], Autos),
 	lists:foldl(
-		fun(Child, Acc) -> merge_reports(Acc, fire_auto(Child, OnPath1)) end,
+		fun(Child, Acc) -> merge_reports(Acc, fire_auto(Child, Ctx1)) end,
 		Here, Kids).
 
 %%-----------------------------------------------------------------------------
-%% fire_one_auto(RuleNode, Deploy, OwnerNref, OnPath1, Acc) -> report()
+%% push_on_path(Ctx, ClassNref) -> Ctx' with ClassNref prepended to on_path
+%%-----------------------------------------------------------------------------
+push_on_path(Ctx, ClassNref) ->
+	Ctx#{on_path => [ClassNref | maps:get(on_path, Ctx)]}.
+
+%%-----------------------------------------------------------------------------
+%% fire_one_auto(RuleNode, Deploy, OwnerNref, Ctx, Acc) -> report()
 %%
 %% Check order: instantiable, then the vertical-cycle cut, then expansion.
-%% mints Min children post-commit (B-prep).
+%% mints Min children post-commit (B-prep).  Ctx's on_path already carries the
+%% owner's class (pushed by fire_auto).
 %%-----------------------------------------------------------------------------
-fire_one_auto(RuleNode, Deploy, OwnerNref, OnPath1, Acc) ->
+fire_one_auto(RuleNode, Deploy, OwnerNref, Ctx, Acc) ->
 	ChildClass = graphdb_rules:rule_child_class(RuleNode),
 	case graphdb_class:is_instantiable(ChildClass) of
 		false ->
@@ -630,24 +974,27 @@ fire_one_auto(RuleNode, Deploy, OwnerNref, OnPath1, Acc) ->
 				  reason => {class_not_instantiable, ChildClass}});
 		_ ->        %% true (or {error,_} -> treated as fireable; create reports)
 			{Min, _Max} = maps:get(multiplicity, Deploy, {1, 1}),
-			case lists:member(ChildClass, OnPath1) of
+			case lists:member(ChildClass, maps:get(on_path, Ctx)) of
 				true  -> Acc;       %% vertical cycle cut (B2-D5)
 				false -> fire_auto_children(RuleNode, Deploy, ChildClass,
-									Min, 1, OwnerNref, OnPath1, Acc)
+									Min, 1, OwnerNref, Ctx, Acc)
 			end
 	end.
 
 %%-----------------------------------------------------------------------------
-%% fire_auto_children — expand multiplicity, recursing do_create_instance/5
+%% fire_auto_children — expand multiplicity, recursing do_create_instance/4.
+%%
+%% Ctx is threaded UNCHANGED: the owner's class is already on Ctx's on_path
+%% (pushed by fire_auto); the child's own do_create_instance -> fire_create ->
+%% fire_auto pushes the child's class.  Do not push it twice.
 %%-----------------------------------------------------------------------------
-fire_auto_children(_RuleNode, _Deploy, _ChildClass, Mult, I, _Owner, _OnPath1,
+fire_auto_children(_RuleNode, _Deploy, _ChildClass, Mult, I, _Owner, _Ctx,
 				   Acc) when I > Mult ->
 	Acc;
-fire_auto_children(RuleNode, Deploy, ChildClass, Mult, I, OwnerNref, OnPath1,
+fire_auto_children(RuleNode, Deploy, ChildClass, Mult, I, OwnerNref, Ctx,
 				   Acc) ->
 	Name = graphdb_rules:rule_child_name(RuleNode, ChildClass, I, Mult),
-	Acc2 = case do_create_instance(Name, ChildClass, OwnerNref, undefined,
-								   OnPath1) of
+	Acc2 = case do_create_instance(Name, ChildClass, OwnerNref, Ctx) of
 		{ok, ChildNref, SubReport} ->
 			A1 = add_outcome(Acc, RuleNode, Deploy,
 					#{owner => OwnerNref, index => I, status => fired,
@@ -664,7 +1011,7 @@ fire_auto_children(RuleNode, Deploy, ChildClass, Mult, I, OwnerNref, OnPath1,
 					  reason => R})
 	end,
 	fire_auto_children(RuleNode, Deploy, ChildClass, Mult, I + 1, OwnerNref,
-					   OnPath1, Acc2).
+					   Ctx, Acc2).
 
 %%-----------------------------------------------------------------------------
 %% fire_propose(InstPlan, OnPath) -> report()
@@ -930,13 +1277,15 @@ validate_template_scope(TemplateNref, SourceClass, TargetClass) ->
 
 
 %%-----------------------------------------------------------------------------
-%% write_connection_arcs(S, C, T, R, TemplateNref, {FwdAVPs, RevAVPs}) ->
-%%     ok | {error, term()}
+%% build_connection_rows(S, C, T, R, TemplateNref, {FwdAVPs, RevAVPs})
+%%   -> [{relationships, #relationship{}}]
 %%
-%% The Template AVP is prepended to each direction's user AVPs so the
-%% scope is always present at index 0; M5 user AVPs follow.
+%% Builds the two directed connection rows (Template AVP at index 0).  Rel-ids
+%% are allocated here, OUTSIDE any transaction (L10).  No write -- the caller
+%% decides which transaction the rows land in (B4 mandatory connections ride the
+%% composition root txn; auto connections are written post-commit).
 %%-----------------------------------------------------------------------------
-write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
+build_connection_rows(SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref, {FwdAVPs, RevAVPs}) ->
 	{Id1, Id2} = rel_id_server:get_id_pair(),
 	TemplateAVP = #{attribute => ?ARC_TEMPLATE, value => TemplateNref},
@@ -956,9 +1305,21 @@ write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
 		reciprocal = CharNref,
 		avps = [TemplateAVP | RevAVPs]
 	},
+	[{relationships, Fwd}, {relationships, Rev}].
+
+%% write_connection_arcs(S, C, T, R, TemplateNref, {FwdAVPs, RevAVPs}) ->
+%%     ok | {error, term()}
+%%
+%% Builds the two connection rows and writes them in their OWN transaction.
+%% Used by add_relationship/4,5,6 and by the post-commit auto-connection pass.
+%%-----------------------------------------------------------------------------
+write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
+		TemplateNref, AVPSpec) ->
+	Rows = build_connection_rows(SourceNref, CharNref, TargetNref,
+								 ReciprocalNref, TemplateNref, AVPSpec),
 	Txn = fun() ->
-		ok = mnesia:write(relationships, Fwd, write),
-		ok = mnesia:write(relationships, Rev, write)
+		lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
+					  Rows)
 	end,
 	case mnesia:transaction(Txn) of
 		{atomic, ok}      -> ok;
@@ -1428,10 +1789,13 @@ walk_not_attempted(#{mandatory_children := Kids}, Acc0) ->
 
 %%-----------------------------------------------------------------------------
 %% summarize(Report) -> #{fired => N, failed => M, not_attempted => K,
-%%                        proposed => P}
+%%                        proposed => P, connected => C, required => Rq,
+%%                        not_connected => Nc}
 %%-----------------------------------------------------------------------------
 summarize(Report) ->
 	Outs = [O || #{outcomes := Os} <- Report, O <- Os],
 	Count = fun(S) -> length([1 || #{status := X} <- Outs, X =:= S]) end,
 	#{fired => Count(fired), failed => Count(failed),
-	  not_attempted => Count(not_attempted), proposed => Count(proposed)}.
+	  not_attempted => Count(not_attempted), proposed => Count(proposed),
+	  connected => Count(connected), required => Count(required),
+	  not_connected => Count(not_connected)}.

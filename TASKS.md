@@ -654,8 +654,8 @@ learning.
   caller accepts a proposal by issuing an ordinary `create_instance/3`
   for the proposed class. Design:
   `docs/designs/f4-phase-b3-propose-mode-design.md`.
-- **B-prep — multiplicity-range refactor — OUTSTANDING (prerequisite for
-  B4).** Reshape `multiplicity` from `pos_integer() | unbounded` to a
+- **B-prep — multiplicity-range refactor — DONE (PR #36).** Reshaped
+  `multiplicity` from `pos_integer() | unbounded` to a
   `{Min, Max}` pair (`Min :: non_neg_integer()`, `Max :: pos_integer() |
   unbounded`) across **both** composition and connection rules — uniform
   rule shape; `unbounded` survives only as a value of `Max`, never
@@ -669,8 +669,15 @@ learning.
   optional children up to `Max`) — a separate later feature. Must land
   before B4 (which consumes `{Min, Max}` deployment). See
   `docs/designs/f4-phase-b4-connection-firing-design.md` §7 and B4-D5.
-- **B4** connection firing (needs B-prep first); **B5** horizontal
-  conflict precedence — OUTSTANDING.
+- **B4 — connection firing — DONE.** `create_instance/4` threads a
+  caller-supplied resolver; a RESOLVE step fires effective ConnectionRules
+  (`mandatory` in the root txn, `auto` post-commit, `defer`/`propose`
+  reported). ConnectionRule gains a `reciprocal_nref` content AVP;
+  `create_connection_rule/8,9` (reciprocal param) supersede `/7,8`;
+  `effective_connection_rules/2` is the read seam. Design
+  `docs/designs/f4-phase-b4-connection-firing-design.md`; plan
+  `docs/superpowers/plans/2026-06-11-f4-phase-b4-connection-firing.md`.
+- **B5** horizontal conflict precedence — OUTSTANDING.
 
 **Evidence:** `apps/graphdb/src/graphdb_rules.erl` Phases A+B1+B2+B3 are
 implemented.
