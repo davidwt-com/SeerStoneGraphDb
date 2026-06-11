@@ -76,13 +76,6 @@
 ]).
 
 %%---------------------------------------------------------------------
-%% B4 Task 1 test case exports
-%%---------------------------------------------------------------------
--export([
-	seeds_reciprocal_literal/1
-]).
-
-%%---------------------------------------------------------------------
 %% Test cases
 %%---------------------------------------------------------------------
 -export([
@@ -112,6 +105,7 @@
 	referenced_class_not_found_rejected/1,
 	referenced_not_a_class_rejected/1,
 	characterization_not_found_rejected/1,
+	reciprocal_not_found_rejected/1,
 	not_a_relationship_attribute_rejected/1,
 	reciprocal_not_a_relationship_attribute_rejected/1,
 	template_not_found_rejected/1,
@@ -198,6 +192,7 @@ groups() ->
 			referenced_class_not_found_rejected,
 			referenced_not_a_class_rejected,
 			characterization_not_found_rejected,
+			reciprocal_not_found_rejected,
 			not_a_relationship_attribute_rejected,
 			reciprocal_not_a_relationship_attribute_rejected,
 			template_not_found_rejected,
@@ -721,6 +716,16 @@ characterization_not_found_rejected(_Config) ->
 	?assertEqual({error, characterization_not_found},
 		graphdb_rules:create_connection_rule(
 			environment, "x", Source, 999999, Recip, Target, mandatory, {1, 1})),
+	?assertEqual(Before, table_size(nodes)).
+
+reciprocal_not_found_rejected(_Config) ->
+	Source = make_class("Order"),
+	Target = make_class("Customer"),
+	Char   = make_rel_char("placed_by", "placed"),
+	Before = table_size(nodes),
+	?assertEqual({error, reciprocal_not_found},
+		graphdb_rules:create_connection_rule(
+			environment, "x", Source, Char, 999999, Target, mandatory, {1, 1})),
 	?assertEqual(Before, table_size(nodes)).
 
 not_a_relationship_attribute_rejected(_Config) ->
@@ -1349,7 +1354,8 @@ make_rel_char(Name, Recip) ->
 	Fwd.
 
 %% make_rel_pair(Name, Recip) -> {FwdNref, RevNref}
-%% Creates a reciprocal relationship-attribute pair and returns both nrefs.
+%% target_kind=instance: connection rules fire against instance arcs.  Both
+%% the forward (characterization) and reverse (reciprocal) labels are returned.
 make_rel_pair(Name, Recip) ->
 	{ok, {Fwd, Rev}} =
 		graphdb_attr:create_relationship_attribute_pair(Name, Recip, instance),
