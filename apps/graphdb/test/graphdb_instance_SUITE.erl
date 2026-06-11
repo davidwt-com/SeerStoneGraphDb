@@ -167,7 +167,12 @@
 	firing_conn_descendant_in_root_txn/1,
 	%% B4 auto connection post-commit
 	firing_conn_auto_connected/1,
-	firing_conn_auto_invalid_survives/1
+	firing_conn_auto_invalid_survives/1,
+	%% B4 target validation (B4-D6)
+	firing_conn_subclass_target_accepted/1,
+	firing_conn_missing_target_fails/1,
+	firing_conn_non_instance_target_fails/1,
+	firing_conn_resolver_avps_stamped/1
 ]).
 
 
@@ -294,7 +299,11 @@ groups() ->
 			firing_conn_rollback_discriminable_connection,
 			firing_conn_descendant_in_root_txn,
 			firing_conn_auto_connected,
-			firing_conn_auto_invalid_survives
+			firing_conn_auto_invalid_survives,
+			firing_conn_subclass_target_accepted,
+			firing_conn_missing_target_fails,
+			firing_conn_non_instance_target_fails,
+			firing_conn_resolver_avps_stamped
 		]}
 	].
 
@@ -2035,8 +2044,71 @@ firing_conn_auto_invalid_survives(_Config) ->
 
 
 %%=============================================================================
+%% B4 Target Validation Tests (B4-D6)
+%%=============================================================================
+
+%% a target that is an instance of a SUBCLASS of target_class is accepted.
+firing_conn_subclass_target_accepted(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, SubMfr} = graphdb_class:create_class("SubMfr", Tgt),   %% subclass of Mfr
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	Target = b4_target_instance("acme", SubMfr),
+	R = fun(_Ctx) -> {connect, [Target]} end,
+	{ok, Root, Report} = graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual([Target], b4_conn_targets(Root, Char)),
+	?assertEqual(connected, maps:get(status, b4_single_outcome(Report))).
+
+%% a missing target nref on a mandatory rule fails the create; nothing written.
+firing_conn_missing_target_fails(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	R = fun(_Ctx) -> {connect, [999999]} end,
+	Before = mnesia:table_info(nodes, size),
+	{error, {invalid_connection_target, {target_not_found, 999999}}, _Report} =
+		graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual(Before, mnesia:table_info(nodes, size)).
+
+%% a non-instance target (a class nref) on a mandatory rule fails the create.
+firing_conn_non_instance_target_fails(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	R = fun(_Ctx) -> {connect, [Tgt]} end,             %% Tgt is a class, not an instance
+	Before = mnesia:table_info(nodes, size),
+	{error, {invalid_connection_target, {target_not_an_instance, Tgt}}, _R} =
+		graphdb_instance:create_instance("car1", Src, 5, R),
+	?assertEqual(Before, mnesia:table_info(nodes, size)).
+
+%% resolver-supplied per-direction AVPs are stamped on the written arc.
+firing_conn_resolver_avps_stamped(_Config) ->
+	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
+	{ok, _} = graphdb_rules:create_connection_rule(
+		environment, "car-made-by", Src, Char, Recip, Tgt, mandatory, {1, 1}),
+	Target = b4_target_instance("acme", Tgt),
+	FwdAVP = #{attribute => Char, value => "fwd-meta"},
+	RevAVP = #{attribute => Recip, value => "rev-meta"},
+	R = fun(_Ctx) -> {connect, [{Target, {[FwdAVP], [RevAVP]}}]} end,
+	{ok, Root, _Report} = graphdb_instance:create_instance("car1", Src, 5, R),
+	Fwd = b4_conn_arc(Root, Char),
+	Rev = b4_conn_arc(Target, Recip),
+	?assert(lists:member(FwdAVP, Fwd#relationship.avps)),
+	?assert(lists:member(RevAVP, Rev#relationship.avps)).
+
+
+%%=============================================================================
 %% B4 helpers
 %%=============================================================================
+
+%% the single outgoing connection arc (#relationship{}) from Source with char.
+b4_conn_arc(Source, Char) ->
+	Arcs = mnesia:dirty_index_read(relationships, Source,
+								   #relationship.source_nref),
+	[Arc] = [A || A <- Arcs,
+			 A#relationship.kind =:= connection,
+			 A#relationship.characterization =:= Char],
+	Arc.
 
 %% the seeded instantiable marker nref (for building abstract classes).
 b4_inst_attr() ->
