@@ -295,8 +295,6 @@ list_rules(Scope) ->
 %%                         (not expanded further)
 %%
 %% Error reasons:
-%%   {unbounded_multiplicity_not_fireable, RuleNref} --
-%%       a mandatory rule has multiplicity=unbounded
 %%   {class_not_instantiable, ChildClassNref} --
 %%       a mandatory rule's child_class is abstract (L9)
 %%
@@ -638,9 +636,12 @@ validate_mode(M) when M =:= mandatory; M =:= auto; M =:= propose ->
 validate_mode(_) ->
 	{error, invalid_mode}.
 
-validate_multiplicity(unbounded) ->
+validate_multiplicity({Min, Max})
+		when is_integer(Min), Min >= 0,
+			 is_integer(Max), Max >= 1, Max >= Min ->
 	ok;
-validate_multiplicity(N) when is_integer(N), N >= 1 ->
+validate_multiplicity({Min, unbounded})
+		when is_integer(Min), Min >= 0 ->
 	ok;
 validate_multiplicity(_) ->
 	{error, invalid_multiplicity}.
@@ -841,7 +842,8 @@ attached_rules_with_deployment(ClassNref, State) ->
 %% #{mode, multiplicity, template}.  A key whose AVP is absent is omitted
 %% (B1-D2).  The `template' key reads the arc Template scope marker
 %% (?ARC_TEMPLATE, attr 31) -- NOT the template_nref content literal on the
-%% rule node.
+%% rule node.  'multiplicity' is a {Min, Max} range (B-prep); the fold copies
+%% it verbatim.
 decode_deployment(AVPs, State) ->
 	Pairs = [{mode,         State#state.mode_attr},
 			 {multiplicity, State#state.multiplicity_attr},
@@ -948,22 +950,17 @@ plan_mandatory(RuleNode, Deploy, OnPath1, State, Acc) ->
 		true ->
 			{ok, Acc};                  %% B2-D5 zero-level cut: self-nest, no fire
 		false ->
-			case maps:get(multiplicity, Deploy, 1) of
-				unbounded ->
-					fail({unbounded_multiplicity_not_fireable,
-						  RuleNode#node.nref}, RuleNode, Acc);
-				Mult ->
-					case graphdb_class:is_instantiable(ChildClass) of
-						true ->
-							expand_children(RuleNode, Deploy, ChildClass, Mult, 1,
-											OnPath1, State, Acc);
-						false ->
-							fail({class_not_instantiable, ChildClass},
-								 RuleNode, Acc);
-						{error, Reason} ->
-							fail({child_class_invalid, ChildClass, Reason},
-								 RuleNode, Acc)
-					end
+			{Min, _Max} = maps:get(multiplicity, Deploy, {1, 1}),
+			case graphdb_class:is_instantiable(ChildClass) of
+				true ->
+					expand_children(RuleNode, Deploy, ChildClass, Min, 1,
+									OnPath1, State, Acc);
+				false ->
+					fail({class_not_instantiable, ChildClass},
+						 RuleNode, Acc);
+				{error, Reason} ->
+					fail({child_class_invalid, ChildClass, Reason},
+						 RuleNode, Acc)
 			end
 	end.
 

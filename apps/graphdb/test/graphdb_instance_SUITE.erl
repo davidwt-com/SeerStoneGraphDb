@@ -142,7 +142,15 @@
 	firing_propose_on_path_cut/1,
 	firing_propose_summarize/1,
 	firing_propose_with_mandatory_and_auto/1,
-	firing_propose_owner_is_materialised_child/1
+	firing_propose_owner_is_materialised_child/1,
+	firing_propose_carries_max/1,
+	firing_propose_min_zero_surfaces_none/1,
+	%% B-prep mint-Min (BP-D2/BP-D3)
+	firing_mandatory_mints_min/1,
+	firing_mandatory_min_zero_mints_none/1,
+	firing_mandatory_min_unbounded_mints_min/1,
+	firing_auto_mints_min/1,
+	firing_auto_min_zero_unbounded/1
 ]).
 
 
@@ -238,9 +246,14 @@ groups() ->
 			firing_mandatory_mult,
 			firing_mandatory_cascade_atomic,
 			firing_mandatory_failure_rolls_back,
+			firing_mandatory_mints_min,
+			firing_mandatory_min_zero_mints_none,
+			firing_mandatory_min_unbounded_mints_min,
 			firing_auto_best_effort,
 			firing_auto_failure_survives,
 			firing_auto_cascade_merges,
+			firing_auto_mints_min,
+			firing_auto_min_zero_unbounded,
 			firing_propose_outcome_in_report,
 			firing_propose_not_materialised,
 			firing_propose_multiplicity_bounded,
@@ -248,7 +261,9 @@ groups() ->
 			firing_propose_on_path_cut,
 			firing_propose_summarize,
 			firing_propose_with_mandatory_and_auto,
-			firing_propose_owner_is_materialised_child
+			firing_propose_owner_is_materialised_child,
+			firing_propose_carries_max,
+			firing_propose_min_zero_surfaces_none
 		]}
 	].
 
@@ -315,7 +330,14 @@ setup_firing_fixtures(TC, Config) ->
 				   firing_propose_on_path_cut,
 				   firing_propose_summarize,
 				   firing_propose_with_mandatory_and_auto,
-				   firing_propose_owner_is_materialised_child],
+				   firing_propose_owner_is_materialised_child,
+				   firing_propose_carries_max,
+				   firing_propose_min_zero_surfaces_none,
+				   firing_mandatory_mints_min,
+				   firing_mandatory_min_zero_mints_none,
+				   firing_mandatory_min_unbounded_mints_min,
+				   firing_auto_mints_min,
+				   firing_auto_min_zero_unbounded],
 	case lists:member(TC, FiringTests) of
 		true ->
 			{ok, #{instantiable := InstAttr}} = graphdb_attr:seeded_nrefs(),
@@ -1342,7 +1364,7 @@ firing_no_rules_baseline(_Config) ->
 firing_single_mandatory(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OB", Owner, Bolt, mandatory, 1),
+		environment, "OB", Owner, Bolt, mandatory, {1, 1}),
 	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	%% one Bolt child created, reported fired under the rule
 	{ok, Kids} = graphdb_instance:children(Root),
@@ -1359,13 +1381,13 @@ firing_single_mandatory(Config) ->
 firing_mandatory_mult(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OB", Owner, Bolt, mandatory, 3),
+		environment, "OB", Owner, Bolt, mandatory, {3, 3}),
 	{ok, _Root, [#{deployment := Dep, outcomes := Outs}]} =
 		graphdb_instance:create_instance("car", Owner, 5),
 	?assertEqual(3, length(Outs)),
 	?assertEqual([1, 2, 3], [maps:get(index, O) || O <- Outs]),
 	%% B2-D6: report carries the rule's real deployment map
-	?assertEqual(3, maps:get(multiplicity, Dep)),
+	?assertEqual({3, 3}, maps:get(multiplicity, Dep)),
 	?assertEqual(mandatory, maps:get(mode, Dep)).
 
 %%-----------------------------------------------------------------------------
@@ -1374,9 +1396,9 @@ firing_mandatory_mult(Config) ->
 firing_mandatory_cascade_atomic(Config) ->
 	{Owner, Bolt, Widget} = ?config(obw, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OB", Owner, Bolt, mandatory, 1),
+		environment, "OB", Owner, Bolt, mandatory, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "BW", Bolt, Widget, mandatory, 1),
+		environment, "BW", Bolt, Widget, mandatory, {1, 1}),
 	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	{ok, [BoltInst]} = graphdb_instance:children(Root),
 	BoltNref = element(2, BoltInst),
@@ -1391,7 +1413,7 @@ firing_mandatory_cascade_atomic(Config) ->
 firing_mandatory_failure_rolls_back(Config) ->
 	{Owner, Abstract} = ?config(oa, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OA", Owner, Abstract, mandatory, 1),
+		environment, "OA", Owner, Abstract, mandatory, {1, 1}),
 	Before = mnesia:table_info(nodes, size),
 	{error, {class_not_instantiable, Abstract}, Report} =
 		graphdb_instance:create_instance("car", Owner, 5),
@@ -1410,7 +1432,7 @@ firing_mandatory_failure_rolls_back(Config) ->
 firing_auto_best_effort(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OBauto", Owner, Bolt, auto, 1),
+		environment, "OBauto", Owner, Bolt, auto, {1, 1}),
 	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	{ok, [_]} = graphdb_instance:children(Root),       %% auto child created
 	?assertEqual(#{fired => 1, failed => 0, not_attempted => 0, proposed => 0},
@@ -1423,7 +1445,7 @@ firing_auto_best_effort(Config) ->
 firing_auto_failure_survives(Config) ->
 	{Owner, Abstract} = ?config(oa, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OAauto", Owner, Abstract, auto, 1),
+		environment, "OAauto", Owner, Abstract, auto, {1, 1}),
 	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	?assert(is_integer(Root)),                         %% root survived
 	?assertEqual(#{fired => 0, failed => 1, not_attempted => 0, proposed => 0},
@@ -1436,9 +1458,9 @@ firing_auto_failure_survives(Config) ->
 firing_auto_cascade_merges(Config) ->
 	{Owner, Bolt, Widget} = ?config(obw, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OBauto", Owner, Bolt, auto, 1),
+		environment, "OBauto", Owner, Bolt, auto, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "BW", Bolt, Widget, mandatory, 1),
+		environment, "BW", Bolt, Widget, mandatory, {1, 1}),
 	{ok, _Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	%% the auto Bolt and its mandatory Widget both fired
 	?assertEqual(#{fired => 2, failed => 0, not_attempted => 0, proposed => 0},
@@ -1451,7 +1473,7 @@ firing_auto_cascade_merges(Config) ->
 firing_propose_outcome_in_report(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OBpropose", Owner, Bolt, propose, 1),
+		environment, "OBpropose", Owner, Bolt, propose, {1, 1}),
 	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	%% no child materialised
 	?assertEqual({ok, []}, graphdb_instance:children(Root)),
@@ -1470,7 +1492,7 @@ firing_propose_outcome_in_report(Config) ->
 firing_propose_not_materialised(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OBpropose", Owner, Bolt, propose, 3),
+		environment, "OBpropose", Owner, Bolt, propose, {3, 3}),
 	Before = mnesia:table_info(nodes, size),
 	{ok, _Root, _Report} = graphdb_instance:create_instance("car", Owner, 5),
 	After = mnesia:table_info(nodes, size),
@@ -1483,7 +1505,7 @@ firing_propose_not_materialised(Config) ->
 firing_propose_multiplicity_bounded(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OBpropose", Owner, Bolt, propose, 3, undefined,
+		environment, "OBpropose", Owner, Bolt, propose, {3, 3}, undefined,
 		#{name_pattern => "Spare {i}"}),
 	{ok, _Root, [#{outcomes := Outs}]} =
 		graphdb_instance:create_instance("car", Owner, 5),
@@ -1494,18 +1516,19 @@ firing_propose_multiplicity_bounded(Config) ->
 	?assert(lists:all(fun(O) -> maps:get(status, O) =:= proposed end, Outs)).
 
 %%-----------------------------------------------------------------------------
-%% B3 OI-B3-1: unbounded propose yields exactly ONE proposed outcome with
-%% index=unbounded.
+%% B-prep: {1, unbounded} propose yields one proposed outcome (index 1) carrying
+%% max => unbounded.  The old index=unbounded sentinel is retired (BP-D3).
 %%-----------------------------------------------------------------------------
 firing_propose_multiplicity_unbounded(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OBpropose", Owner, Bolt, propose, unbounded),
+		environment, "OBpropose", Owner, Bolt, propose, {1, unbounded}),
 	{ok, _Root, [#{outcomes := Outs}]} =
 		graphdb_instance:create_instance("car", Owner, 5),
 	?assertEqual(1, length(Outs)),
-	[#{index := Idx, status := proposed}] = Outs,
-	?assertEqual(unbounded, Idx).
+	[#{index := Idx, status := proposed, max := Max}] = Outs,
+	?assertEqual(1, Idx),
+	?assertEqual(unbounded, Max).
 
 %%-----------------------------------------------------------------------------
 %% B3 OI-B3-2: a propose rule whose child class is already on the
@@ -1515,7 +1538,7 @@ firing_propose_multiplicity_unbounded(Config) ->
 firing_propose_on_path_cut(Config) ->
 	{Owner, _Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "selfpropose", Owner, Owner, propose, 1),
+		environment, "selfpropose", Owner, Owner, propose, {1, 1}),
 	{ok, _Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	?assertEqual([], Report).
 
@@ -1525,7 +1548,7 @@ firing_propose_on_path_cut(Config) ->
 firing_propose_summarize(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OBpropose", Owner, Bolt, propose, 2),
+		environment, "OBpropose", Owner, Bolt, propose, {2, 2}),
 	{ok, _Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	?assertEqual(#{fired => 0, failed => 0, not_attempted => 0, proposed => 2},
 				 graphdb_instance:summarize(Report)).
@@ -1540,11 +1563,11 @@ firing_propose_with_mandatory_and_auto(Config) ->
 	%% class directly (parent nref 3 = Classes category).
 	{ok, Gizmo} = graphdb_class:create_class("Gizmo", 3),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "man", Owner, Bolt, mandatory, 1),
+		environment, "man", Owner, Bolt, mandatory, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "aut", Owner, Widget, auto, 1),
+		environment, "aut", Owner, Widget, auto, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "pro", Owner, Gizmo, propose, 1),
+		environment, "pro", Owner, Gizmo, propose, {1, 1}),
 	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	%% two children materialised (mandatory Bolt + auto Widget), Gizmo is not
 	{ok, Kids} = graphdb_instance:children(Root),
@@ -1560,9 +1583,9 @@ firing_propose_with_mandatory_and_auto(Config) ->
 firing_propose_owner_is_materialised_child(Config) ->
 	{Owner, Bolt, Widget} = ?config(obw, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OB", Owner, Bolt, mandatory, 1),
+		environment, "OB", Owner, Bolt, mandatory, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "BWpropose", Bolt, Widget, propose, 1),
+		environment, "BWpropose", Bolt, Widget, propose, {1, 1}),
 	{ok, Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
 	%% the materialised mandatory child
 	{ok, [BoltInst]} = graphdb_instance:children(Root),
@@ -1576,6 +1599,99 @@ firing_propose_owner_is_materialised_child(Config) ->
 	%% owner is the materialised Bolt child, NOT the root
 	?assertEqual(BoltNref, maps:get(owner, PO)),
 	?assertNotEqual(Root, maps:get(owner, PO)).
+
+
+%%-----------------------------------------------------------------------------
+%% B-prep BP-D2(b): propose {3, 5} surfaces 3 outcomes, each carrying max => 5.
+%%-----------------------------------------------------------------------------
+firing_propose_carries_max(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OBp3-5", Owner, Bolt, propose, {3, 5}),
+	{ok, _Root, [#{outcomes := Outs}]} =
+		graphdb_instance:create_instance("car", Owner, 5),
+	?assertEqual(3, length(Outs)),
+	?assertEqual([1, 2, 3], [maps:get(index, O) || O <- Outs]),
+	?assert(lists:all(fun(O) -> maps:get(max, O) =:= 5 end, Outs)),
+	?assert(lists:all(fun(O) -> maps:get(status, O) =:= proposed end, Outs)),
+	%% no index=unbounded sentinel survives
+	?assertEqual([], [O || O <- Outs, maps:get(index, O) =:= unbounded]).
+
+%%-----------------------------------------------------------------------------
+%% B-prep: {0, K} propose surfaces nothing by default (Min = 0); the ceiling K
+%% is for the future interactive-creation session (BP-OI-1).
+%%-----------------------------------------------------------------------------
+firing_propose_min_zero_surfaces_none(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OBp0-3", Owner, Bolt, propose, {0, 3}),
+	{ok, _Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
+	?assertEqual(0, maps:get(proposed, graphdb_instance:summarize(Report))).
+
+%%-----------------------------------------------------------------------------
+%% B-prep BP-D2: mandatory composition mints Min children.
+%%-----------------------------------------------------------------------------
+firing_mandatory_mints_min(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB2-5", Owner, Bolt, mandatory, {2, 5}),
+	{ok, _Root, [#{outcomes := Outs}]} =
+		graphdb_instance:create_instance("car", Owner, 5),
+	Fired = [O || O <- Outs, maps:get(status, O) =:= fired],
+	?assertEqual(2, length(Fired)),
+	?assertEqual([1, 2], [maps:get(index, O) || O <- Fired]).
+
+%%-----------------------------------------------------------------------------
+%% B-prep: {0, K} mandatory mints nothing (vacuous) and does not fail.
+%%-----------------------------------------------------------------------------
+firing_mandatory_min_zero_mints_none(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB0-3", Owner, Bolt, mandatory, {0, 3}),
+	{ok, _Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
+	?assertEqual(#{fired => 0, failed => 0, not_attempted => 0, proposed => 0},
+				 graphdb_instance:summarize(Report)).
+
+%%-----------------------------------------------------------------------------
+%% B-prep BP-D3: {1, unbounded} mandatory mints Min (1) — no
+%% unbounded_multiplicity_not_fireable.
+%%-----------------------------------------------------------------------------
+firing_mandatory_min_unbounded_mints_min(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OB1-U", Owner, Bolt, mandatory, {1, unbounded}),
+	{ok, _Root, [#{outcomes := Outs}]} =
+		graphdb_instance:create_instance("car", Owner, 5),
+	Fired = [O || O <- Outs, maps:get(status, O) =:= fired],
+	?assertEqual(1, length(Fired)),
+	?assert(lists:all(fun(O) ->
+		maps:get(reason, O, none) =/= unbounded_multiplicity_not_fireable
+	end, Outs)).
+
+%%-----------------------------------------------------------------------------
+%% B-prep BP-D2: auto composition mints Min children post-commit.
+%%-----------------------------------------------------------------------------
+firing_auto_mints_min(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OBauto2-5", Owner, Bolt, auto, {2, 5}),
+	{ok, _Root, [#{outcomes := Outs}]} =
+		graphdb_instance:create_instance("car", Owner, 5),
+	Fired = [O || O <- Outs, maps:get(status, O) =:= fired],
+	?assertEqual(2, length(Fired)).
+
+%%-----------------------------------------------------------------------------
+%% B-prep BP-D3: {0, unbounded} auto mints nothing and does not fail.
+%%-----------------------------------------------------------------------------
+firing_auto_min_zero_unbounded(Config) ->
+	{Owner, Bolt} = ?config(ob, Config),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "OBauto0-U", Owner, Bolt, auto, {0, unbounded}),
+	{ok, _Root, Report} = graphdb_instance:create_instance("car", Owner, 5),
+	Outs = lists:append([maps:get(outcomes, RR) || RR <- Report]),
+	?assertEqual([], [O || O <- Outs,
+		maps:get(reason, O, none) =:= unbounded_multiplicity_not_fireable]),
+	#{failed := 0} = graphdb_instance:summarize(Report).
 
 
 %%=============================================================================

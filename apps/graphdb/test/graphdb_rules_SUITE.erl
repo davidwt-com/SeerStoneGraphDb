@@ -67,7 +67,7 @@
 	plan_propose_accumulated/1,
 	plan_mixed_modes/1,
 	plan_propose_at_mandatory_child/1,
-	plan_unbounded_mandatory_fails/1,
+	plan_unbounded_mandatory_mints_min/1,
 	plan_abstract_mandatory_child_fails/1,
 	plan_cascade/1,
 	plan_cycle_self_nest_zero_children/1,
@@ -108,6 +108,7 @@
 	not_a_template_rejected/1,
 	invalid_mode_rejected/1,
 	invalid_multiplicity_rejected/1,
+	multiplicity_range_validation/1,
 	failed_validation_consumes_no_nref/1,
 	%% retrieval
 	rules_for_class_returns_all_kinds/1,
@@ -190,6 +191,7 @@ groups() ->
 			not_a_template_rejected,
 			invalid_mode_rejected,
 			invalid_multiplicity_rejected,
+			multiplicity_range_validation,
 			failed_validation_consumes_no_nref
 		]},
 		{retrieval, [], [
@@ -230,7 +232,7 @@ groups() ->
 			plan_name_pattern,
 			plan_mult_one_singular_name,
 			plan_auto_annotated_not_expanded,
-			plan_unbounded_mandatory_fails,
+			plan_unbounded_mandatory_mints_min,
 			plan_abstract_mandatory_child_fails,
 			plan_cascade,
 			plan_cycle_self_nest_zero_children,
@@ -283,7 +285,7 @@ init_per_testcase(TC, Config) ->
 plan_firing_fixtures(TC, Config) ->
 	PlanFiringCases = [
 		plan_single_mandatory, plan_name_pattern, plan_mult_one_singular_name,
-		plan_auto_annotated_not_expanded, plan_unbounded_mandatory_fails,
+		plan_auto_annotated_not_expanded, plan_unbounded_mandatory_mints_min,
 		plan_abstract_mandatory_child_fails, plan_cascade,
 		plan_cycle_self_nest_zero_children, plan_cycle_a_b_a,
 		plan_project_scope_is_leaf,
@@ -450,7 +452,7 @@ creates_composition_rule_minimal(_Config) ->
 	Parent = make_class("Car"),
 	Child  = make_class("Engine"),
 	{ok, RuleNref} = graphdb_rules:create_composition_rule(
-		environment, "car-has-engine", Parent, Child, mandatory, 1),
+		environment, "car-has-engine", Parent, Child, mandatory, {1, 1}),
 	?assert(is_integer(RuleNref)),
 	{ok, #node{kind = instance, classes = Classes}} = node_read2(RuleNref),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
@@ -461,7 +463,7 @@ creates_composition_rule_with_template(_Config) ->
 	Child  = make_class("Wheel"),
 	{ok, DT} = graphdb_class:default_template(Parent),
 	{ok, RuleNref} = graphdb_rules:create_composition_rule(
-		environment, "car-has-wheel", Parent, Child, auto, 4, DT),
+		environment, "car-has-wheel", Parent, Child, auto, {4, 4}, DT),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	TemplateAttr = maps:get(template_nref_attr, S),
 	{ok, #node{attribute_value_pairs = AVPs}} = node_read2(RuleNref),
@@ -471,7 +473,7 @@ applies_to_arc_pair_written(_Config) ->
 	Parent = make_class("Car"),
 	Child  = make_class("Engine"),
 	{ok, RuleNref} = graphdb_rules:create_composition_rule(
-		environment, "car-has-engine", Parent, Child, mandatory, 1),
+		environment, "car-has-engine", Parent, Child, mandatory, {1, 1}),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	AppliesTo = maps:get(applies_to, S),
 	AppliedBy = maps:get(applied_by, S),
@@ -485,13 +487,13 @@ applies_to_arc_pair_written(_Config) ->
 	FAVPs = Fwd#relationship.avps,
 	?assert(lists:member(#{attribute => ?ARC_TEMPLATE, value => DT}, FAVPs)),
 	?assert(lists:member(#{attribute => ModeAttr, value => mandatory}, FAVPs)),
-	?assert(lists:member(#{attribute => MultAttr, value => 1}, FAVPs)).
+	?assert(lists:member(#{attribute => MultAttr, value => {1, 1}}, FAVPs)).
 
 instance_to_class_membership_written(_Config) ->
 	Parent = make_class("Car"),
 	Child  = make_class("Engine"),
 	{ok, RuleNref} = graphdb_rules:create_composition_rule(
-		environment, "car-has-engine", Parent, Child, mandatory, 1),
+		environment, "car-has-engine", Parent, Child, mandatory, {1, 1}),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	Comp = maps:get(composition_rule, S),
 	I2C = read_arc(RuleNref, ?ARC_INST_TO_CLASS, Comp),
@@ -503,7 +505,7 @@ avps_present_and_correct(_Config) ->
 	Parent = make_class("Car"),
 	Child  = make_class("Engine"),
 	{ok, RuleNref} = graphdb_rules:create_composition_rule(
-		environment, "car-has-engine", Parent, Child, mandatory, 1),
+		environment, "car-has-engine", Parent, Child, mandatory, {1, 1}),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	ChildAttr = maps:get(child_class_nref_attr, S),
 	{ok, #node{attribute_value_pairs = AVPs}} = node_read2(RuleNref),
@@ -518,7 +520,7 @@ composition_rule_carries_name_pattern(_Config) ->
 	Owner = make_class("Car"),
 	Child = make_class("Engine"),
 	{ok, RuleNref} = graphdb_rules:create_composition_rule(
-		environment, "PatRule", Owner, Child, mandatory, 2, undefined,
+		environment, "PatRule", Owner, Child, mandatory, {2, 2}, undefined,
 		#{name_pattern => "Bolt {i}"}),
 	{ok, #node{attribute_value_pairs = AVPs}} =
 		graphdb_rules:get_rule(environment, RuleNref),
@@ -534,12 +536,12 @@ composition_rule_carries_name_pattern(_Config) ->
 plan_propose_accumulated(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OBpropose", Owner, Bolt, propose, 3),
+		environment, "OBpropose", Owner, Bolt, propose, {3, 3}),
 	{ok, Plan} = graphdb_rules:plan_composition_firing(environment, Owner),
 	#{class := Owner, mandatory_children := [], auto_rules := [],
 	  propose_rules := [{_RuleNode, Dep}]} = Plan,
 	?assertEqual(propose, maps:get(mode, Dep)),
-	?assertEqual(3, maps:get(multiplicity, Dep)).
+	?assertEqual({3, 3}, maps:get(multiplicity, Dep)).
 
 %%-----------------------------------------------------------------------------
 %% B3: one rule of each mode on the same owner populates all three
@@ -549,11 +551,11 @@ plan_mixed_modes(Config) ->
 	{Owner, Bolt, Widget} = ?config(obw, Config),
 	Gizmo = make_class("Gizmo"),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "man", Owner, Bolt, mandatory, 1),
+		environment, "man", Owner, Bolt, mandatory, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "aut", Owner, Widget, auto, 1),
+		environment, "aut", Owner, Widget, auto, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "pro", Owner, Gizmo, propose, 1),
+		environment, "pro", Owner, Gizmo, propose, {1, 1}),
 	{ok, Plan} = graphdb_rules:plan_composition_firing(environment, Owner),
 	#{mandatory_children := Mand, auto_rules := Auto,
 	  propose_rules := Prop} = Plan,
@@ -570,9 +572,9 @@ plan_mixed_modes(Config) ->
 plan_propose_at_mandatory_child(Config) ->
 	{Owner, Bolt, Widget} = ?config(obw, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OB", Owner, Bolt, mandatory, 1),
+		environment, "OB", Owner, Bolt, mandatory, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "BWpropose", Bolt, Widget, propose, 1),
+		environment, "BWpropose", Bolt, Widget, propose, {1, 1}),
 	{ok, Plan} = graphdb_rules:plan_composition_firing(environment, Owner),
 	#{mandatory_children := [BoltPlan]} = Plan,
 	#{class := Bolt, propose_rules := [{_R, Dep}]} = BoltPlan,
@@ -589,7 +591,7 @@ creates_connection_rule_minimal(_Config) ->
 	Char   = make_rel_char("placed_by", "placed"),
 	{ok, RuleNref} = graphdb_rules:create_connection_rule(
 		environment, "order-placed-by-customer", Source, Char, Target,
-		mandatory, 1),
+		mandatory, {1, 1}),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	CharAttr   = maps:get(characterization_nref_attr, S),
 	TargetAttr = maps:get(target_class_nref_attr, S),
@@ -606,7 +608,7 @@ creates_connection_rule_with_template(_Config) ->
 	{ok, DT} = graphdb_class:default_template(Source),
 	{ok, RuleNref} = graphdb_rules:create_connection_rule(
 		environment, "order-placed-by-customer", Source, Char, Target,
-		propose, unbounded, DT),
+		propose, {1, unbounded}, DT),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	TemplateAttr = maps:get(template_nref_attr, S),
 	{ok, #node{attribute_value_pairs = AVPs}} = node_read2(RuleNref),
@@ -618,7 +620,7 @@ instance_to_class_membership_to_connection_rule(_Config) ->
 	Char   = make_rel_char("placed_by", "placed"),
 	{ok, RuleNref} = graphdb_rules:create_connection_rule(
 		environment, "order-placed-by-customer", Source, Char, Target,
-		mandatory, 1),
+		mandatory, {1, 1}),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	Conn = maps:get(connection_rule, S),
 	I2C = read_arc(RuleNref, ?ARC_INST_TO_CLASS, Conn),
@@ -637,7 +639,7 @@ class_not_found_rejected(_Config) ->
 	Before = table_size(nodes),
 	?assertEqual({error, class_not_found},
 		graphdb_rules:create_composition_rule(
-			environment, "x", 999999, Child, mandatory, 1)),
+			environment, "x", 999999, Child, mandatory, {1, 1})),
 	?assertEqual(Before, table_size(nodes)).
 
 not_a_class_rejected(_Config) ->
@@ -646,7 +648,7 @@ not_a_class_rejected(_Config) ->
 	Before = table_size(nodes),
 	?assertEqual({error, not_a_class},
 		graphdb_rules:create_composition_rule(
-			environment, "x", ?NREF_NAMES, Child, mandatory, 1)),
+			environment, "x", ?NREF_NAMES, Child, mandatory, {1, 1})),
 	?assertEqual(Before, table_size(nodes)).
 
 abstract_owning_class_rejected(_Config) ->
@@ -655,7 +657,7 @@ abstract_owning_class_rejected(_Config) ->
 	Before   = table_size(nodes),
 	?assertEqual({error, owning_class_has_no_default_template},
 		graphdb_rules:create_composition_rule(
-			environment, "x", Abstract, Child, mandatory, 1)),
+			environment, "x", Abstract, Child, mandatory, {1, 1})),
 	?assertEqual(Before, table_size(nodes)).
 
 referenced_class_not_found_rejected(_Config) ->
@@ -663,7 +665,7 @@ referenced_class_not_found_rejected(_Config) ->
 	Before = table_size(nodes),
 	?assertEqual({error, referenced_class_not_found},
 		graphdb_rules:create_composition_rule(
-			environment, "x", Parent, 999999, mandatory, 1)),
+			environment, "x", Parent, 999999, mandatory, {1, 1})),
 	?assertEqual(Before, table_size(nodes)).
 
 referenced_not_a_class_rejected(_Config) ->
@@ -671,7 +673,7 @@ referenced_not_a_class_rejected(_Config) ->
 	Before = table_size(nodes),
 	?assertEqual({error, referenced_not_a_class},
 		graphdb_rules:create_composition_rule(
-			environment, "x", Parent, ?NREF_NAMES, mandatory, 1)),
+			environment, "x", Parent, ?NREF_NAMES, mandatory, {1, 1})),
 	?assertEqual(Before, table_size(nodes)).
 
 characterization_not_found_rejected(_Config) ->
@@ -680,7 +682,7 @@ characterization_not_found_rejected(_Config) ->
 	Before = table_size(nodes),
 	?assertEqual({error, characterization_not_found},
 		graphdb_rules:create_connection_rule(
-			environment, "x", Source, 999999, Target, mandatory, 1)),
+			environment, "x", Source, 999999, Target, mandatory, {1, 1})),
 	?assertEqual(Before, table_size(nodes)).
 
 not_a_relationship_attribute_rejected(_Config) ->
@@ -691,7 +693,7 @@ not_a_relationship_attribute_rejected(_Config) ->
 	Before = table_size(nodes),
 	?assertEqual({error, not_a_relationship_attribute},
 		graphdb_rules:create_connection_rule(
-			environment, "x", Source, Lit, Target, mandatory, 1)),
+			environment, "x", Source, Lit, Target, mandatory, {1, 1})),
 	?assertEqual(Before, table_size(nodes)).
 
 template_not_found_rejected(_Config) ->
@@ -700,7 +702,7 @@ template_not_found_rejected(_Config) ->
 	Before = table_size(nodes),
 	?assertEqual({error, template_not_found},
 		graphdb_rules:create_composition_rule(
-			environment, "x", Parent, Child, mandatory, 1, 999999)),
+			environment, "x", Parent, Child, mandatory, {1, 1}, 999999)),
 	?assertEqual(Before, table_size(nodes)).
 
 not_a_template_rejected(_Config) ->
@@ -710,7 +712,7 @@ not_a_template_rejected(_Config) ->
 	Before = table_size(nodes),
 	?assertEqual({error, not_a_template},
 		graphdb_rules:create_composition_rule(
-			environment, "x", Parent, Child, mandatory, 1, Child)),
+			environment, "x", Parent, Child, mandatory, {1, 1}, Child)),
 	?assertEqual(Before, table_size(nodes)).
 
 invalid_mode_rejected(_Config) ->
@@ -719,7 +721,7 @@ invalid_mode_rejected(_Config) ->
 	Before = table_size(nodes),
 	?assertEqual({error, invalid_mode},
 		graphdb_rules:create_composition_rule(
-			environment, "x", Parent, Child, bogus, 1)),
+			environment, "x", Parent, Child, bogus, {1, 1})),
 	?assertEqual(Before, table_size(nodes)).
 
 invalid_multiplicity_rejected(_Config) ->
@@ -734,6 +736,31 @@ invalid_multiplicity_rejected(_Config) ->
 			environment, "x", Parent, Child, mandatory, "lots")),
 	?assertEqual(Before, table_size(nodes)).
 
+%% B-prep BP-D4: the {Min, Max} validation catalogue.
+multiplicity_range_validation(_Config) ->
+	Parent = make_class("Car"),
+	Child  = make_class("Engine"),
+	Ok = fun(Mult) ->
+		{ok, _} = graphdb_rules:create_composition_rule(
+			environment, "ok", Parent, Child, auto, Mult)
+	end,
+	Bad = fun(Mult) ->
+		?assertEqual({error, invalid_multiplicity},
+			graphdb_rules:create_composition_rule(
+				environment, "bad", Parent, Child, auto, Mult))
+	end,
+	%% accepted
+	Ok({1, 1}),
+	Ok({0, 3}),
+	Ok({2, unbounded}),
+	%% rejected
+	Bad({3, 1}),        %% Max < Min
+	Bad({1, 0}),        %% Max < 1
+	Bad({0, 0}),        %% Max < 1
+	Bad(5),             %% bare integer
+	Bad(unbounded),     %% bare unbounded
+	Bad({a, b}).        %% non-integers
+
 failed_validation_consumes_no_nref(_Config) ->
 	Parent = make_class("Car"),
 	Child  = make_class("Engine"),
@@ -746,7 +773,7 @@ failed_validation_consumes_no_nref(_Config) ->
 	Before = table_size(nodes),
 	?assertEqual({error, template_not_found},
 		graphdb_rules:create_composition_rule(
-			environment, "x", Parent, Child, mandatory, 1, 999999)),
+			environment, "x", Parent, Child, mandatory, {1, 1}, 999999)),
 	?assertEqual(Before, table_size(nodes)).
 
 
@@ -760,9 +787,9 @@ rules_for_class_returns_all_kinds(_Config) ->
 	Maker = make_class("Manufacturer"),
 	Char  = make_rel_char("made_by", "makes"),
 	{ok, R1} = graphdb_rules:create_composition_rule(
-		environment, "has-engine", Car, Eng, mandatory, 1),
+		environment, "has-engine", Car, Eng, mandatory, {1, 1}),
 	{ok, R2} = graphdb_rules:create_connection_rule(
-		environment, "made-by", Car, Char, Maker, mandatory, 1),
+		environment, "made-by", Car, Char, Maker, mandatory, {1, 1}),
 	{ok, Rules} = graphdb_rules:rules_for_class(environment, Car),
 	Nrefs = [N#node.nref || N <- Rules],
 	?assertEqual(lists:sort([R1, R2]), lists:sort(Nrefs)).
@@ -773,9 +800,9 @@ composition_rules_for_class_filters_by_kind(_Config) ->
 	Maker = make_class("Manufacturer"),
 	Char  = make_rel_char("made_by", "makes"),
 	{ok, R1} = graphdb_rules:create_composition_rule(
-		environment, "has-engine", Car, Eng, mandatory, 1),
+		environment, "has-engine", Car, Eng, mandatory, {1, 1}),
 	{ok, _R2} = graphdb_rules:create_connection_rule(
-		environment, "made-by", Car, Char, Maker, mandatory, 1),
+		environment, "made-by", Car, Char, Maker, mandatory, {1, 1}),
 	{ok, Comp} = graphdb_rules:composition_rules_for_class(environment, Car),
 	?assertEqual([R1], [N#node.nref || N <- Comp]).
 
@@ -785,9 +812,9 @@ connection_rules_for_class_filters_by_kind(_Config) ->
 	Maker = make_class("Manufacturer"),
 	Char  = make_rel_char("made_by", "makes"),
 	{ok, _R1} = graphdb_rules:create_composition_rule(
-		environment, "has-engine", Car, Eng, mandatory, 1),
+		environment, "has-engine", Car, Eng, mandatory, {1, 1}),
 	{ok, R2} = graphdb_rules:create_connection_rule(
-		environment, "made-by", Car, Char, Maker, mandatory, 1),
+		environment, "made-by", Car, Char, Maker, mandatory, {1, 1}),
 	{ok, Conn} = graphdb_rules:connection_rules_for_class(environment, Car),
 	?assertEqual([R2], [N#node.nref || N <- Conn]).
 
@@ -795,7 +822,7 @@ get_rule_returns_full_record(_Config) ->
 	Car = make_class("Car"),
 	Eng = make_class("Engine"),
 	{ok, R} = graphdb_rules:create_composition_rule(
-		environment, "has-engine", Car, Eng, mandatory, 1),
+		environment, "has-engine", Car, Eng, mandatory, {1, 1}),
 	{ok, #node{nref = R, kind = instance}} =
 		graphdb_rules:get_rule(environment, R).
 
@@ -814,9 +841,9 @@ list_rules_returns_all(_Config) ->
 	Bike = make_class("Bike"),
 	Whl  = make_class("Wheel"),
 	{ok, R1} = graphdb_rules:create_composition_rule(
-		environment, "car-engine", Car, Eng, mandatory, 1),
+		environment, "car-engine", Car, Eng, mandatory, {1, 1}),
 	{ok, R2} = graphdb_rules:create_composition_rule(
-		environment, "bike-wheel", Bike, Whl, mandatory, 2),
+		environment, "bike-wheel", Bike, Whl, mandatory, {2, 2}),
 	{ok, All} = graphdb_rules:list_rules(environment),
 	Nrefs = [N#node.nref || N <- All],
 	?assert(lists:member(R1, Nrefs)),
@@ -835,13 +862,13 @@ project_scope_rejected_on_create(_Config) ->
 	Child  = make_class("Engine"),
 	?assertEqual({error, project_rules_not_yet_supported},
 		graphdb_rules:create_composition_rule(
-			{project, 1}, "x", Parent, Child, mandatory, 1)),
+			{project, 1}, "x", Parent, Child, mandatory, {1, 1})),
 	Source = make_class("Order"),
 	Target = make_class("Customer"),
 	Char   = make_rel_char("placed_by", "placed"),
 	?assertEqual({error, project_rules_not_yet_supported},
 		graphdb_rules:create_connection_rule(
-			{project, 1}, "x", Source, Char, Target, mandatory, 1)).
+			{project, 1}, "x", Source, Char, Target, mandatory, {1, 1})).
 
 project_scope_returns_empty_on_retrieve(_Config) ->
 	Car = make_class("Car"),
@@ -874,15 +901,15 @@ mixed_rules_on_one_class(_Config) ->
 	SoldBy = make_rel_char("sold_by", "sells"),
 	{ok, DT} = graphdb_class:default_template(Car),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "engine", Car, Eng, mandatory, 1),
+		environment, "engine", Car, Eng, mandatory, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "wheels", Car, Whl, auto, 4, DT),
+		environment, "wheels", Car, Whl, auto, {4, 4}, DT),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "sunroof", Car, Sun, propose, 1),
+		environment, "sunroof", Car, Sun, propose, {1, 1}),
 	{ok, _} = graphdb_rules:create_connection_rule(
-		environment, "made-by", Car, MadeBy, Maker, mandatory, 1, DT),
+		environment, "made-by", Car, MadeBy, Maker, mandatory, {1, 1}, DT),
 	{ok, _} = graphdb_rules:create_connection_rule(
-		environment, "sold-by", Car, SoldBy, Deal, propose, unbounded),
+		environment, "sold-by", Car, SoldBy, Deal, propose, {1, unbounded}),
 	{ok, All}  = graphdb_rules:rules_for_class(environment, Car),
 	{ok, Comp} = graphdb_rules:composition_rules_for_class(environment, Car),
 	{ok, Conn} = graphdb_rules:connection_rules_for_class(environment, Car),
@@ -910,11 +937,11 @@ rule_isolation_across_class_taxonomy(_Config) ->
 	Wheel = make_class("SteeringWheel"),
 	Spoil = make_class("Spoiler"),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "v-engine", Vehicle, Eng, mandatory, 1),
+		environment, "v-engine", Vehicle, Eng, mandatory, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "c-wheel", Car, Wheel, mandatory, 1),
+		environment, "c-wheel", Car, Wheel, mandatory, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "s-spoiler", Sports, Spoil, auto, 1),
+		environment, "s-spoiler", Sports, Spoil, auto, {1, 1}),
 	{ok, RV} = graphdb_rules:rules_for_class(environment, Vehicle),
 	{ok, RC} = graphdb_rules:rules_for_class(environment, Car),
 	{ok, RS} = graphdb_rules:rules_for_class(environment, Sports),
@@ -929,9 +956,9 @@ duplicate_child_class_with_different_modes(_Config) ->
 	Cell = make_class("Cell"),
 	Nuc  = make_class("Nucleus"),
 	{ok, R1} = graphdb_rules:create_composition_rule(
-		environment, "nuc-mandatory", Cell, Nuc, mandatory, 1),
+		environment, "nuc-mandatory", Cell, Nuc, mandatory, {1, 1}),
 	{ok, R2} = graphdb_rules:create_composition_rule(
-		environment, "nuc-propose", Cell, Nuc, propose, 1),
+		environment, "nuc-propose", Cell, Nuc, propose, {1, 1}),
 	?assertNotEqual(R1, R2),
 	{ok, Rules} = graphdb_rules:composition_rules_for_class(environment, Cell),
 	?assertEqual(2, length(Rules)).
@@ -948,7 +975,7 @@ self_only_no_ancestors(_Config) ->
 	Car = make_class("Car"),
 	Eng = make_class("Engine"),
 	{ok, R} = graphdb_rules:create_composition_rule(
-		environment, "has-engine", Car, Eng, mandatory, 1),
+		environment, "has-engine", Car, Eng, mandatory, {1, 1}),
 	{ok, Levels} = graphdb_rules:effective_rules_for_class(environment, Car),
 	?assertEqual([Car], level_nrefs(Levels)),
 	?assertEqual([R], rule_nrefs_at(Car, Levels)).
@@ -961,11 +988,11 @@ linear_chain_nearest_first(_Config) ->
 	Wheel = make_class("SteeringWheel"),
 	Spoil = make_class("Spoiler"),
 	{ok, RV} = graphdb_rules:create_composition_rule(
-		environment, "v-engine", Vehicle, Eng, mandatory, 1),
+		environment, "v-engine", Vehicle, Eng, mandatory, {1, 1}),
 	{ok, RC} = graphdb_rules:create_composition_rule(
-		environment, "c-wheel", Car, Wheel, mandatory, 1),
+		environment, "c-wheel", Car, Wheel, mandatory, {1, 1}),
 	{ok, RS} = graphdb_rules:create_composition_rule(
-		environment, "s-spoiler", Sports, Spoil, auto, 1),
+		environment, "s-spoiler", Sports, Spoil, auto, {1, 1}),
 	{ok, Levels} = graphdb_rules:effective_rules_for_class(environment, Sports),
 	%% nearest-first: SportsCar, then Car, then Vehicle
 	?assertEqual([Sports, Car, Vehicle], level_nrefs(Levels)),
@@ -982,9 +1009,9 @@ diamond_dag_dedup(_Config) ->
 	Wid = make_class("Winding"),
 	Cas = make_class("Casing"),
 	{ok, RT} = graphdb_rules:create_composition_rule(
-		environment, "comp-winding", Top, Wid, mandatory, 1),
+		environment, "comp-winding", Top, Wid, mandatory, {1, 1}),
 	{ok, RB} = graphdb_rules:create_composition_rule(
-		environment, "alt-casing", Bot, Cas, auto, 1),
+		environment, "alt-casing", Bot, Cas, auto, {1, 1}),
 	{ok, Levels} = graphdb_rules:effective_rules_for_class(environment, Bot),
 	Names = level_nrefs(Levels),
 	%% Top appears exactly once despite being reachable via two parents.
@@ -1004,23 +1031,23 @@ shared_rule_node_across_ancestors(_Config) ->
 	ok = graphdb_class:add_superclass(Bot, B),
 	Doc = make_class("Document"),
 	{ok, R} = graphdb_rules:create_composition_rule(
-		environment, "needs-document", A, Doc, mandatory, 1),
-	ok = attach_existing_rule(B, R, mandatory, 3),
+		environment, "needs-document", A, Doc, mandatory, {1, 1}),
+	ok = attach_existing_rule(B, R, mandatory, {3, 3}),
 	{ok, Levels} = graphdb_rules:effective_rules_for_class(environment, Bot),
 	?assertEqual([A, B], level_nrefs(Levels)),
-	?assertMatch([{#node{nref = R}, #{multiplicity := 1}}], pairs_at(A, Levels)),
-	?assertMatch([{#node{nref = R}, #{multiplicity := 3}}], pairs_at(B, Levels)).
+	?assertMatch([{#node{nref = R}, #{multiplicity := {1, 1}}}], pairs_at(A, Levels)),
+	?assertMatch([{#node{nref = R}, #{multiplicity := {3, 3}}}], pairs_at(B, Levels)).
 
 deployment_avps_surfaced(_Config) ->
 	Car = make_class("Car"),
 	Whl = make_class("Wheel"),
 	{ok, DT} = graphdb_class:default_template(Car),
 	{ok, _R} = graphdb_rules:create_composition_rule(
-		environment, "wheels", Car, Whl, auto, 4, DT),
+		environment, "wheels", Car, Whl, auto, {4, 4}, DT),
 	{ok, Levels} = graphdb_rules:effective_rules_for_class(environment, Car),
 	[{_RuleNode, Deploy}] = pairs_at(Car, Levels),
 	?assertEqual(auto, maps:get(mode, Deploy)),
-	?assertEqual(4, maps:get(multiplicity, Deploy)),
+	?assertEqual({4, 4}, maps:get(multiplicity, Deploy)),
 	?assertEqual(DT, maps:get(template, Deploy)).
 
 additive_parent_and_child(_Config) ->
@@ -1031,17 +1058,17 @@ additive_parent_and_child(_Config) ->
 	{ok, Car} = graphdb_class:create_class("Car", Vehicle),
 	Wheel = make_class("Wheel"),
 	{ok, RV} = graphdb_rules:create_composition_rule(
-		environment, "v-wheel", Vehicle, Wheel, mandatory, 1),
+		environment, "v-wheel", Vehicle, Wheel, mandatory, {1, 1}),
 	{ok, RC} = graphdb_rules:create_composition_rule(
-		environment, "c-wheel", Car, Wheel, mandatory, 4),
+		environment, "c-wheel", Car, Wheel, mandatory, {4, 4}),
 	{ok, Levels} = graphdb_rules:effective_rules_for_class(environment, Car),
 	?assertEqual([Car, Vehicle], level_nrefs(Levels)),
 	?assertEqual([RC], rule_nrefs_at(Car, Levels)),
 	?assertEqual([RV], rule_nrefs_at(Vehicle, Levels)),
 	[{_, DC}] = pairs_at(Car, Levels),
 	[{_, DV}] = pairs_at(Vehicle, Levels),
-	?assertEqual(4, maps:get(multiplicity, DC)),
-	?assertEqual(1, maps:get(multiplicity, DV)).
+	?assertEqual({4, 4}, maps:get(multiplicity, DC)),
+	?assertEqual({1, 1}, maps:get(multiplicity, DV)).
 
 empty_levels_skipped(_Config) ->
 	Vehicle = make_class("Vehicle"),
@@ -1051,9 +1078,9 @@ empty_levels_skipped(_Config) ->
 	Eng   = make_class("Engine"),
 	%% Rules on Sports and Vehicle only; the middle level (Car) has none.
 	{ok, RS} = graphdb_rules:create_composition_rule(
-		environment, "s-spoiler", Sports, Spoil, auto, 1),
+		environment, "s-spoiler", Sports, Spoil, auto, {1, 1}),
 	{ok, RV} = graphdb_rules:create_composition_rule(
-		environment, "v-engine", Vehicle, Eng, mandatory, 1),
+		environment, "v-engine", Vehicle, Eng, mandatory, {1, 1}),
 	{ok, Levels} = graphdb_rules:effective_rules_for_class(environment, Sports),
 	%% Car omitted entirely; nearest-first order preserved.
 	?assertEqual([Sports, Vehicle], level_nrefs(Levels)),
@@ -1066,9 +1093,9 @@ mixed_kinds_returned(_Config) ->
 	Maker = make_class("Manufacturer"),
 	Char  = make_rel_char("made_by", "makes"),
 	{ok, RComp} = graphdb_rules:create_composition_rule(
-		environment, "has-engine", Car, Eng, mandatory, 1),
+		environment, "has-engine", Car, Eng, mandatory, {1, 1}),
 	{ok, RConn} = graphdb_rules:create_connection_rule(
-		environment, "made-by", Car, Char, Maker, mandatory, 1),
+		environment, "made-by", Car, Char, Maker, mandatory, {1, 1}),
 	{ok, Levels} = graphdb_rules:effective_rules_for_class(environment, Car),
 	{ok, S} = graphdb_rules:seeded_nrefs(),
 	Comp = maps:get(composition_rule, S),
@@ -1109,7 +1136,7 @@ non_class_nref_empty(_Config) ->
 plan_single_mandatory(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _R} = graphdb_rules:create_composition_rule(
-		environment, "OB", Owner, Bolt, mandatory, 2),
+		environment, "OB", Owner, Bolt, mandatory, {2, 2}),
 	{ok, Plan} = graphdb_rules:plan_composition_firing(environment, Owner),
 	#{class := Owner, mandatory_children := Kids, auto_rules := []} = Plan,
 	?assertEqual(2, length(Kids)),
@@ -1123,7 +1150,7 @@ plan_single_mandatory(Config) ->
 plan_name_pattern(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OB", Owner, Bolt, mandatory, 2, undefined,
+		environment, "OB", Owner, Bolt, mandatory, {2, 2}, undefined,
 		#{name_pattern => "Pin {i}"}),
 	{ok, #{mandatory_children := [#{name := "Pin 1"}, #{name := "Pin 2"}]}} =
 		graphdb_rules:plan_composition_firing(environment, Owner).
@@ -1133,7 +1160,7 @@ plan_name_pattern(Config) ->
 plan_mult_one_singular_name(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OB", Owner, Bolt, mandatory, 1),
+		environment, "OB", Owner, Bolt, mandatory, {1, 1}),
 	{ok, #{mandatory_children := [#{name := "Bolt"}]}} =       %% no index suffix
 		graphdb_rules:plan_composition_firing(environment, Owner).
 
@@ -1142,27 +1169,28 @@ plan_mult_one_singular_name(Config) ->
 plan_auto_annotated_not_expanded(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OB", Owner, Bolt, auto, 1),
+		environment, "OB", Owner, Bolt, auto, {1, 1}),
 	{ok, #{mandatory_children := [], auto_rules := [{_RuleNode, Dep}]}} =
 		graphdb_rules:plan_composition_firing(environment, Owner),
 	?assertEqual(auto, maps:get(mode, Dep)).
 
-%% plan_unbounded_mandatory_fails/1 — mandatory + unbounded multiplicity is
-%% not fireable; plan must fail with culprit = the rule node.
-plan_unbounded_mandatory_fails(Config) ->
+%% B-prep: {Min, unbounded} mandatory mints Min (here 1) — the old
+%% unbounded_multiplicity_not_fireable error is retired.
+plan_unbounded_mandatory_mints_min(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
-	{ok, R} = graphdb_rules:create_composition_rule(
-		environment, "OB", Owner, Bolt, mandatory, unbounded),
-	{error, {unbounded_multiplicity_not_fireable, R},
-	 #{plan_so_far := #{class := Owner}, culprit := #node{nref = R}}} =
-		graphdb_rules:plan_composition_firing(environment, Owner).
+	{ok, _R} = graphdb_rules:create_composition_rule(
+		environment, "OB", Owner, Bolt, mandatory, {1, unbounded}),
+	{ok, #{mandatory_children := Kids}} =
+		graphdb_rules:plan_composition_firing(environment, Owner),
+	?assertEqual(1, length(Kids)),
+	[#{class := Bolt}] = Kids.
 
 %% plan_abstract_mandatory_child_fails/1 — mandatory rule whose child_class is
 %% abstract must fail planning.
 plan_abstract_mandatory_child_fails(Config) ->
 	{Owner, Abstract} = ?config(oa, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OA", Owner, Abstract, mandatory, 1),
+		environment, "OA", Owner, Abstract, mandatory, {1, 1}),
 	{error, {class_not_instantiable, Abstract}, #{culprit := _}} =
 		graphdb_rules:plan_composition_firing(environment, Owner).
 
@@ -1173,9 +1201,9 @@ plan_cascade(Config) ->
 	%% Owner mandates Bolt; Bolt mandates Widget
 	{Owner, Bolt, Widget} = ?config(obw, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OB", Owner, Bolt, mandatory, 1),
+		environment, "OB", Owner, Bolt, mandatory, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "BW", Bolt, Widget, mandatory, 1),
+		environment, "BW", Bolt, Widget, mandatory, {1, 1}),
 	{ok, #{mandatory_children :=
 	        [#{class := Bolt, mandatory_children := [#{class := Widget}]}]}} =
 		graphdb_rules:plan_composition_firing(environment, Owner).
@@ -1187,7 +1215,7 @@ plan_cycle_self_nest_zero_children(Config) ->
 	%% Folder mandates Folder
 	Folder = ?config(folder, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "FF", Folder, Folder, mandatory, 1),
+		environment, "FF", Folder, Folder, mandatory, {1, 1}),
 	{ok, #{mandatory_children := []}} =       %% zero-level cut, B2-D5
 		graphdb_rules:plan_composition_firing(environment, Folder).
 
@@ -1198,9 +1226,9 @@ plan_cycle_a_b_a(Config) ->
 	%% A mandates B; B mandates A  -> {A,B}, the closing A cut
 	{A, B} = ?config(ab, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "AB", A, B, mandatory, 1),
+		environment, "AB", A, B, mandatory, {1, 1}),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "BA", B, A, mandatory, 1),
+		environment, "BA", B, A, mandatory, {1, 1}),
 	{ok, #{class := A, mandatory_children :=
 	        [#{class := B, mandatory_children := []}]}} =
 		graphdb_rules:plan_composition_firing(environment, A).
@@ -1210,7 +1238,7 @@ plan_cycle_a_b_a(Config) ->
 plan_project_scope_is_leaf(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "OB", Owner, Bolt, mandatory, 1),
+		environment, "OB", Owner, Bolt, mandatory, {1, 1}),
 	{ok, #{class := Owner, mandatory_children := [], auto_rules := []}} =
 		graphdb_rules:plan_composition_firing({project, p1}, Owner).
 
@@ -1225,7 +1253,7 @@ verify_caches_passes_after_rule_creation(_Config) ->
 	Car = make_class("Car"),
 	Eng = make_class("Engine"),
 	{ok, _} = graphdb_rules:create_composition_rule(
-		environment, "engine", Car, Eng, mandatory, 1),
+		environment, "engine", Car, Eng, mandatory, {1, 1}),
 	?assertEqual(ok, graphdb_mgr:verify_caches()).
 
 

@@ -263,8 +263,8 @@ Stores composition and connection rules as instances of a seeded rule
 meta-ontology. Phases A, B1, B2, and B3 are implemented; Phases B4–F are
 tracked in `TASKS.md`.
 
-- `create_composition_rule/6,7,8` (scope, name, parent_class, child_class, mode, multiplicity [, template_nref] [, opts]); `opts #{name_pattern => string()}` sets the naming pattern for auto-named child instances
-- `create_connection_rule/7,8` (scope, name, source_class, characterization, target_class, mode, multiplicity [, template_nref])
+- `create_composition_rule/6,7,8` (scope, name, parent_class, child_class, mode, multiplicity [, template_nref] [, opts]); `multiplicity :: {Min, Max}` where `Min :: non_neg_integer()`, `Max :: pos_integer() | unbounded` (`unbounded` legal only as `Max`); `opts #{name_pattern => string()}` sets the naming pattern for auto-named child instances
+- `create_connection_rule/7,8` (scope, name, source_class, characterization, target_class, mode, multiplicity [, template_nref]); same `{Min, Max}` multiplicity shape
 - `get_rule/2`, `rules_for_class/2`, `composition_rules_for_class/2`, `connection_rules_for_class/2`, `list_rules/1`
 - `effective_rules_for_class/2` (F4 B1) — taxonomy-walking read:
   every rule attached to a class **and its taxonomy ancestors**, grouped by
@@ -276,6 +276,7 @@ tracked in `TASKS.md`.
   `create_instance/3` and reused by B3 propose mode.
 - `rule_child_class/1`, `rule_child_name/4`
 - `seeded_nrefs/0`
+- The `applies_to` arc's `multiplicity` deployment AVP stores the `{Min, Max}` tuple. Creation firing mints `Min` children/connections; `Max` is the ceiling for a future interactive-creation session. Propose-mode rules surface `Min` `proposed` outcomes, each carrying `max => Max` (B-prep / `docs/designs/f4-bprep-multiplicity-range-design.md`).
 - At bootstrap: seeds the `Rule Literals` sub-group under the `Literals`
   subtree (nref 7) with 7 literal attributes (`child_class_nref`,
   `target_class_nref`, `template_nref`, `characterization_nref`, `mode`,

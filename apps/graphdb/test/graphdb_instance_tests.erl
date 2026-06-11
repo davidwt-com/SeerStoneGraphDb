@@ -69,7 +69,7 @@ mk_rule(N) -> {node, N, instance, [], [c], [#{attribute => 1, value => "r"}]}.
 add_outcome_creates_then_appends_test() ->
 	R0 = [],
 	Rule = mk_rule(100),
-	Dep = #{mode => mandatory, multiplicity => 2, template => 31},
+	Dep = #{mode => mandatory, multiplicity => {2, 2}, template => 31},
 	R1 = graphdb_instance:add_outcome(R0, Rule, Dep,
 			#{owner => 5, index => 1, status => fired, child => 200}),
 	?assertMatch([#{rule := _, deployment := Dep, outcomes := [_]}], R1),
@@ -80,7 +80,7 @@ add_outcome_creates_then_appends_test() ->
 
 merge_reports_unions_by_rule_test() ->
 	Rule = mk_rule(100),
-	Dep = #{mode => auto, multiplicity => 1, template => 31},
+	Dep = #{mode => auto, multiplicity => {1, 1}, template => 31},
 	A = graphdb_instance:add_outcome([], Rule, Dep,
 			#{owner => 5, index => 1, status => fired, child => 200}),
 	B = graphdb_instance:add_outcome([], Rule, Dep,
@@ -108,7 +108,7 @@ report_not_attempted_marks_planned_and_culprit_test() ->
 
 summarize_counts_test() ->
 	Rule = mk_rule(100),
-	Dep = #{mode => mandatory, multiplicity => 1, template => 31},
+	Dep = #{mode => mandatory, multiplicity => {1, 1}, template => 31},
 	R0 = graphdb_instance:add_outcome([], Rule, Dep,
 			#{owner => 5, index => 1, status => fired, child => 200}),
 	R1 = graphdb_instance:add_outcome(R0, Rule, Dep,

@@ -173,11 +173,11 @@ the rule instance.
 
 The connection arc carries three AVPs:
 
-| Index | AVP                  | Source                                                                           |
-| ----- | -------------------- | -------------------------------------------------------------------------------- |
-| 0     | `Template` (attr 31) | Owning class's default template (preserves the connection-arc convention)        |
-| 1     | `mode`               | `mandatory \| auto \| propose` — enforcement level of *this attachment*          |
-| 2     | `multiplicity`       | `pos_integer() \| unbounded` — number of children/connections the engine creates |
+| Index | AVP                  | Source                                                                                                                                                                  |
+| ----- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0     | `Template` (attr 31) | Owning class's default template (preserves the connection-arc convention)                                                                                               |
+| 1     | `mode`               | `mandatory \| auto \| propose` — enforcement level of *this attachment*                                                                                                 |
+| 2     | `multiplicity`       | `{Min, Max}` range (B-prep) — `Min :: non_neg_integer()`, `Max :: pos_integer() \| unbounded`; creation firing mints `Min`; see `f4-bprep-multiplicity-range-design.md` |
 
 `mode` and `multiplicity` live on the arc, not on the rule node,
 because they describe the *deployment* of a rule (how strictly the
@@ -249,7 +249,7 @@ node.
 ```
 AVP Template     :: integer()                  [required, attr 31, index 0]
 AVP mode         :: mandatory | auto | propose [required]
-AVP multiplicity :: pos_integer() | unbounded  [required, default 1]
+AVP multiplicity :: {Min, Max}  [required; Min :: non_neg_integer(), Max :: pos_integer() | unbounded; B-prep]
 ```
 
 The Template AVP is the owning class's default template (mirroring
@@ -287,6 +287,16 @@ precedent in M8's attribute_type set. The literal attribute carries
 **Why:** introducing a union/constraint mechanism is M8 evolution
 work that does not gate F4. Validation at create time (D11) catches
 out-of-range values regardless.
+
+**B-prep update (landed before B4):** the multiplicity deployment AVP
+value is now a `{Min, Max}` range (not a scalar). `Min` is the required
+floor; `Max` is the interactive-session ceiling. The
+`unbounded_multiplicity_not_fireable` error (PLAN-stage mandatory and
+auto-firing) is **retired** — `Min` is always finite so every rule is
+fireable. The propose `index => unbounded` sentinel is **generalised**:
+propose emits `Min` ordinary `proposed` outcomes, each carrying
+`max => Max`. See `docs/designs/f4-bprep-multiplicity-range-design.md`
+for the full design.
 
 ---
 
@@ -421,7 +431,7 @@ seeded_nrefs() -> map().     %% as described in §3.2
 ```erlang
 -type scope() :: environment | {project, AnchorNref :: integer()}.
 -type rule_mode() :: mandatory | auto | propose.
--type multiplicity() :: pos_integer() | unbounded.
+-type multiplicity() :: {Min :: non_neg_integer(), Max :: pos_integer() | unbounded}.  %% B-prep
 
 create_composition_rule(
     Scope        :: scope(),
@@ -541,7 +551,7 @@ All checks run inside the create transaction before any write.
 | `template_not_found`                   | Optional `TemplateNref` does not exist                                                                                                      |
 | `not_a_template`                       | Template nref exists but `kind ≠ template`                                                                                                  |
 | `invalid_mode`                         | Mode ∉ `{mandatory, auto, propose}`                                                                                                         |
-| `invalid_multiplicity`                 | Multiplicity ∉ `pos_integer() ∪ {unbounded}`                                                                                                |
+| `invalid_multiplicity`                 | Multiplicity is not a valid `{Min, Max}` range (B-prep: `Min < 0`, `Max < 1`, `Max < Min`, bare integer, bare `unbounded`, or non-tuple)    |
 | `project_rules_not_yet_supported`      | Scope = `{project, _}` (L6 placeholder; Phase A only)                                                                                       |
 
 Errors are returned as `{error, AtomReason}` (or, where useful for
