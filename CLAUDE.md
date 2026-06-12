@@ -357,6 +357,11 @@ that file must reflect the current shape of the tree.
 The canonical spec is `docs/TheKnowledgeNetwork.md` — it does **not**
 track the code. Outstanding work lives in `TASKS.md`.
 
+`docs/archive/` holds settled ADRs and completed-task history. **Do not
+search or read files under `docs/archive/` unless the user explicitly
+requests it.** These files are historical records; they do not reflect
+current code or open work.
+
 ## Storage Technologies Used
 
 | Technology   | Used by                         | Purpose                                                                                 |

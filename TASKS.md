@@ -136,6 +136,42 @@ scoped overlay tables).
 
 ---
 
+## Multilingual overlay — structural gaps
+
+Two items deferred from the original multilingual work that have not yet landed.
+
+### Language superclass hierarchy
+
+`lang_human` (the root class for all human natural languages) is currently
+a direct child of `Classes` (nref 3) with no intermediate superclass. The
+architecture specifies a `Language` superclass node sitting above `lang_human`
+under `Classes`. Two implementation paths:
+
+- **Option A** — Add `Language` as a bootstrap node in `bootstrap.terms`
+  and make `lang_human` a child of it there. Structurally cleanest; the
+  node belongs to the permanent scaffold, not a worker's `init/1`.
+- **Option B** — Seed `Language` at `graphdb_language:init/1` time and call
+  `graphdb_class:add_superclass/2` to place `lang_human` under it. No
+  bootstrap change required.
+
+Decide and implement one option.
+
+### Domain subcategory connection rules
+
+When a language instance is created at runtime (e.g., French), it is not
+automatically placed under the appropriate domain subcategory node (nrefs
+32–35: Human Languages, Formal Languages, Diagram Languages, Renderers).
+English is wired in `bootstrap.terms` directly; runtime-created languages
+are not.
+
+The connection firing engine is now implemented (`graphdb_instance`,
+`graphdb_rules`). Add a connection rule to `lang_human` (and the equivalent
+class nodes for the other language kinds) that fires at instance creation
+and connects the new language instance to the correct subcategory. The
+resolver is supplied via `create_instance/4`.
+
+---
+
 ## Multi-project sessions
 
 Every public API already accepts a `Scope` of `environment | {project,
