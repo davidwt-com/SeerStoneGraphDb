@@ -131,7 +131,7 @@ These are cheap and useful under both (A) and (B).
 ## Reading order for next session
 
 1. This file (re-orient).
-2. `arcs-authoritative.md` (current arc model).
+2. `docs/archive/arcs-authoritative.md` (current arc model).
 3. `docs/designs/f4-graphdb-rules-design.md` §10.1 (the pinned
    placement question — directly affected by R2).
 4. `memory/project-f4-phase-a-pinned-question.md` (the then-current

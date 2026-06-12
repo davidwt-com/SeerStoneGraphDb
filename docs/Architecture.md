@@ -101,7 +101,7 @@ no runtime API can create, modify, or delete a `category` node.
 
 `parents` and `classes` are **caches** of the authoritative arcs in the
 `relationships` table. The decision record is
-[`arcs-authoritative.md`](../arcs-authoritative.md); the rules are:
+[`arcs-authoritative.md`](archive/arcs-authoritative.md); the rules are:
 
   1. Every taxonomic, compositional, and instantiation relationship is
      canonical in `relationships`.
