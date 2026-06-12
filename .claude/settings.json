@@ -71,7 +71,8 @@
   },
   "permissions": {
     "allow": [
-      "Bash(Echo *)"
+      "Bash(./scripts/test-ct-parallel.sh:*)",
+      "Bash(scripts/test-ct-parallel.sh:*)"
     ]
   }
 }
