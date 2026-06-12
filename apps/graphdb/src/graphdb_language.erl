@@ -17,7 +17,7 @@
 %% Stub implementation.
 %%---------------------------------------------------------------------
 %% Rev A Date: 2026 Author: David W. Thomas
-%% M6 multilingual layer implementation.
+%% Multilingual layer implementation.
 %%---------------------------------------------------------------------
 -module(graphdb_language).
 -behaviour(gen_server).

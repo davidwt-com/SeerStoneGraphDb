@@ -61,7 +61,7 @@ find_avp_value_undefined_does_not_shadow_bound_in_suffix_test() ->
 
 
 %%=============================================================================
-%% Firing report helpers (B2-D6) tests
+%% Firing report helpers tests
 %%=============================================================================
 
 mk_rule(N) -> {node, N, instance, [], [c], [#{attribute => 1, value => "r"}]}.

@@ -98,7 +98,7 @@
 	subclasses_empty_for_leaf/1,
 	ancestors_returns_chain/1,
 	ancestors_empty_for_top_level/1,
-	%% Multi-inheritance (H3)
+	%% Multi-inheritance
 	add_superclass_basic/1,
 	add_superclass_writes_taxonomy_arcs/1,
 	add_superclass_idempotent/1,
@@ -729,7 +729,7 @@ ancestors_empty_for_top_level(_Config) ->
 
 
 %%=============================================================================
-%% Multi-Inheritance Tests (H3)
+%% Multi-Inheritance Tests
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------

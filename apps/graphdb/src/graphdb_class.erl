@@ -29,7 +29,7 @@
 %% Initial implementation: taxonomic hierarchy over Mnesia.  Provides
 %% create_class/2, add_qualifying_characteristic/2, get_class/1,
 %% subclasses/1, ancestors/1, inherited_qcs/1.
-%% L2: unified QC AVP shape — value=>undefined for declarations.
+%% Unified QC AVP shape — value=>undefined for declarations.
 %%---------------------------------------------------------------------
 -module(graphdb_class).
 -behaviour(gen_server).
@@ -95,7 +95,7 @@
 
 -record(state, {
 	instantiable_nref				%% integer() -- seeded `instantiable` marker, cached
-									%% from graphdb_attr at init (L9)
+									%% from graphdb_attr at init
 }).
 
 
@@ -555,7 +555,7 @@ template_rows(ClassNref, AVPs, InstAttr) ->
 %%
 %% Returns true when AVPs contains #{attribute => InstAttr, value => false}.
 %% Deliberately duplicated in graphdb_instance (the two workers share no
-%% module); L9 avoids a shared util for one predicate (YAGNI).
+%% module); this avoids a shared util for one predicate (YAGNI).
 %%-----------------------------------------------------------------------------
 is_marked_non_instantiable(AVPs, InstAttr) ->
 	lists:any(fun

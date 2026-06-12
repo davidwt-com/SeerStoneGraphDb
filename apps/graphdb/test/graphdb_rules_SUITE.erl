@@ -4,8 +4,8 @@
 %%---------------------------------------------------------------------
 %% Author: (completion of Dallas Noyes's design)
 %% Created: June 2026
-%% Description: Common Test integration suite for graphdb_rules (F4
-%%				Phase A).  Each test case gets its own isolated temp
+%% Description: Common Test integration suite for graphdb_rules.
+%%				Each test case gets its own isolated temp
 %%				directory with a fresh Mnesia database and nref
 %%				allocator.  Workers are started manually in dependency
 %%				order; graphdb_rules is started last so its init/1
@@ -22,7 +22,7 @@
 %% Record definitions (match graphdb internal records -- no shared
 %% header; copied verbatim from graphdb_instance_SUITE.erl).  The
 %% #relationship{} record is exercised by the composition group
-%% (read_arc/3) and later F4 Phase A tasks.
+%% (read_arc/3) and later tasks.
 %%---------------------------------------------------------------------
 -record(node, {
 	nref,
@@ -57,7 +57,7 @@
 ]).
 
 %%---------------------------------------------------------------------
-%% Effective connection-rule test case exports (B4 Task 3)
+%% Effective connection-rule test case exports
 %%---------------------------------------------------------------------
 -export([
 	effective_connection_rules_returns_specs/1,
@@ -66,7 +66,7 @@
 ]).
 
 %%---------------------------------------------------------------------
-%% Plan firing test case exports (B2 Task 3)
+%% Plan firing test case exports
 %%---------------------------------------------------------------------
 -export([
 	plan_single_mandatory/1,
@@ -137,9 +137,9 @@
 	mixed_rules_on_one_class/1,
 	rule_isolation_across_class_taxonomy/1,
 	duplicate_child_class_with_different_modes/1,
-	%% name_pattern (B2 Task 2)
+	%% name_pattern
 	composition_rule_carries_name_pattern/1,
-	%% effective (B1 taxonomy walk)
+	%% effective
 	self_only_no_ancestors/1,
 	linear_chain_nearest_first/1,
 	diamond_dag_dedup/1,
@@ -401,7 +401,7 @@ seeds_rule_meta_ontology_idempotent(_Config) ->
 	Comp  = maps:get(composition_rule, S1),
 	Conn  = maps:get(connection_rule, S1),
 	?assert(is_integer(Rule)),
-	%% Rule is abstract (L9): is_instantiable/1 = false
+	%% Rule is abstract: is_instantiable/1 = false
 	?assertEqual(false, graphdb_class:is_instantiable(Rule)),
 	%% Comp/Conn are instantiable subclasses of Rule
 	?assertEqual(true, graphdb_class:is_instantiable(Comp)),
@@ -561,7 +561,7 @@ composition_rule_carries_name_pattern(_Config) ->
 	?assertEqual({ok, "Bolt {i}"}, find_avp(AVPs, NP)).
 
 %%-----------------------------------------------------------------------------
-%% B3: a propose-mode rule lands in propose_rules (NOT auto_rules /
+%% a propose-mode rule lands in propose_rules (NOT auto_rules /
 %% mandatory_children), unexpanded — exactly one {RuleNode, Deploy} entry
 %% regardless of multiplicity.
 %%-----------------------------------------------------------------------------
@@ -576,7 +576,7 @@ plan_propose_accumulated(Config) ->
 	?assertEqual({3, 3}, maps:get(multiplicity, Dep)).
 
 %%-----------------------------------------------------------------------------
-%% B3: one rule of each mode on the same owner populates all three
+%% one rule of each mode on the same owner populates all three
 %% accumulators independently.
 %%-----------------------------------------------------------------------------
 plan_mixed_modes(Config) ->
@@ -598,7 +598,7 @@ plan_mixed_modes(Config) ->
 	[#{class := Bolt}] = Mand.
 
 %%-----------------------------------------------------------------------------
-%% B3: a propose rule attached to a MANDATORY child's class appears in that
+%% a propose rule attached to a MANDATORY child's class appears in that
 %% child's plan node (propose rides the mandatory-cascade recursion).
 %%-----------------------------------------------------------------------------
 plan_propose_at_mandatory_child(Config) ->
@@ -803,7 +803,7 @@ invalid_multiplicity_rejected(_Config) ->
 			environment, "x", Parent, Child, mandatory, "lots")),
 	?assertEqual(Before, table_size(nodes)).
 
-%% B-prep BP-D4: the {Min, Max} validation catalogue.
+%% the {Min, Max} validation catalogue.
 multiplicity_range_validation(_Config) ->
 	Parent = make_class("Car"),
 	Child  = make_class("Engine"),
@@ -920,7 +920,7 @@ list_rules_returns_all(_Config) ->
 %%=============================================================================
 %% Scope Tests
 %%=============================================================================
-%% Phase A supports environment-scoped rules only.  The {project, _} branches
+%% The rules data model supports environment-scoped rules only.  The {project, _} branches
 %% (added across Tasks 2-5) lock the contract: create is rejected, every
 %% retrieval returns empty / not_found.
 
@@ -951,7 +951,7 @@ project_scope_returns_empty_on_retrieve(_Config) ->
 %% Complex Scenario Tests
 %%=============================================================================
 %% Integration tests over the Task 2-5 API.  No new production code; these
-%% exercise the create/retrieve paths in combination and document Phase A
+%% exercise the create/retrieve paths in combination and document the data-model
 %% semantics (direct-attachment retrieval, no conflict resolution).
 
 %% Five distinct rules of both kinds attached to one owning class.  Asserts
@@ -993,9 +993,9 @@ mixed_rules_on_one_class(_Config) ->
 	?assertEqual(5, length(Applies)),
 	?assertEqual(ok, graphdb_mgr:verify_caches()).
 
-%% Phase A retrieval is direct-attachment only: a rule on a superclass is NOT
+%% Direct-attachment retrieval only: a rule on a superclass is NOT
 %% returned for a subclass.  Documents that taxonomy-walking retrieval is
-%% Phase B (effective_rules_for_class/2).
+%% the taxonomy-walk read (effective_rules_for_class/2).
 rule_isolation_across_class_taxonomy(_Config) ->
 	Vehicle = make_class("Vehicle"),
 	{ok, Car} = graphdb_class:create_class("Car", Vehicle),
@@ -1017,7 +1017,7 @@ rule_isolation_across_class_taxonomy(_Config) ->
 	?assertEqual(1, length(RS)).
 
 %% Two composition rules with the same child class but different modes are
-%% both accepted (distinct nrefs).  Documents that Phase A makes no
+%% both accepted (distinct nrefs).  Documents that the data model makes no
 %% conflict-resolution commitment.
 duplicate_child_class_with_different_modes(_Config) ->
 	Cell = make_class("Cell"),
@@ -1032,7 +1032,7 @@ duplicate_child_class_with_different_modes(_Config) ->
 
 
 %%=============================================================================
-%% Effective Rules Tests (B1 -- taxonomy walk)
+%% Effective Rules Tests
 %%=============================================================================
 %% effective_rules_for_class/2 gathers rules from the class AND its taxonomy
 %% ancestors, nearest-first, grouped by attaching class, each paired with that
@@ -1090,7 +1090,7 @@ diamond_dag_dedup(_Config) ->
 
 shared_rule_node_across_ancestors(_Config) ->
 	%% A and B are two superclasses of Bot.  ONE rule node is attached to
-	%% BOTH (F4 D12 reuse).  It must appear once per attaching ancestor, each
+	%% BOTH (rule reuse).  It must appear once per attaching ancestor, each
 	%% occurrence carrying that ancestor's own deployment.
 	A = make_class("Insurable"),
 	B = make_class("Taxable"),
@@ -1119,8 +1119,8 @@ deployment_avps_surfaced(_Config) ->
 
 additive_parent_and_child(_Config) ->
 	%% Parent mandates a wheel-group (mult 1); subclass adds more (mult 4) for
-	%% the SAME child class.  B1 drops nothing -- both survive, each with its
-	%% own deployment.  The firing engine (B2/B5) decides additive-vs-shadow.
+	%% the SAME child class.  the gather drops nothing -- both survive, each with its
+	%% own deployment.  The firing engine decides additive-vs-shadow.
 	Vehicle = make_class("Vehicle"),
 	{ok, Car} = graphdb_class:create_class("Car", Vehicle),
 	Wheel = make_class("Wheel"),
@@ -1168,7 +1168,7 @@ mixed_kinds_returned(_Config) ->
 	Comp = maps:get(composition_rule, S),
 	Conn = maps:get(connection_rule, S),
 	Pairs = pairs_at(Car, Levels),
-	%% B1-D4 consumer pattern: inline kind filter over the gathered pairs.
+	%% consumer pattern: inline kind filter over the gathered pairs.
 	CompNrefs = [N#node.nref || {N, _D} <- Pairs,
 				 lists:member(Comp, N#node.classes)],
 	ConnNrefs = [N#node.nref || {N, _D} <- Pairs,
@@ -1224,7 +1224,7 @@ effective_connection_rules_project_scope_empty(_Config) ->
 
 
 %%=============================================================================
-%% Plan Firing Tests (B2 Task 3)
+%% Plan Firing Tests
 %%=============================================================================
 
 %% plan_single_mandatory/1 — one mandatory rule, mult=2, two Bolt children.
@@ -1271,7 +1271,7 @@ plan_auto_annotated_not_expanded(Config) ->
 		graphdb_rules:plan_composition_firing(environment, Owner),
 	?assertEqual(auto, maps:get(mode, Dep)).
 
-%% B-prep: {Min, unbounded} mandatory mints Min (here 1) — the old
+%% {Min, unbounded} mandatory mints Min (here 1) — the old
 %% unbounded_multiplicity_not_fireable error is retired.
 plan_unbounded_mandatory_mints_min(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
@@ -1307,13 +1307,13 @@ plan_cascade(Config) ->
 
 %% plan_cycle_self_nest_zero_children/1 — a class with a rule pointing back to
 %% itself (Folder→Folder) must produce zero mandatory_children for the root node
-%% (on-path cycle cut at plan_mandatory level, B2-D5), not loop.
+%% (on-path cycle cut at plan_mandatory level), not loop.
 plan_cycle_self_nest_zero_children(Config) ->
 	%% Folder mandates Folder
 	Folder = ?config(folder, Config),
 	{ok, _} = graphdb_rules:create_composition_rule(
 		environment, "FF", Folder, Folder, mandatory, {1, 1}),
-	{ok, #{mandatory_children := []}} =       %% zero-level cut, B2-D5
+	{ok, #{mandatory_children := []}} =       %% zero-level cut
 		graphdb_rules:plan_composition_firing(environment, Folder).
 
 %% plan_cycle_a_b_a/1 — two-class cycle: A→B (mandatory/1), B→A (mandatory/1).
@@ -1374,7 +1374,7 @@ make_class(Name) ->
 	Nref.
 
 %% make_abstract_class(Name) -> Nref
-%% Creates an abstract class (L9 instantiable=false marker) under
+%% Creates an abstract class (instantiable=false marker) under
 %% ?NREF_CLASSES.  An abstract class is born without a default template,
 %% so it must be rejected as a rule owning class.
 make_abstract_class(Name) ->
@@ -1421,7 +1421,7 @@ rule_nrefs_at(Level, Levels) ->
 
 %% attach_existing_rule(OwnerClass, RuleNref, Mode, Mult) -> ok
 %% Writes a SECOND applies_to/applied_by connection arc pair from OwnerClass to
-%% an already-existing rule node (F4 D12 reuse), stamped with OwnerClass's own
+%% an already-existing rule node (rule reuse), stamped with OwnerClass's own
 %% deployment.  Connection arcs are not part of the parents/classes caches, so
 %% this does not disturb verify_caches/0.  Used by
 %% shared_rule_node_across_ancestors to make one rule node reachable from two

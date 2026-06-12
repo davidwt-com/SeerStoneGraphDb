@@ -9,34 +9,33 @@
 %%              maintains snapshot-semantics sessions with a
 %%              read-through cache.
 %%
-%%              F3 sequencing: session API (new_session/0, refresh/1)
-%%              is real. Q1 (#q_get_node{}), Q1b (#q_get_arcs{}), Q2
-%%              (#q_describe{} for kind=attribute), Q3 (#q_describe{}
-%%              for kind=class), Q4 (#q_describe{} for kind=instance),
-%%              Q5 (#q_instances_of{}), and Q6 (#q_find_path{}) are
+%%              Query sequencing: session API (new_session/0, refresh/1)
+%%              is real. #q_get_node{}, #q_get_arcs{}, #q_describe{}
+%%              (for kind=attribute, class, or instance),
+%%              #q_instances_of{}, and #q_find_path{} are
 %%              implemented along with resume/2 and snapshot_expired
-%%              detection.  F3 walking skeleton complete.
+%%              detection.  Walking skeleton complete.
 %%
 %% Design source: docs/designs/f3-graphdb-query-design.md.
 %%---------------------------------------------------------------------
 %% Revision History
 %%---------------------------------------------------------------------
 %% Rev A Date: May 2026 Author: David W. Thomas
-%% Initial skeleton implementation (F3 Task 2).
+%% Initial skeleton implementation.
 %% Rev A.1 Date: May 2026 Author: David W. Thomas
-%% Q1 (#q_get_node{}) implemented (F3 Task 3).
+%% #q_get_node{} implemented.
 %% Rev A.2 Date: May 2026 Author: David W. Thomas
-%% Q1b (#q_get_arcs{}) implemented (F3 Task 4).
+%% #q_get_arcs{} implemented.
 %% Rev A.3 Date: May 2026 Author: David W. Thomas
-%% Q2 (#q_describe{} for kind=attribute) implemented (F3 Task 5).
+%% #q_describe{} for kind=attribute implemented.
 %% Rev A.4 Date: May 2026 Author: David W. Thomas
-%% Q3 (#q_describe{} for kind=class) implemented (F3 Task 6).
+%% #q_describe{} for kind=class implemented.
 %% Rev A.5 Date: May 2026 Author: David W. Thomas
-%% Q4 (#q_describe{} for kind=instance) implemented (F3 Task 7).
+%% #q_describe{} for kind=instance implemented.
 %% Rev A.6 Date: May 2026 Author: David W. Thomas
-%% Q5 (#q_instances_of{}) implemented (F3 Task 8).
+%% #q_instances_of{} implemented.
 %% Rev A.7 Date: May 2026 Author: David W. Thomas
-%% Q6 (#q_find_path{}) + resume/2 + snapshot_expired (F3 Task 9).
+%% #q_find_path{} + resume/2 + snapshot_expired.
 %%---------------------------------------------------------------------
 -module(graphdb_query).
 -behaviour(gen_server).
@@ -71,7 +70,7 @@
 
 
 %%---------------------------------------------------------------------
-%% Records — mirror canonical shapes (see ARCHITECTURE.md §3).
+%% Records — mirror canonical shapes (see docs/Architecture.md §3).
 %% Defined locally so this module compiles standalone; matches the
 %% pattern used in graphdb_language, graphdb_class, graphdb_instance.
 %%---------------------------------------------------------------------
@@ -150,7 +149,7 @@ execute_query(Query, Session) when is_map(Session) ->
 resume(Cont, Session) when is_map(Session) ->
     gen_server:call(?MODULE, {resume, Cont, Session}).
 
-%% find_path/3 — public convenience matching the F3 task spec API.
+%% find_path/3 — public convenience matching the query task spec API.
 find_path(From, To, MaxDepth) ->
     execute_query(#q_find_path{from      = From,
                                to        = To,
@@ -345,7 +344,7 @@ arc_to_map(#relationship{id               = Id,
 %% describe_attribute(Node, LangSpec, Session)
 %%     -> {{ok, ResultMap}, Session1}
 %%
-%% Q2: composes the read-through node lookup with downward-arc traversal
+%% describe(attribute): composes the read-through node lookup with downward-arc traversal
 %% to enumerate taxonomy children, then resolves a label for self +
 %% parent + each child via graphdb_language.  Returns a map with
 %% nref/kind/attribute_type/parent/children/avps/labels.
@@ -383,7 +382,7 @@ describe_attribute(#node{nref = N, parents = Parents,
 %% describe_class(Node, LangSpec, Session)
 %%     -> {{ok, ResultMap}, Session1}
 %%
-%% Q3: superclasses come from the parents cache; ancestors come from
+%% describe(class): superclasses come from the parents cache; ancestors come from
 %% graphdb_class:ancestors/1 (multi-parent DAG walk); subclasses come
 %% from graphdb_class:subclasses/1.  QCs are returned as the flat
 %% [{AttrNref, Value}] list produced by graphdb_class:inherited_qcs/1
@@ -416,7 +415,7 @@ describe_class(#node{nref = N, parents = Parents,
 %% describe_instance(Node, LangSpec, Session)
 %%     -> {{ok, ResultMap}, Session1}
 %%
-%% Q4: surfaces compositional + class structure, resolved attributes
+%% describe(instance): surfaces compositional + class structure, resolved attributes
 %% via 4-priority inheritance (Task 0's resolve_value/2 returns
 %% {ok, Value, Source}), and BOTH outgoing and incoming connection
 %% arcs (per-direction characterization and AVPs differ).

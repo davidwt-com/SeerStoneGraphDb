@@ -15,11 +15,11 @@
 %% Stub implementation.
 %%---------------------------------------------------------------------
 %% Rev A Date: June 2026 Author: David W. Thomas (david@davidwt.com)
-%% F4 Phase A: rule meta-ontology seeding (Rule / CompositionRule /
+%% Rule meta-ontology seeding (Rule / CompositionRule /
 %% ConnectionRule), Rule Literals sub-group, applies_to/applied_by
 %% relationship-attribute pair, and seeded_nrefs/0.  Idempotent init/1
 %% mirrors graphdb_language.  Rule create/retrieve/validation land in
-%% later F4 Phase A tasks.
+%% later tasks.
 %%---------------------------------------------------------------------
 -module(graphdb_rules).
 -behaviour(gen_server).
@@ -200,7 +200,7 @@ create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult,
 %% reciprocal_nref, target_class_nref, optional template_nref) lives on the
 %% node; rule deployment (Template, mode, multiplicity) lives on the applies_to
 %% connection arc from the owning (source) class to the rule instance.  Recip is
-%% the reverse arc label (B4-D3): the arc as seen from the target back.  Scope
+%% the reverse arc label: the arc as seen from the target back.  Scope
 %% environment writes to the shared ontology; {project, _} is not supported.
 %%-----------------------------------------------------------------------------
 create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
@@ -231,7 +231,7 @@ get_rule(Scope, RuleNref) ->
 %% applies_to connection arcs out of ClassNref.  {project, _} -> {ok, []}.
 %% DIRECT attachments only: rules attached to ClassNref's taxonomy
 %% ancestors are NOT included.  Ancestor-walking (effective_rules_for_class)
-%% is a Phase B addition.
+%% is a later-phase addition.
 %%-----------------------------------------------------------------------------
 rules_for_class(Scope, ClassNref) ->
 	gen_server:call(?MODULE, {rules_for_class, Scope, ClassNref}).
@@ -264,7 +264,7 @@ connection_rules_for_class(Scope, ClassNref) ->
 %% {project, _} -> {ok, []}.
 %%
 %% Does NOT resolve override/shadow/conflict -- every level's rules are
-%% present.  Resolution is the firing engine's job (Phase B2/B5).
+%% present.  Resolution is the firing engine's job.
 %%-----------------------------------------------------------------------------
 effective_rules_for_class(Scope, ClassNref) ->
 	gen_server:call(?MODULE, {effective_rules_for_class, Scope, ClassNref}).
@@ -276,11 +276,12 @@ effective_rules_for_class(Scope, ClassNref) ->
 %%                          reciprocal := integer(),
 %%                          target_class := integer()}}]}
 %%
-%% The effective rules of ClassNref (self + taxonomy ancestors, nearest-first;
-%% B1) filtered to the ConnectionRule meta-class, each paired with its applies_to
-%% deployment and a ConnSpec decoded from the rule node's content AVPs.  The B4
-%% firing engine consumes this during create_instance.  Additive -- a rule reached
-%% from two ancestors appears twice (precedence is B5).  {project, _} -> {ok, []}.
+%% The effective rules of ClassNref (self + taxonomy ancestors, nearest-first)
+%% filtered to the ConnectionRule meta-class, each paired with its applies_to
+%% deployment and a ConnSpec decoded from the rule node's content AVPs.  The
+%% connection-firing engine consumes this during create_instance.  Additive -- a
+%% rule reached from two ancestors appears twice (precedence is a later phase).
+%% {project, _} -> {ok, []}.
 %%-----------------------------------------------------------------------------
 effective_connection_rules(Scope, ClassNref) ->
 	gen_server:call(?MODULE, {effective_connection_rules, Scope, ClassNref}).
@@ -314,7 +315,7 @@ list_rules(Scope) ->
 %%
 %% Error reasons:
 %%   {class_not_instantiable, ChildClassNref} --
-%%       a mandatory rule's child_class is abstract (L9)
+%%       a mandatory rule's child_class is abstract
 %%
 %% Scope {project, _} returns a leaf plan immediately (no rule lookup).
 %%-----------------------------------------------------------------------------
@@ -522,7 +523,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 %%---------------------------------------------------------------------
-%% Seeding helpers (idempotent -- see F4 Phase A plan Architecture Notes)
+%% Seeding helpers (idempotent -- see the rules-engine design)
 %%---------------------------------------------------------------------
 
 %% ensure_seed(Name, ParentNref) -> Nref
@@ -611,7 +612,7 @@ class_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 	end, AVPs).
 
 %% instantiable_marker_nref/0 -> InstAttrNref
-%% Reads the seeded `instantiable' marker nref from graphdb_attr (L9).
+%% Reads the seeded `instantiable' marker nref from graphdb_attr.
 instantiable_marker_nref() ->
 	{ok, #{instantiable := InstAttr}} = graphdb_attr:seeded_nrefs(),
 	InstAttr.
@@ -678,7 +679,7 @@ validate_multiplicity(_) ->
 %% validate_owning_class(Nref) -> ok | {error, atom()}
 %% The owning class must exist, be a class, and have a default template --
 %% the applies_to arc stamps the default template as deployment AVP index 0.
-%% An abstract class (L9 instantiable=false) or a class whose default
+%% An abstract class (instantiable=false) or a class whose default
 %% template was deleted ("forced disambiguation") has none; reject cleanly
 %% rather than let do_create_rule badmatch.
 validate_owning_class(Nref) ->
@@ -753,7 +754,7 @@ validate_template(Nref) ->
 %% arc pair (chars 29/30), and the applies_to/applied_by connection arc
 %% pair.  Rule content lives on the node; rule deployment (Template, mode,
 %% multiplicity) lives on the forward applies_to arc only.
-%% (Validation is added in a later F4 Phase A task; for now it writes
+%% (Validation is added in a later task; for now it writes
 %% directly.)
 do_create_rule(MetaClassNref, Name, OwningClass, ContentAVPs, Mode, Mult,
 			   State) ->
@@ -814,7 +815,7 @@ optional_template_avp(TemplateNref, State) ->
 	[#{attribute => State#state.template_nref_attr, value => TemplateNref}].
 
 %% optional_name_pattern_avp(Opts, State) -> [AVP] | []
-%% The optional name_pattern content AVP on the rule node (B2-D7).
+%% The optional name_pattern content AVP on the rule node.
 optional_name_pattern_avp(Opts, State) ->
 	case maps:get(name_pattern, Opts, undefined) of
 		undefined -> [];
@@ -850,7 +851,7 @@ attached_rules(ClassNref, State) ->
 %% Self-first, nearest-first taxonomy gather: the class itself followed by its
 %% ancestors (graphdb_class:ancestors/1 order).  Each level carries the rules
 %% attached directly to it, paired with that attachment's deployment.  Levels
-%% with no attached rules are dropped (B1-D7).  Resolves nothing (B1-D1).
+%% with no attached rules are dropped.  Resolves nothing.
 effective_rules(ClassNref, State) ->
 	Chain = [ClassNref | ancestor_nrefs(ClassNref)],
 	[{Level, Pairs}
@@ -861,8 +862,8 @@ effective_rules(ClassNref, State) ->
 %% ancestor_nrefs(ClassNref) -> [integer()]
 %% The taxonomy ancestors of ClassNref, nearest-first, via the canonical
 %% graphdb_class:ancestors/1 walk.  A bad starting class (unknown nref or a
-%% non-class node) makes ancestors/1 return {error, _}; B1 maps that to an
-%% empty ancestor set (B1-D6).  The direct-attachment read on a bad nref is
+%% non-class node) makes ancestors/1 return {error, _}; this maps that to an
+%% empty ancestor set.  The direct-attachment read on a bad nref is
 %% likewise empty, so the overall effective result is {ok, []}.
 ancestor_nrefs(ClassNref) ->
 	case graphdb_class:ancestors(ClassNref) of
@@ -882,9 +883,9 @@ attached_rules_with_deployment(ClassNref, State) ->
 %% decode_deployment(AVPs, State) -> map()
 %% Decodes an applies_to arc's deployment AVPs into the symbolic Deployment map
 %% #{mode, multiplicity, template}.  A key whose AVP is absent is omitted
-%% (B1-D2).  The `template' key reads the arc Template scope marker
+%%.  The `template' key reads the arc Template scope marker
 %% (?ARC_TEMPLATE, attr 31) -- NOT the template_nref content literal on the
-%% rule node.  'multiplicity' is a {Min, Max} range (B-prep); the fold copies
+%% rule node.  'multiplicity' is a {Min, Max} range; the fold copies
 %% it verbatim.
 decode_deployment(AVPs, State) ->
 	Pairs = [{mode,         State#state.mode_attr},
@@ -919,7 +920,7 @@ meta_nref(connection_rule,  State) -> State#state.connection_rule_nref.
 
 
 %%---------------------------------------------------------------------
-%% Plan path (pure read -- B2)
+%% Plan path (pure read)
 %%---------------------------------------------------------------------
 %% plan_composition_firing/2 runs inside the gen_server process.  It calls
 %% effective_rules/2 (the internal state-passing helper) directly -- calling
@@ -929,7 +930,7 @@ meta_nref(connection_rule,  State) -> State#state.connection_rule_nref.
 %% leaf_plan(ClassNref, Rule, Deploy, Name) -> PlanNode
 %% Deploy is the deployment map of the rule that mandated this node
 %% (`undefined` for the root).  Carried so the report's `deployment` field
-%% is the real #{mode, multiplicity, template} (B2-D6).
+%% is the real #{mode, multiplicity, template}.
 leaf_plan(ClassNref, Rule, Deploy, Name) ->
 	#{class => ClassNref, name => Name, rule => Rule, deploy => Deploy,
 	  mandatory_children => [], auto_rules => [], propose_rules => []}.
@@ -937,7 +938,7 @@ leaf_plan(ClassNref, Rule, Deploy, Name) ->
 %% plan_node(ClassNref, Rule, Deploy, Name, OnPath, State)
 %%   -> {ok, PlanNode} | {error, Reason, #{plan_so_far, culprit}}
 %% Recursively expands the mandatory cascade for ClassNref.  OnPath is the
-%% class path root->here (B2-D5 cycle guard).  Rule/Deploy describe the
+%% class path root->here (cycle guard).  Rule/Deploy describe the
 %% composition rule that mandated this node (`root`/`undefined` for the
 %% requested instance).
 plan_node(ClassNref, Rule, Deploy, Name, OnPath, State) ->
@@ -982,7 +983,7 @@ connection_spec(RuleNode, State) ->
 		  content_avp_value(RuleNode, State#state.target_class_nref_attr)}.
 
 %% plan_rules(Pairs, OnPath1, State, Acc) -> {ok, PlanNode} | {error, R, Failure}
-%% First-failure-aborts (B2-D6): a mandatory violation stops planning.
+%% First-failure-aborts: a mandatory violation stops planning.
 plan_rules([], _OnPath1, _State, Acc) ->
 	{ok, Acc};
 plan_rules([{RuleNode, Deploy} | Rest], OnPath1, State, Acc) ->
@@ -991,7 +992,7 @@ plan_rules([{RuleNode, Deploy} | Rest], OnPath1, State, Acc) ->
 			Autos = maps:get(auto_rules, Acc) ++ [{RuleNode, Deploy}],
 			plan_rules(Rest, OnPath1, State, Acc#{auto_rules => Autos});
 		propose ->
-			%% B3: accumulate (B2 dropped these).  Mirrors the `auto` clause;
+			%% Accumulate (composition firing dropped these).  Mirrors the `auto` clause;
 			%% graphdb_instance:fire_propose/2 expands multiplicity post-commit
 			%% and emits `proposed` outcomes.  Unexpanded here, like auto_rules.
 			Proposes = maps:get(propose_rules, Acc) ++ [{RuleNode, Deploy}],
@@ -1012,7 +1013,7 @@ plan_mandatory(RuleNode, Deploy, OnPath1, State, Acc) ->
 								   State#state.child_class_nref_attr),
 	case lists:member(ChildClass, OnPath1) of
 		true ->
-			{ok, Acc};                  %% B2-D5 zero-level cut: self-nest, no fire
+			{ok, Acc};                  %% zero-level cut: self-nest, no fire
 		false ->
 			{Min, _Max} = maps:get(multiplicity, Deploy, {1, 1}),
 			case graphdb_class:is_instantiable(ChildClass) of
@@ -1047,7 +1048,7 @@ expand_children(RuleNode, Deploy, ChildClass, Mult, I, OnPath1, State, Acc) ->
 		{error, R, Failure} ->
 			%% Nested failure: rewrite plan_so_far to THIS level's Acc (parent
 			%% with completed siblings; failing branch dropped), keep the leaf
-			%% culprit.  (B2 design §3.1 trace.)
+			%% culprit.  (composition-firing design §3.1 trace.)
 			{error, R, Failure#{plan_so_far => Acc}}
 	end.
 

@@ -8,7 +8,7 @@
 %%              Each testcase gets an isolated tmp dir + fresh Mnesia
 %%              + fresh nref allocator + fully started graphdb
 %%              supervision tree (mgr, attr, class, instance, language,
-%%              query).  This is the F3 Task 2 smoke suite that asserts
+%%              query).  This is the smoke suite that asserts
 %%              the gen_server boots, the session API is sane, and
 %%              every execute-path returns {error, not_implemented}
 %%              until Tasks 3-9 land.
@@ -45,7 +45,7 @@
     new_session_has_snapshot/1,
     refresh_bumps_snapshot/1,
     unimplemented_query_returns_error/1,
-    %% Q1 — get_node
+    %% get_node
     q1_returns_bootstrap_node/1,
     q1_returns_attribute_node/1,
     q1_not_found_returns_error/1,
@@ -60,29 +60,29 @@
     q1b_nref_with_no_arcs/1,
     q1b_cache_uses_dir_kind_key/1,
     q1b_cache_hit_skips_mnesia/1,
-    %% Q2 — describe_attribute
+    %% describe_attribute
     q2_describes_name_attribute/1,
     q2_includes_parent_and_taxonomy/1,
     q2_includes_labels_default_english/1,
     q2_not_found_returns_error/1,
     q2_rejects_non_attribute_nref/1,
-    %% Q3 — describe_class
+    %% describe_class
     q3_describes_class_with_superclasses/1,
     q3_lists_subclasses/1,
     q3_includes_qcs_flat_list/1,
     q3_class_not_found/1,
-    %% Q4 — describe_instance
+    %% describe_instance
     q4_describes_instance_with_class/1,
     q4_resolves_inherited_attributes/1,
     q4_outgoing_and_incoming_connections/1,
     q4_compositional_ancestors/1,
     q4_instance_not_found/1,
-    %% Q5 — list_instances_of
+    %% list_instances_of
     q5_lists_direct_instances/1,
     q5_recursive_includes_subclass_instances/1,
     q5_non_recursive_excludes_subclasses/1,
     q5_class_with_no_instances/1,
-    %% Q6 — find_path
+    %% find_path
     q6_finds_path_via_taxonomy/1,
     q6_returns_no_path_when_disconnected/1,
     q6_respects_max_depth_returns_partial/1,
@@ -294,13 +294,13 @@ refresh_bumps_snapshot(_Config) ->
 
 unimplemented_query_returns_error(_Config) ->
     %% A query shape the dispatcher will never recognise — exercises the
-    %% catch-all {error, not_implemented} path, durable across F3 tasks.
+    %% catch-all {error, not_implemented} path, durable across tasks.
     ?assertEqual({error, not_implemented},
                  graphdb_query:execute_query({unknown_query_shape, foo})).
 
 
 %%=====================================================================
-%% Q1 — get_node tests
+%% get_node tests
 %%=====================================================================
 
 q1_returns_bootstrap_node(_Config) ->
@@ -458,7 +458,7 @@ q1b_cache_hit_skips_mnesia(_Config) ->
 
 
 %%=====================================================================
-%% Q2 — describe_attribute tests
+%% describe_attribute tests
 %%=====================================================================
 
 q2_describes_name_attribute(_Config) ->
@@ -492,14 +492,14 @@ q2_not_found_returns_error(_Config) ->
                      #q_describe{nref = 9999999, labels = default})).
 
 q2_rejects_non_attribute_nref(_Config) ->
-    %% NREF_ROOT is a category — Q2 path is for attributes only.
+    %% NREF_ROOT is a category — describe path is for attributes only.
     %% Categories take the category branch (no describe yet).
     {error, {unsupported_kind, category}} =
         graphdb_query:execute_query(
             #q_describe{nref = ?NREF_ROOT, labels = default}).
 
 %%---------------------------------------------------------------------
-%% Q3 — describe_class
+%% describe_class
 %%---------------------------------------------------------------------
 q3_describes_class_with_superclasses(_Config) ->
     %% Build: Classes <- Vehicle <- Car
@@ -544,7 +544,7 @@ q3_class_not_found(_Config) ->
                      #q_describe{nref = 9999999, labels = default})).
 
 %%---------------------------------------------------------------------
-%% Q4 — describe_instance
+%% describe_instance
 %%---------------------------------------------------------------------
 q4_describes_instance_with_class(_Config) ->
     {ok, Vehicle} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
@@ -613,7 +613,7 @@ q4_instance_not_found(_Config) ->
                      #q_describe{nref = 9999999, labels = default})).
 
 %%---------------------------------------------------------------------
-%% Q5 — list_instances_of
+%% list_instances_of
 %%---------------------------------------------------------------------
 q5_lists_direct_instances(_Config) ->
     {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
@@ -651,7 +651,7 @@ q5_class_with_no_instances(_Config) ->
                      #q_instances_of{class = Veh, recursive = true})).
 
 %%---------------------------------------------------------------------
-%% Q6 — find_path
+%% find_path
 %%---------------------------------------------------------------------
 q6_finds_path_via_taxonomy(_Config) ->
     {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),

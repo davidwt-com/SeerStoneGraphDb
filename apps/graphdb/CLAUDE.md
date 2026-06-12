@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 ## Purpose
 
-`graphdb` is the core **graph database** OTP application within the SeerStone system. It is a peer OTP application started by `application_master` after `mnesia` and `nref`, and manages graph data through `graphdb_sup` and six worker gen_servers. The data model is the knowledge graph described in `the-knowledge-network.md` (US patents 5,379,366; 5,594,837; 5,878,406 — Noyes).
+`graphdb` is the core **graph database** OTP application within the SeerStone system. It is a peer OTP application started by `application_master` after `mnesia` and `nref`, and manages graph data through `graphdb_sup` and six worker gen_servers. The data model is the knowledge graph described in `../../docs/TheKnowledgeNetwork.md` (US patents 5,379,366; 5,594,837; 5,878,406 — Noyes).
 
 ## Files
 
@@ -137,7 +137,7 @@ Every graph node is stored as a Mnesia record:
 ```
 
 `parents` and `classes` are caches of the authoritative arcs in the
-`relationships` table.  See ARCHITECTURE.md §3 for the cache invariant
+`relationships` table.  See `../../docs/Architecture.md` §3 for the cache invariant
 and the `graphdb_mgr:verify_caches/0` / `rebuild_caches/0` audit APIs.
 Downward queries ("children of X") read outgoing arcs from
 `relationships` filtered by kind + characterization.
@@ -357,7 +357,7 @@ firing engine (Phase B5 precedence + Phases C–F) remains, tracked in `TASKS.md
 
 - `graphdb_sup:start_link/0` takes no args, matching every supervisor in the umbrella. It is called from `graphdb:start/2` after `graphdb_nref:set_permanent_phase/0` arms the permanent-tier allocator. `graphdb:start/2` then calls `graphdb_nref:set_runtime_phase/0` after `start_link` returns.
 - `graphdb_bootstrap`, `graphdb_mgr` (startup + read API), `graphdb_attr`, `graphdb_class`, `graphdb_instance`, `graphdb_language`, `graphdb_query`, and `graphdb_rules` (F4 A+B1+B2+B3+B4) are implemented. Remaining work is in `TASKS.md` at the project root.
-- Consult `the-knowledge-network.md` for the full model spec before implementing
+- Consult `../../docs/TheKnowledgeNetwork.md` for the full model spec before implementing
 
 ## Compile
 

@@ -87,7 +87,7 @@
 	get_attribute_rejects_non_attribute/1,
 	list_attributes_includes_bootstrap_and_runtime/1,
 	list_relationship_types_includes_buckets/1,
-	%% Attribute type (M8)
+	%% Attribute type
 	seeded_nrefs_includes_attribute_type/1,
 	create_name_stamps_attribute_type/1,
 	create_literal_stamps_attribute_type/1,
@@ -454,7 +454,7 @@ create_relationship_attribute_pair(_Config) ->
 		Rev#node.attribute_value_pairs)).
 
 %%-----------------------------------------------------------------------------
-%% M4: create_relationship_attribute commits both nodes plus all four
+%% create_relationship_attribute commits both nodes plus all four
 %% taxonomy arc rows in a single transaction.  After a successful
 %% call the row deltas must be exactly +2 on `nodes` and +4 on
 %% `relationships` -- no orphan halves, no double-counted arcs.
@@ -724,7 +724,7 @@ list_relationship_types_includes_buckets(_Config) ->
 
 
 %%=============================================================================
-%% Attribute Type Tests (M8)
+%% Attribute Type Tests
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------

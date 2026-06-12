@@ -2,7 +2,7 @@
 
 Notes-only. Not a design, not an article. Just enough to remember the
 threads and pick them back up later. Started 2026-05-27 after pausing
-the F4 Phase A seeding-shape discussion.
+the rules-engine seeding-shape discussion.
 
 ## Threads to revisit
 
@@ -39,8 +39,8 @@ the F4 Phase A seeding-shape discussion.
 Neither is decided. (A) is more invasive but removes the migration
 class of problems entirely. (B) is cheaper today.
 
-**Important:** (A) vs (B) does not block F4 Phase A. F4 Phase A and
-the small commit can land under either framing.
+**Important:** (A) vs (B) does not block the rules data model. That
+work and the small commit can land under either framing.
 
 ### 4. Brainstorm leftovers (R1–R6)
 
@@ -55,11 +55,12 @@ brainstorm but never answered. Most are smaller than (A)-vs-(B):
 - **R2.** ~~Where do `applies_to` / `applied_by` arc-label nodes
   land?~~ **Resolved 2026-06-01:** under **nref 16** (Relationships >
   Instance Relationships, `?NREF_INST_REL_ATTRS`) — candidate (a). No
-  dedicated Rule Relationships sub-bucket. Recorded as F4 design D13 /
-  §10.1 P1 RESOLVED.
+  dedicated Rule Relationships sub-bucket. Recorded in the rules-engine
+  design (§10.1, resolved).
 - **R2b.** ~~Should `create_relationship_attribute/3` be fixed to honor
   kind sub-categories (13–16) instead of dropping new arc-labels
-  directly under nref 8?~~ **Resolved by L8 (2026-05-31):**
+  directly under nref 8?~~ **Resolved (attribute-placement
+  generalisation, 2026-05-31):**
   `create_relationship_attribute_pair/4` takes an explicit, validated
   `ParentNref`, so arc-labels can be filed under nref 13–16 (or any
   attribute parent); the `/3` arity keeps the nref-8 default.
@@ -67,13 +68,14 @@ brainstorm but never answered. Most are smaller than (A)-vs-(B):
   Currently no Templates exist at end of bootstrap, so the diagram
   is clean. Decision pending first runtime Template seed. **Update
   2026-06-01:** the `create_class/2` auto-default-template behavior is
-  reviewed and **kept** per-class (F4 design D14 — singleton/removal
-  both rejected). So once F4 Phase A lands, the two *instantiable*
-  meta-classes (`CompositionRule`, `ConnectionRule`) will each seed a
-  default template into the env tree; the abstract `Rule` root will not
-  (F4 D15 — non-instantiable classes skip the auto-default via the
-  deferred `instantiable => false` marker). Revisit the diagram then.
-- **R4.** Promote the L7 sub-grouping pattern (sub-group per owning
+  reviewed and **kept** per-class (per the rules-engine design —
+  singleton/removal both rejected). So once the rules data model lands,
+  the two *instantiable* meta-classes (`CompositionRule`,
+  `ConnectionRule`) will each seed a default template into the env tree;
+  the abstract `Rule` root will not (non-instantiable classes skip the
+  auto-default via the `instantiable => false` marker). Revisit the
+  diagram then.
+- **R4.** Promote the literals-subtree sub-grouping pattern (sub-group per owning
   worker, idempotent ensure-by-name under a category/attribute
   parent) to **policy** or keep it as **precedent only**?
 - **R5.** Where do the **shared creators** live? Module location,
@@ -130,7 +132,7 @@ These are cheap and useful under both (A) and (B).
 
 1. This file (re-orient).
 2. `arcs-authoritative.md` (current arc model).
-3. `docs/designs/f4-graphdb-rules-design.md` §10.1 (the P1 pinned
-   question — directly affected by R2).
-4. `memory/project-f4-phase-a-pinned-question.md` (the current
-   blocker on F4 Phase A).
+3. `docs/designs/f4-graphdb-rules-design.md` §10.1 (the pinned
+   placement question — directly affected by R2).
+4. `memory/project-f4-phase-a-pinned-question.md` (the then-current
+   blocker on the rules data model).

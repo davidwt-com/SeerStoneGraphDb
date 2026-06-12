@@ -76,7 +76,7 @@
 %% Constants
 %%---------------------------------------------------------------------
 %% Rules live in the shared ontology; project-scoped rules are not yet
-%% supported (B1/B2).  Firing always consults environment-scope rules.
+%% supported.  Firing always consults environment-scope rules.
 -define(RULE_SCOPE, environment).
 
 %%---------------------------------------------------------------------
@@ -104,8 +104,8 @@
 	target_kind_avp_nref,	%% integer() -- nref of the seeded `target_kind`
 							%% literal-attribute, cached from graphdb_attr
 							%% at init time and used by add_relationship
-							%% validation (M3).
-	instantiable_nref		%% integer() -- seeded `instantiable` marker (L9)
+							%% validation.
+	instantiable_nref		%% integer() -- seeded `instantiable` marker
 }).
 
 
@@ -188,7 +188,7 @@ create_instance(Name, ClassNref, ParentNref) ->
 %% create_instance(Name, ClassNref, ParentNref, Resolver) ->
 %%     {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
-%% As /3, but threads a connection Resolver (B4).  /3 uses the built-in
+%% As /3, but threads a connection Resolver.  /3 uses the built-in
 %% report_only resolver (defer-all): every connection rule surfaces as a report
 %% outcome and nothing is connected.
 %%-----------------------------------------------------------------------------
@@ -197,7 +197,7 @@ create_instance(Name, ClassNref, ParentNref, Resolver)
 	gen_server:call(?MODULE,
 		{create_instance, Name, ClassNref, ParentNref, Resolver}).
 
-%% report_only(ConnContext) -> defer   (the built-in /3 resolver, B4-D2)
+%% report_only(ConnContext) -> defer   (the built-in /3 resolver)
 report_only(_Ctx) -> defer.
 
 
@@ -244,7 +244,7 @@ add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 %% add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 %%                  TemplateNref, {FwdAVPs, RevAVPs}) -> ok | {error, term()}
 %%
-%% Full form (M5): callers can stamp per-direction metadata AVPs on the
+%% Full form: callers can stamp per-direction metadata AVPs on the
 %% two connection rows.  AVPs are asymmetric -- forward and reverse are
 %% specified independently, since §5 says metadata such as provenance,
 %% confidence, weights, and validity windows is per-direction.
@@ -357,9 +357,9 @@ resolve_value(InstanceNref, AttrNref) ->
 init([]) ->
 	logger:info("graphdb_instance: started"),
 	%% Cache the seeded `target_kind` literal-attribute nref from
-	%% graphdb_attr.  Used by add_relationship validation (M3) to check
+	%% graphdb_attr.  Used by add_relationship validation to check
 	%% that an arc's target node has the kind declared on the
-	%% characterization.  Also cache `instantiable` (L9) to check at
+	%% characterization.  Also cache `instantiable` to check at
 	%% create_instance time that the class is not marked non-instantiable.
 	%% graphdb_attr is started before graphdb_instance by graphdb_sup,
 	%% so this call is safe at init time.
@@ -464,10 +464,10 @@ find_avp_value([_ | Rest], AttrNref) ->
 %% do_create_instance(Name, ClassNref, ParentNref, Ctx)
 %%     -> {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
-%% The unifying internal entry (B2-D2): every cascade level flows through
+%% The unifying internal entry: every cascade level flows through
 %% here, never the gen_server API (that would deadlock).  Ctx carries
 %% inst_attr, on_path (the class path for the on-path cycle guard), resolver,
-%% and the stable root_parent / root_source anchors (B4-D2a).  Validates the
+%% and the stable root_parent / root_source anchors.  Validates the
 %% class (must be kind=class and instantiable) and parent (must exist);
 %% pre-PLAN errors return a 2-tuple {error, Reason} (no report).  Post-PLAN
 %% paths return 3-tuples.
@@ -490,7 +490,7 @@ do_create_instance(Name, ClassNref, ParentNref, Ctx) ->
 %% fire_create(Name, ClassNref, ParentNref, Ctx)
 %%     -> {ok, Nref, report()} | {error, Reason, report()}
 %%
-%% PLAN → EXECUTE → POST-COMMIT (B2-D1/D2/D3).  Calls graphdb_rules for the
+%% PLAN → EXECUTE → POST-COMMIT.  Calls graphdb_rules for the
 %% abstract plan tree, then executes the mandatory subtree atomically, then
 %% fires auto children best-effort post-commit.
 %%-----------------------------------------------------------------------------
@@ -522,7 +522,7 @@ fire_create(Name, ClassNref, ParentNref, Ctx) ->
 %%
 %% At the top level root_source is undefined -> bind it to the freshly
 %% allocated root nref; for a threaded descendant it is already set and
-%% kept unchanged (B4-D2a).
+%% kept unchanged.
 %%-----------------------------------------------------------------------------
 bind_root_source(Ctx, RootNref) ->
 	case maps:get(root_source, Ctx) of
@@ -536,7 +536,7 @@ bind_root_source(Ctx, RootNref) ->
 %%      | {error, Reason, report()}
 %%
 %% Allocates every node's nrefs/ids OUTSIDE the transaction, RESOLVEs the
-%% connection rules for the mandatory subtree (B4), then writes the root, the
+%% connection rules for the mandatory subtree, then writes the root, the
 %% whole mandatory composition subtree, and any committed mandatory connection
 %% rows in ONE Mnesia transaction.  Returns the InstPlan plus the AutoConnPlan
 %% (the post-commit auto-connection write list — empty in this task).
@@ -574,7 +574,7 @@ execute(RootName, _RootClass, RootParent, Ctx, PlanTree) ->
 	end.
 
 %%=============================================================================
-%% Connection Firing -- RESOLVE (B4)
+%% Connection Firing -- RESOLVE
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
@@ -618,7 +618,7 @@ resolve_rules([{Rule, Deploy, Spec} | Rest], SourceNref, Ctx, Acc) ->
 	case Mode of
 		propose ->
 			%% propose connection rules are advisory: surface `proposed`, never
-			%% consult the resolver, never connect (mirrors B3 propose).
+			%% consult the resolver, never connect (mirrors propose mode).
 			Acc1 = add_conn_outcome(Acc, Rule, Deploy,
 				conn_outcome_base(SourceNref, Spec, proposed)),
 			resolve_rules(Rest, SourceNref, Ctx, Acc1);
@@ -644,7 +644,7 @@ resolve_rules([{Rule, Deploy, Spec} | Rest], SourceNref, Ctx, Acc) ->
 %%   -> {ok, Acc'} | {error, Reason, Report}
 %%
 %% Validates the resolver-returned targets, applies the {Min, Max} range, and
-%% routes by mode.  In B4 Task 5 only `mandatory` is implemented (validate +
+%% routes by mode.  So far only `mandatory` is implemented (validate +
 %% abort, build root-txn rows, tentative `connected` outcomes); `auto` is added
 %% in a later task.
 %%-----------------------------------------------------------------------------
@@ -679,7 +679,7 @@ connect_targets(auto, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
 		{Rows, Auto, Rep}) ->
 	TClass = maps:get(target_class, Spec),
 	{Valid, Invalid} = split_valid(List, TClass, SourceNref),
-	%% auto does NOT enforce the floor (B4-D5) -- Min is ignored; only Max caps.
+	%% auto does NOT enforce the floor -- Min is ignored; only Max caps.
 	{_Min, Max} = maps:get(multiplicity, Deploy, {1, 1}),
 	ToConnect = cap(Valid, Max),
 	Char = maps:get(characterization, Spec),
@@ -751,7 +751,7 @@ mandatory_rows(Targets, SourceNref, Spec, Template) ->
 %% conn_fail(Reason, CulpritRule, Spec, RepAcc) -> Report
 %% Mandatory-connection abort report: every already-emitted connection outcome
 %% becomes not_attempted; the culprit gets one `failed` carrying its connection
-%% keys (so the rollback cause is discriminable by rule kind, B4-D7).
+%% keys (so the rollback cause is discriminable by rule kind).
 conn_fail(Reason, CulpritRule, Spec, RepAcc) ->
 	NA = [ RR#{outcomes => [#{index => 1, status => not_attempted}
 							|| _ <- Os]}
@@ -767,7 +767,7 @@ conn_fail(Reason, CulpritRule, Spec, RepAcc) ->
 %% Target is a bare nref or {Nref, {Fwd, Rev}}.  Valid iff the nref exists, is a
 %% kind=instance node, and is an instance of TargetClass or a subclass of it.
 %% No self-check is needed: the source is uncommitted at RESOLVE, so a readable
-%% instance is necessarily distinct from it (B4-D6).
+%% instance is necessarily distinct from it.
 %%-----------------------------------------------------------------------------
 validate_target(Target, TargetClass, _SourceNref) ->
 	Nref = target_nref(Target),
@@ -791,7 +791,7 @@ target_nref({Nref, {_F, _R}}) when is_integer(Nref) -> Nref.
 target_avps(Nref) when is_integer(Nref) -> {[], []};
 target_avps({_Nref, {Fwd, Rev}})        -> {Fwd, Rev}.
 
-%% conn_context(Rule, Deploy, Spec, SourceNref, Ctx) -> ConnContext (B4-D2/D2a)
+%% conn_context(Rule, Deploy, Spec, SourceNref, Ctx) -> ConnContext
 conn_context(Rule, Deploy, Spec, SourceNref, Ctx) ->
 	#{rule             => Rule,
 	  characterization => maps:get(characterization, Spec),
@@ -818,10 +818,10 @@ add_conn_outcome({Rows, Auto, Rep}, Rule, Deploy, Outcome) ->
 %%-----------------------------------------------------------------------------
 %% fire_connections(AutoConnPlan) -> report()
 %%
-%% POST-COMMIT best-effort writer for `auto` connections (B4).  Writes each
+%% POST-COMMIT best-effort writer for `auto` connections.  Writes each
 %% queued auto connection in its own transaction; a successful write is a
 %% `connected` outcome, a write failure is a `failed` outcome that never rolls
-%% the instance back (B4-D4/D7).  An empty plan yields an empty report.
+%% the instance back.  An empty plan yields an empty report.
 %%-----------------------------------------------------------------------------
 fire_connections(AutoConnPlan) ->
 	lists:foldl(fun fire_auto_connection/2, [], AutoConnPlan).
@@ -962,7 +962,7 @@ push_on_path(Ctx, ClassNref) ->
 %% fire_one_auto(RuleNode, Deploy, OwnerNref, Ctx, Acc) -> report()
 %%
 %% Check order: instantiable, then the vertical-cycle cut, then expansion.
-%% mints Min children post-commit (B-prep).  Ctx's on_path already carries the
+%% mints Min children post-commit.  Ctx's on_path already carries the
 %% owner's class (pushed by fire_auto).
 %%-----------------------------------------------------------------------------
 fire_one_auto(RuleNode, Deploy, OwnerNref, Ctx, Acc) ->
@@ -975,7 +975,7 @@ fire_one_auto(RuleNode, Deploy, OwnerNref, Ctx, Acc) ->
 		_ ->        %% true (or {error,_} -> treated as fireable; create reports)
 			{Min, _Max} = maps:get(multiplicity, Deploy, {1, 1}),
 			case lists:member(ChildClass, maps:get(on_path, Ctx)) of
-				true  -> Acc;       %% vertical cycle cut (B2-D5)
+				true  -> Acc;       %% vertical cycle cut
 				false -> fire_auto_children(RuleNode, Deploy, ChildClass,
 									Min, 1, OwnerNref, Ctx, Acc)
 			end
@@ -1016,7 +1016,7 @@ fire_auto_children(RuleNode, Deploy, ChildClass, Mult, I, OwnerNref, Ctx,
 %%-----------------------------------------------------------------------------
 %% fire_propose(InstPlan, OnPath) -> report()
 %%
-%% POST-COMMIT, side-effect-free (B3).  Walks the instantiated plan tree
+%% POST-COMMIT, side-effect-free.  Walks the instantiated plan tree
 %% (root + mandatory descendants) and surfaces each node's propose_rules as
 %% `proposed` outcomes.  Materialises NOTHING — a proposal is a suggestion the
 %% caller may accept by calling create_instance/3 for the proposed_class
@@ -1024,7 +1024,7 @@ fire_auto_children(RuleNode, Deploy, ChildClass, Mult, I, OwnerNref, Ctx,
 %% InstPlan; their propose rules surface via their own do_create_instance
 %% sub-report.  Mirrors fire_auto/2's traversal.
 %%
-%% B3 OI-B3-5 (shallow): no recursion into proposed children — nothing is
+%% Shallow: no recursion into proposed children — nothing is
 %% created, so there is nothing to recurse into.  A future propose-with-options
 %% feature may supersede this.
 %%-----------------------------------------------------------------------------
@@ -1043,18 +1043,18 @@ fire_propose(#{nref := Nref, class := Class, propose_rules := Props,
 %% fire_one_propose(RuleNode, Deploy, OwnerNref, OnPath1, Acc) -> report()
 %%
 %% Emits `proposed` outcome(s) for one propose rule.  No instantiability
-%% guard (B3 design §3.2): a proposal creates nothing, so an abstract target
+%% guard (propose-mode design §3.2): a proposal creates nothing, so an abstract target
 %% cannot break anything; the caller validates on accept.
 %%-----------------------------------------------------------------------------
 fire_one_propose(RuleNode, Deploy, OwnerNref, OnPath1, Acc) ->
 	ChildClass = graphdb_rules:rule_child_class(RuleNode),
-	%% B3 OI-B3-2: on-path cycle cut — do not propose a class already on the
-	%% root->here path (mirrors B2-D5).  Supersedable by propose-with-options.
+	%% On-path cycle cut — do not propose a class already on the
+	%% root->here path.  Supersedable by propose-with-options.
 	case lists:member(ChildClass, OnPath1) of
 		true ->
 			Acc;
 		false ->
-			%% B-prep: propose surfaces Min proposed outcomes, each carrying
+			%% Propose surfaces Min proposed outcomes, each carrying
 			%% max => Max so the report keeps the open-ended ceiling (Max may
 			%% be `unbounded').  Generalises the old index=unbounded sentinel.
 			{Min, Max} = maps:get(multiplicity, Deploy, {1, 1}),
@@ -1104,7 +1104,7 @@ do_validate_class(ClassNref, InstAttr) ->
 %% Returns true only when the AVP list contains an entry
 %% #{attribute => InstAttr, value => false}.  Absence = permissive.
 %% The duplication of this helper in graphdb_class is intentional — the
-%% two workers do not share a module, and L9 deliberately does NOT
+%% two workers do not share a module, and this code deliberately does NOT
 %% introduce a shared util module for one small predicate (YAGNI).
 is_marked_non_instantiable(AVPs, InstAttr) ->
 	lists:any(fun
@@ -1130,7 +1130,7 @@ do_validate_parent(ParentNref) ->
 %%                     TemplateSpec, State) -> ok | {error, term()}
 %%
 %% TemplateSpec is either the atom `default` (look up source's class
-%% default template) or an integer template nref.  M3 validation
+%% default template) or an integer template nref.  Arc validation
 %% (existence + arc-label kind + target_kind agreement) runs first,
 %% then class lookup, template resolution, scope check, and the
 %% two-row write of the connection arcs with the Template AVP stamped
@@ -1168,7 +1168,7 @@ do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 %% validate_arc_endpoints(Source, Char, Target, Reciprocal, TkAttr) ->
 %%     ok | {error, term()}
 %%
-%% M3 validation.  Reads all four nodes inside one mnesia transaction
+%% Arc validation.  Reads all four nodes inside one mnesia transaction
 %% and rejects:
 %%   - missing source / target / characterization / reciprocal
 %%   - characterization or reciprocal that is not kind=attribute
@@ -1281,8 +1281,8 @@ validate_template_scope(TemplateNref, SourceClass, TargetClass) ->
 %%   -> [{relationships, #relationship{}}]
 %%
 %% Builds the two directed connection rows (Template AVP at index 0).  Rel-ids
-%% are allocated here, OUTSIDE any transaction (L10).  No write -- the caller
-%% decides which transaction the rows land in (B4 mandatory connections ride the
+%% are allocated here, OUTSIDE any transaction.  No write -- the caller
+%% decides which transaction the rows land in (mandatory connections ride the
 %% composition root txn; auto connections are written post-commit).
 %%-----------------------------------------------------------------------------
 build_connection_rows(SourceNref, CharNref, TargetNref, ReciprocalNref,
@@ -1646,7 +1646,7 @@ resolve_from_ancestors(ParentNref, AttrNref) ->
 %% head_parent(Parents) -> integer() | undefined
 %%
 %% Returns the first parent in the cache list, or `undefined` for root
-%% nodes (empty parents list).  Used by single-chain ancestor walks; H3
+%% nodes (empty parents list).  Used by single-chain ancestor walks
 %% will introduce multi-parent walks that traverse the full list.
 %%-----------------------------------------------------------------------------
 head_parent([])      -> undefined;
@@ -1719,7 +1719,7 @@ search_targets([Nref | Rest], AttrNref) ->
 
 
 %%=============================================================================
-%% Firing Report Helpers (B2-D6)
+%% Firing Report Helpers
 %%=============================================================================
 
 %% summarize/1 is exported in TEST builds and available for external callers

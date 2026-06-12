@@ -7,9 +7,9 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 ## Status
 
-**Accepted** — landed as H0 (commits `d5a7244` H0a, `0b5fc43` H0b,
-`ce07cb2` H0c, `9e5d64a` H0d, plus the H0e doc fold). The invariant
-is summarised in [`ARCHITECTURE.md`](ARCHITECTURE.md) §3; this
+**Accepted** — landed across commits `d5a7244`, `0b5fc43`,
+`ce07cb2`, `9e5d64a`, plus the documentation fold. The invariant
+is summarised in [`Architecture.md`](docs/Architecture.md) §3; this
 document is retained as the formal decision record.
 
 ## Context
@@ -22,9 +22,10 @@ parents, compositional parents, class memberships — in two places today:
     instantiation arcs).
   - Fields on the `node` record (`parent`).
 
-M1 (resolved in PR #10) called out this inconsistency for instances.
-The same shape reappeared in H3 (multi-parent classes) and H4
-(multi-class instances). A uniform answer is needed before H3 lands.
+The original instance inconsistency was called out and resolved in
+PR #10. The same shape reappeared with multi-parent classes and
+multi-class instances. A uniform answer is needed before the
+multi-parent-class work lands.
 
 ## Decision
 
@@ -108,14 +109,14 @@ the relationship in plain English so the file remains
 human-followable top-to-bottom. The existing inline `%%` comments
 already demonstrate the pattern.
 
-Pre-H0 example (today):
+Pre-migration example:
 
 ```erlang
 {node, 6, attribute, 2, {18, "Names"}, []}.
 {relationship, 2, 24, [], 23, 6, [], composition}.  %% Attributes -> Names
 ```
 
-Post-H0d example:
+Post-migration example:
 
 ```erlang
 {node, 6, attribute, {18, "Names"}, []}.            %% parent comes from the arc below
@@ -127,18 +128,19 @@ writes the arcs, then runs `graphdb_mgr:rebuild_caches/0` followed by
 `graphdb_mgr:verify_caches/0` as a final assertion. Any mismatch
 between the rebuilt caches and the arcs is a fatal startup error.
 
-## Migration / H0 scope
+## Migration scope
 
-H0 landed across substeps H0a–H0e in PR #10 (commit `4e56761`); the
-final fold + RESOLVED markers shipped in commit `f2fead8`. See git
-history for the substep commits.
+This work landed across several substeps in PR #10 (commit `4e56761`);
+the final fold shipped in commit `f2fead8`. See git history for the
+substep commits.
 
 ## Consequences
 
 Pro:
 
-  - M1 closed; H3 lands as a small additive change atop established
-    cache machinery; H4 follows the same pattern.
+  - The original inconsistency is closed; multi-parent classes land as
+    a small additive change atop established cache machinery;
+    multi-class instances follow the same pattern.
   - Future memoization and parallel-fetch optimizations are internal
     changes — no API or schema move.
   - Single read path everywhere; no special-case branches for
@@ -156,7 +158,7 @@ Con:
 
 ## Future work
 
-`ARCHITECTURE.md` §3 now carries the cache invariant summary. This
-document remains as the frozen decision record. `ARCHITECTURE.md` may
+`Architecture.md` §3 now carries the cache invariant summary. This
+document remains as the frozen decision record. `Architecture.md` may
 itself be split into multiple focused documents at a later date; that
 decision is deferred.

@@ -105,8 +105,8 @@
 	literal_type_nref,				%% integer() -- seeded literal attribute
 	target_kind_nref,				%% integer() -- seeded literal attribute
 	relationship_avp_nref,			%% integer() -- seeded literal attribute
-	attribute_type_nref,			%% integer() -- seeded literal attribute (M8)
-	instantiable_nref				%% integer() -- seeded marker literal attribute (L9)
+	attribute_type_nref,			%% integer() -- seeded literal attribute
+	instantiable_nref				%% integer() -- seeded marker literal attribute
 }).
 
 

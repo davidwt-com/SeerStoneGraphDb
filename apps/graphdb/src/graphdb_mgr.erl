@@ -25,7 +25,7 @@
 %% {error, not_implemented} until those workers are implemented.
 %%---------------------------------------------------------------------
 %% Rev B Date: May 2026 Author: (completion of Dallas Noyes's design)
-%% L4: wire write-side delegation -- create_attribute routes to
+%% Write-side delegation -- create_attribute routes to
 %% graphdb_attr by ParentNref subtree; create_class and create_instance
 %% delegate directly to graphdb_class and graphdb_instance respectively;
 %% add_relationship delegates to graphdb_instance.  delete_node and

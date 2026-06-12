@@ -39,7 +39,7 @@ SeerStoneGraphDb/
 ├── rebar.config       # rebar3 umbrella build configuration
 ├── rebar.lock         # Locked dependency versions
 ├── Makefile           # Convenience targets (compile, shell, release, clean, rebar3)
-├── ARCHITECTURE.md    # High-level architecture; kept current with the code
+├── docs/              # Architecture.md, TheKnowledgeNetwork.md, designs, archive
 └── CLAUDE.md          # This file
 ```
 
@@ -63,14 +63,14 @@ graphdb (application — started after mnesia + nref)
         ├── graphdb_attr      (gen_server — implemented: seeds + create/lookup API)
         ├── graphdb_class     (gen_server — implemented: taxonomic hierarchy, QC inheritance)
         ├── graphdb_instance  (gen_server — implemented: compositional hierarchy, inheritance)
-        ├── graphdb_language  (gen_server — implemented: M6 multilingual overlay)
-        ├── graphdb_query     (gen_server — implemented: F3 query language)
-        └── graphdb_rules     (gen_server — implemented: F4 Phase A rule meta-ontology + create/retrieve)
+        ├── graphdb_language  (gen_server — implemented: multilingual overlay)
+        ├── graphdb_query     (gen_server — implemented: query language)
+        └── graphdb_rules     (gen_server — implemented: rule meta-ontology, create/retrieve, composition + connection firing)
 
 dictionary (application — started alongside graphdb)
   └── dictionary_sup (supervisor)
-        ├── dictionary_server (gen_server — stub, not yet wired to dictionary_imp)
-        └── term_server       (gen_server — stub, not yet wired to dictionary_imp)
+        ├── dictionary_server (gen_server — implemented: delegates to dictionary_imp)
+        └── term_server       (gen_server — implemented: delegates to dictionary_imp)
 
 database (application — started after graphdb + dictionary)
   └── database_sup (supervisor) — empty; attachment point for future database-level services
@@ -130,7 +130,7 @@ Maintain this structure when adding new modules.
 ## Knowledge Model
 
 This database is an implementation of the knowledge graph model described in
-`the-knowledge-network.md` (sourced from US patents 5,379,366;
+`docs/TheKnowledgeNetwork.md` (sourced from US patents 5,379,366;
 5,594,837; 5,878,406 — Noyes; and Cogito knowledge center documentation).
 
 ### Core Concepts
@@ -267,26 +267,24 @@ A logical bidirectional edge is two `relationship` rows written atomically (one 
 | `graphdb_class`    | Manages the taxonomic hierarchy: class nodes, qualifying characteristics, inheritance                                                                                                                                                                                   |
 | `graphdb_instance` | Creates and retrieves instance nodes; manages compositional hierarchy                                                                                                                                                                                                   |
 | `graphdb_rules`    | Stores and enforces graph rules (pattern recognition, relationship constraints)                                                                                                                                                                                         |
-| `graphdb_language` | M6 multilingual overlay layer (label registration, dialect chains, per-language Mnesia overlay tables)                                                                                                                                                                  |
-| `graphdb_query`    | F3 query language: parses and executes graph queries (Q1-Q6) against the node network                                                                                                                                                                                   |
+| `graphdb_language` | Multilingual overlay layer (label registration, dialect chains, per-language Mnesia overlay tables)                                                                                                                                                                     |
+| `graphdb_query`    | Query language: parses and executes graph queries against the node network                                                                                                                                                                                              |
 | `graphdb_mgr`      | Primary coordinator: routes operations across the other six workers                                                                                                                                                                                                     |
 
 ## Known Incomplete Areas (NYI)
 
 These are outstanding items — all previously known bugs have been fixed.
 
-- **`graphdb_rules` rule-firing engine** — F4 Phases A, B1, B2, B3, and B4 are implemented (rule meta-ontology + create/retrieve; taxonomy walk; composition firing; propose mode; connection firing). Phase B5 (precedence) and Phases C–F remain outstanding (TASKS.md F4)
-- **`graphdb_mgr` write operations** — `create_attribute/3`, `create_class/2`, `create_instance/3`, `add_relationship/4`, `delete_node/1`, `update_node_avps/2` return `{error, not_implemented}` pending L4 routing work
-- **`dictionary_server` and `term_server`** — stubs not yet wired to `dictionary_imp` (TASKS.md Task 7)
-- **`seerstone:start/2` and `nref:start/2`**, **`code_change/3`** — deferred (TASKS.md E2, E3)
+- **`graphdb_rules` rule-firing engine** — the rule meta-ontology, create/retrieve, taxonomy walk, composition firing, propose mode, and connection firing are implemented. Conflict precedence and the later firing-engine phases (instantiation engine, reactive learning) remain outstanding (see `TASKS.md`)
+- **`graphdb_mgr` write operations** — `create_attribute/3`, `create_class/2`, `create_instance/3`, `add_relationship/4` delegate to the workers; `delete_node/1` and `update_node_avps/2` still return `{error, not_implemented}` pending a worker that implements them
+- **`code_change/3`** — deferred in every gen_server until the first hot-upgrade deployment (see `TASKS.md`)
 - **App lifecycle callbacks** — `start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3` return `ok` (no-op) across all five app modules; correct for current deployment model
 
 ## Remaining Work
 
-Remaining tasks are in `TASKS.md` (feature phases F1–F4 and
-Engineering Hygiene). Critical schema-level work is complete (PR #9);
-high-severity inheritance/membership correctness work landed in PR
-#12.
+Remaining tasks are in `TASKS.md`. Critical schema-level work is
+complete (PR #9); high-severity inheritance/membership correctness
+work landed in PR #12.
 
 ## Configuration
 
@@ -321,11 +319,11 @@ GitHub Actions workflow at `.github/workflows/ci.yml`:
 
 ## Documentation
 
-`ARCHITECTURE.md` must reflect the current high-level shape of the code.
-Keep it current — but at architectural altitude, not implementation
-detail.
+`docs/Architecture.md` must reflect the current high-level shape of the
+code. Keep it current — but at architectural altitude, not
+implementation detail.
 
-**Update `ARCHITECTURE.md` when:**
+**Update `docs/Architecture.md` when:**
 - The Mnesia schema changes (record fields added/removed/renamed).
 - The OTP supervision tree changes (new/removed workers, supervisor
   reorganisation).
@@ -335,7 +333,7 @@ detail.
 - An architectural decision is made or revised (storage technology,
   cross-module routing, identity/allocation strategy).
 
-**Don't update `ARCHITECTURE.md` for:**
+**Don't update `docs/Architecture.md` for:**
 - Internal refactors that don't change the contract.
 - Bug fixes, style changes, comment edits, test additions.
 - Implementation progress within an already-described component.
@@ -356,8 +354,8 @@ that file must reflect the current shape of the tree.
   environment-only).
 - Internal refactors that leave the seed shape unchanged.
 
-The canonical spec is `the-knowledge-network.md` — it does **not** track
-the code. Outstanding work lives in `TASKS.md`.
+The canonical spec is `docs/TheKnowledgeNetwork.md` — it does **not**
+track the code. Outstanding work lives in `TASKS.md`.
 
 ## Storage Technologies Used
 

@@ -110,7 +110,7 @@
 	resolve_value_source_class/1,
 	resolve_value_source_ancestor/1,
 	resolve_value_source_connected/1,
-	%% Multi-membership (H4)
+	%% Multi-membership
 	add_class_membership_basic/1,
 	add_class_membership_writes_arcs/1,
 	add_class_membership_idempotent/1,
@@ -120,13 +120,13 @@
 	add_class_membership_rejects_non_class_target/1,
 	add_class_membership_refuses_abstract_class/1,
 	class_memberships_initial/1,
-	%% Multi-membership resolver (H5)
+	%% Multi-membership resolver
 	resolve_value_unique_across_two_classes/1,
 	resolve_value_same_value_two_classes/1,
 	resolve_value_ambiguous_two_classes/1,
 	resolve_value_local_overrides_ambiguity/1,
 	resolve_value_ambiguity_via_taxonomy/1,
-	%% Firing (B2)
+	%% Firing
 	firing_no_rules_baseline/1,
 	firing_single_mandatory/1,
 	firing_mandatory_mult/1,
@@ -145,19 +145,19 @@
 	firing_propose_owner_is_materialised_child/1,
 	firing_propose_carries_max/1,
 	firing_propose_min_zero_surfaces_none/1,
-	%% B-prep mint-Min (BP-D2/BP-D3)
+	%% mint-Min
 	firing_mandatory_mints_min/1,
 	firing_mandatory_min_zero_mints_none/1,
 	firing_mandatory_min_unbounded_mints_min/1,
 	firing_auto_mints_min/1,
 	firing_auto_min_zero_unbounded/1,
-	%% B4 connection firing
+	%% connection firing
 	firing_conn_report_only_mandatory/1,
 	firing_conn_report_only_auto/1,
 	firing_conn_report_only_propose/1,
 	firing_conn_explicit_defer/1,
 	firing_conn_summarize/1,
-	%% B4 mandatory commit path
+	%% mandatory commit path
 	firing_conn_mandatory_connected/1,
 	firing_conn_mandatory_shortfall_fails/1,
 	firing_conn_mandatory_invalid_target_fails/1,
@@ -165,10 +165,10 @@
 	firing_conn_rollback_discriminable_composition/1,
 	firing_conn_rollback_discriminable_connection/1,
 	firing_conn_descendant_in_root_txn/1,
-	%% B4 auto connection post-commit
+	%% auto connection post-commit
 	firing_conn_auto_connected/1,
 	firing_conn_auto_invalid_survives/1,
-	%% B4 target validation (B4-D6)
+	%% target validation
 	firing_conn_subclass_target_accepted/1,
 	firing_conn_missing_target_fails/1,
 	firing_conn_non_instance_target_fails/1,
@@ -715,7 +715,7 @@ add_relationship_no_default_after_delete(_Config) ->
 		graphdb_instance:add_relationship(A, Char, B, Recip)).
 
 %%-----------------------------------------------------------------------------
-%% M3: missing source nref is rejected.
+%% missing source nref is rejected.
 %%-----------------------------------------------------------------------------
 add_relationship_rejects_missing_source(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
@@ -726,7 +726,7 @@ add_relationship_rejects_missing_source(_Config) ->
 		graphdb_instance:add_relationship(99999, Char, B, Recip)).
 
 %%-----------------------------------------------------------------------------
-%% M3: missing target nref is rejected.
+%% missing target nref is rejected.
 %%-----------------------------------------------------------------------------
 add_relationship_rejects_missing_target(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
@@ -737,7 +737,7 @@ add_relationship_rejects_missing_target(_Config) ->
 		graphdb_instance:add_relationship(A, Char, 99999, Recip)).
 
 %%-----------------------------------------------------------------------------
-%% M3: characterization that is not kind=attribute is rejected.  Uses
+%% characterization that is not kind=attribute is rejected.  Uses
 %% the bootstrap Projects category (nref 5) as a non-attribute node.
 %%-----------------------------------------------------------------------------
 add_relationship_rejects_non_attribute_char(_Config) ->
@@ -750,7 +750,7 @@ add_relationship_rejects_non_attribute_char(_Config) ->
 		graphdb_instance:add_relationship(A, 5, B, Recip)).
 
 %%-----------------------------------------------------------------------------
-%% M3: reciprocal that is not kind=attribute is rejected.
+%% reciprocal that is not kind=attribute is rejected.
 %%-----------------------------------------------------------------------------
 add_relationship_rejects_non_attribute_reciprocal(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
@@ -762,7 +762,7 @@ add_relationship_rejects_non_attribute_reciprocal(_Config) ->
 		graphdb_instance:add_relationship(A, Char, B, 5)).
 
 %%-----------------------------------------------------------------------------
-%% M3: target whose kind disagrees with the characterization's
+%% target whose kind disagrees with the characterization's
 %% target_kind AVP is rejected.  Char declares target_kind=class but the
 %% target is an instance.
 %%-----------------------------------------------------------------------------
@@ -778,7 +778,7 @@ add_relationship_rejects_target_kind_mismatch(_Config) ->
 
 
 %%-----------------------------------------------------------------------------
-%% M5: /6 stamps user AVPs on both connection rows alongside the
+%% /6 stamps user AVPs on both connection rows alongside the
 %% Template AVP.  Same AVPs are seen in fwd and rev directions when
 %% they're identical lists.
 %%-----------------------------------------------------------------------------
@@ -806,7 +806,7 @@ add_relationship_stamps_user_avps(_Config) ->
 	?assert(lists:member(UserAVP, Fwd#relationship.avps)).
 
 %%-----------------------------------------------------------------------------
-%% M5: forward and reverse AVPs are per-direction independent.  An AVP
+%% forward and reverse AVPs are per-direction independent.  An AVP
 %% supplied only on the forward side must not leak into the reverse arc.
 %%-----------------------------------------------------------------------------
 add_relationship_avps_are_per_direction(_Config) ->
@@ -842,7 +842,7 @@ add_relationship_avps_are_per_direction(_Config) ->
 	?assertNot(lists:member(FwdOnly,  Rev#relationship.avps)).
 
 %%-----------------------------------------------------------------------------
-%% M5: /4 and /5 default to {[],[]}, so connection rows carry only the
+%% /4 and /5 default to {[],[]}, so connection rows carry only the
 %% Template AVP.
 %%-----------------------------------------------------------------------------
 add_relationship_default_avps_empty(_Config) ->
@@ -1062,7 +1062,7 @@ resolve_value_priority_ancestor_over_connected(_Config) ->
 		graphdb_instance:resolve_value(Child, TestAttr)).
 
 %%-----------------------------------------------------------------------------
-%% H1: resolve_from_class must walk the class taxonomy.  Animal IS-A
+%% resolve_from_class must walk the class taxonomy.  Animal IS-A
 %% Mammal IS-A Dog: an attribute bound on Animal must be visible to a
 %% Dog instance even when neither Mammal nor Dog defines it.
 %%-----------------------------------------------------------------------------
@@ -1078,7 +1078,7 @@ resolve_value_walks_class_taxonomy(_Config) ->
 		graphdb_instance:resolve_value(Rex, TestAttr)).
 
 %%-----------------------------------------------------------------------------
-%% H1: when both the local class and a taxonomy ancestor bind the same
+%% when both the local class and a taxonomy ancestor bind the same
 %% attribute, the nearest class wins (taxonomy walk is nearest-first).
 %%-----------------------------------------------------------------------------
 resolve_value_local_class_overrides_taxonomy_ancestor(_Config) ->
@@ -1092,7 +1092,7 @@ resolve_value_local_class_overrides_taxonomy_ancestor(_Config) ->
 		graphdb_instance:resolve_value(Rex, TestAttr)).
 
 %%-----------------------------------------------------------------------------
-%% H2: Priority 4 ("directly connected nodes") must consider only
+%% Priority 4 ("directly connected nodes") must consider only
 %% connection-kind arcs.  A value bound on the compositional parent's
 %% category (reached only via the parent_arc) must not surface via P4.
 %%-----------------------------------------------------------------------------
@@ -1173,7 +1173,7 @@ resolve_value_source_connected(_Config) ->
 
 
 %%=============================================================================
-%% Multi-Membership Tests (H4)
+%% Multi-Membership Tests
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
@@ -1272,7 +1272,7 @@ add_class_membership_rejects_non_class_target(_Config) ->
 %%-----------------------------------------------------------------------------
 %% A non-instantiable (abstract) class target is rejected — an instance
 %% cannot become a member of an abstract class (that would make it an
-%% instance of one).  Same guard as create_instance (L9).
+%% instance of one).  Same guard as create_instance.
 %%-----------------------------------------------------------------------------
 add_class_membership_refuses_abstract_class(_Config) ->
 	{ok, #{instantiable := Inst}} = graphdb_attr:seeded_nrefs(),
@@ -1295,7 +1295,7 @@ class_memberships_initial(_Config) ->
 
 
 %%=============================================================================
-%% Multi-Membership Resolver Tests (H5)
+%% Multi-Membership Resolver Tests
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
@@ -1386,7 +1386,7 @@ resolve_value_ambiguity_via_taxonomy(_Config) ->
 
 
 %%=============================================================================
-%% Firing Tests (B2)
+%% Firing Tests
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
@@ -1426,7 +1426,7 @@ firing_mandatory_mult(Config) ->
 		graphdb_instance:create_instance("car", Owner, 5),
 	?assertEqual(3, length(Outs)),
 	?assertEqual([1, 2, 3], [maps:get(index, O) || O <- Outs]),
-	%% B2-D6: report carries the rule's real deployment map
+	%% report carries the rule's real deployment map
 	?assertEqual({3, 3}, maps:get(multiplicity, Dep)),
 	?assertEqual(mandatory, maps:get(mode, Dep)).
 
@@ -1510,7 +1510,7 @@ firing_auto_cascade_merges(Config) ->
 				 graphdb_instance:summarize(Report)).
 
 %%-----------------------------------------------------------------------------
-%% B3: a propose rule surfaces a `proposed` outcome carrying owner (the
+%% a propose rule surfaces a `proposed` outcome carrying owner (the
 %% materialised parent), proposed_class, index and name — and creates NOTHING.
 %%-----------------------------------------------------------------------------
 firing_propose_outcome_in_report(Config) ->
@@ -1529,7 +1529,7 @@ firing_propose_outcome_in_report(Config) ->
 	?assertNot(maps:is_key(child, Outcome)).      %% no created-instance key
 
 %%-----------------------------------------------------------------------------
-%% B3: a propose rule materialises nothing — node table size is unchanged
+%% a propose rule materialises nothing — node table size is unchanged
 %% beyond the single root instance.
 %%-----------------------------------------------------------------------------
 firing_propose_not_materialised(Config) ->
@@ -1542,7 +1542,7 @@ firing_propose_not_materialised(Config) ->
 	?assertEqual(Before + 1, After).      %% only the root, no proposed children
 
 %%-----------------------------------------------------------------------------
-%% B3: multiplicity=3 propose yields three proposed outcomes, indices 1..3,
+%% multiplicity=3 propose yields three proposed outcomes, indices 1..3,
 %% names per name_pattern.
 %%-----------------------------------------------------------------------------
 firing_propose_multiplicity_bounded(Config) ->
@@ -1559,8 +1559,8 @@ firing_propose_multiplicity_bounded(Config) ->
 	?assert(lists:all(fun(O) -> maps:get(status, O) =:= proposed end, Outs)).
 
 %%-----------------------------------------------------------------------------
-%% B-prep: {1, unbounded} propose yields one proposed outcome (index 1) carrying
-%% max => unbounded.  The old index=unbounded sentinel is retired (BP-D3).
+%% {1, unbounded} propose yields one proposed outcome (index 1) carrying
+%% max => unbounded.  The old index=unbounded sentinel is retired.
 %%-----------------------------------------------------------------------------
 firing_propose_multiplicity_unbounded(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
@@ -1574,7 +1574,7 @@ firing_propose_multiplicity_unbounded(Config) ->
 	?assertEqual(unbounded, Max).
 
 %%-----------------------------------------------------------------------------
-%% B3 OI-B3-2: a propose rule whose child class is already on the
+%% a propose rule whose child class is already on the
 %% root->here path is cut — no proposed outcome.  Owner's class proposes
 %% Owner (self), so nothing is surfaced.
 %%-----------------------------------------------------------------------------
@@ -1586,7 +1586,7 @@ firing_propose_on_path_cut(Config) ->
 	?assertEqual([], Report).
 
 %%-----------------------------------------------------------------------------
-%% B3: summarize/1 counts proposed outcomes (and the map gains the key).
+%% summarize/1 counts proposed outcomes (and the map gains the key).
 %%-----------------------------------------------------------------------------
 firing_propose_summarize(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
@@ -1598,7 +1598,7 @@ firing_propose_summarize(Config) ->
 				 graphdb_instance:summarize(Report)).
 
 %%-----------------------------------------------------------------------------
-%% B3: all three modes on one create — mandatory + auto materialise, propose
+%% all three modes on one create — mandatory + auto materialise, propose
 %% is surfaced but not materialised.
 %%-----------------------------------------------------------------------------
 firing_propose_with_mandatory_and_auto(Config) ->
@@ -1621,7 +1621,7 @@ firing_propose_with_mandatory_and_auto(Config) ->
 				 graphdb_instance:summarize(Report)).
 
 %%-----------------------------------------------------------------------------
-%% B3: a propose rule on a MANDATORY child's class surfaces a proposed outcome
+%% a propose rule on a MANDATORY child's class surfaces a proposed outcome
 %% whose owner is the materialised child (NOT the root) — proves owner rides
 %% proposals at depth, not just at the requested-instance level.
 %%-----------------------------------------------------------------------------
@@ -1647,7 +1647,7 @@ firing_propose_owner_is_materialised_child(Config) ->
 
 
 %%-----------------------------------------------------------------------------
-%% B-prep BP-D2(b): propose {3, 5} surfaces 3 outcomes, each carrying max => 5.
+%% propose {3, 5} surfaces 3 outcomes, each carrying max => 5.
 %%-----------------------------------------------------------------------------
 firing_propose_carries_max(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
@@ -1663,7 +1663,7 @@ firing_propose_carries_max(Config) ->
 	?assertEqual([], [O || O <- Outs, maps:get(index, O) =:= unbounded]).
 
 %%-----------------------------------------------------------------------------
-%% B-prep: {0, K} propose surfaces nothing by default (Min = 0); the ceiling K
+%% {0, K} propose surfaces nothing by default (Min = 0); the ceiling K
 %% is for the future interactive-creation session (BP-OI-1).
 %%-----------------------------------------------------------------------------
 firing_propose_min_zero_surfaces_none(Config) ->
@@ -1674,7 +1674,7 @@ firing_propose_min_zero_surfaces_none(Config) ->
 	?assertEqual(0, maps:get(proposed, graphdb_instance:summarize(Report))).
 
 %%-----------------------------------------------------------------------------
-%% B-prep BP-D2: mandatory composition mints Min children.
+%% mandatory composition mints Min children.
 %%-----------------------------------------------------------------------------
 firing_mandatory_mints_min(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
@@ -1687,7 +1687,7 @@ firing_mandatory_mints_min(Config) ->
 	?assertEqual([1, 2], [maps:get(index, O) || O <- Fired]).
 
 %%-----------------------------------------------------------------------------
-%% B-prep: {0, K} mandatory mints nothing (vacuous) and does not fail.
+%% {0, K} mandatory mints nothing (vacuous) and does not fail.
 %%-----------------------------------------------------------------------------
 firing_mandatory_min_zero_mints_none(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
@@ -1699,7 +1699,7 @@ firing_mandatory_min_zero_mints_none(Config) ->
 				 graphdb_instance:summarize(Report)).
 
 %%-----------------------------------------------------------------------------
-%% B-prep BP-D3: {1, unbounded} mandatory mints Min (1) — no
+%% {1, unbounded} mandatory mints Min (1) — no
 %% unbounded_multiplicity_not_fireable.
 %%-----------------------------------------------------------------------------
 firing_mandatory_min_unbounded_mints_min(Config) ->
@@ -1715,7 +1715,7 @@ firing_mandatory_min_unbounded_mints_min(Config) ->
 	end, Outs)).
 
 %%-----------------------------------------------------------------------------
-%% B-prep BP-D2: auto composition mints Min children post-commit.
+%% auto composition mints Min children post-commit.
 %%-----------------------------------------------------------------------------
 firing_auto_mints_min(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
@@ -1727,7 +1727,7 @@ firing_auto_mints_min(Config) ->
 	?assertEqual(2, length(Fired)).
 
 %%-----------------------------------------------------------------------------
-%% B-prep BP-D3: {0, unbounded} auto mints nothing and does not fail.
+%% {0, unbounded} auto mints nothing and does not fail.
 %%-----------------------------------------------------------------------------
 firing_auto_min_zero_unbounded(Config) ->
 	{Owner, Bolt} = ?config(ob, Config),
@@ -1810,7 +1810,7 @@ do_delete_dir(Dir) ->
 
 
 %%=============================================================================
-%% B4 Connection Firing Tests
+%% Connection Firing Tests
 %%=============================================================================
 %% These cases build their own classes (NOT via setup_firing_fixtures) and
 %% exercise the RESOLVE defer-path: report-only (/3) and explicit defer-all (/4)
@@ -1818,7 +1818,7 @@ do_delete_dir(Dir) ->
 %% proposed outcomes; nothing is connected.
 
 %% /3 report-only: a mandatory connection rule surfaces as `required`, nothing
-%% connected, create succeeds (the /3 mandatory escape, B4-D4).
+%% connected, create succeeds (the /3 mandatory escape).
 firing_conn_report_only_mandatory(_Config) ->
 	{Src, Tgt, Char, Recip} = b4_conn_classes("Car", "Mfr", "made_by", "makes"),
 	{ok, _} = graphdb_rules:create_connection_rule(
@@ -1871,7 +1871,7 @@ firing_conn_summarize(_Config) ->
 
 
 %%=============================================================================
-%% B4 Mandatory Commit Path Tests
+%% Mandatory Commit Path Tests
 %%=============================================================================
 
 %% mandatory + committing resolver: arc pair written in the root txn; outcome
@@ -2015,7 +2015,7 @@ firing_conn_descendant_in_root_txn(_Config) ->
 
 
 %%=============================================================================
-%% B4 Auto Connection Post-Commit Tests
+%% Auto Connection Post-Commit Tests
 %%=============================================================================
 
 %% auto + committing resolver: target connected post-commit; root survives.
@@ -2044,7 +2044,7 @@ firing_conn_auto_invalid_survives(_Config) ->
 
 
 %%=============================================================================
-%% B4 Target Validation Tests (B4-D6)
+%% Target Validation Tests
 %%=============================================================================
 
 %% a target that is an instance of a SUBCLASS of target_class is accepted.
@@ -2098,7 +2098,7 @@ firing_conn_resolver_avps_stamped(_Config) ->
 
 
 %%=============================================================================
-%% B4 helpers
+%% Connection-firing helpers
 %%=============================================================================
 
 %% the single outgoing connection arc (#relationship{}) from Source with char.

@@ -76,7 +76,7 @@
 	category_guard_allows_noncategory_delete/1,
 	category_guard_allows_noncategory_update/1,
 	category_guard_delete_nonexistent/1,
-	%% Write delegation (L4)
+	%% Write delegation
 	create_name_attribute_delegates/1,
 	create_literal_attribute_delegates/1,
 	create_relationship_attribute_delegates/1,
@@ -476,7 +476,7 @@ category_guard_delete_nonexistent(_Config) ->
 
 
 %%=============================================================================
-%% Write Delegation Tests (L4)
+%% Write Delegation Tests
 %%
 %% Each test verifies that graphdb_mgr correctly routes a write call to
 %% the appropriate worker and that the result is retrievable.  Workers
