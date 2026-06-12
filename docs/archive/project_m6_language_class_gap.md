@@ -17,10 +17,12 @@ Currently `lang_human` is a direct child of Classes (3) in bootstrap.terms — t
 
 Decision on which option was deferred before implementation.
 
-**Gap 2 — Connection arcs to subcategory nodes (nrefs 32–35) — deferred**
+**Gap 2 — Connection arcs to subcategory nodes (nrefs 32–35) — now unblocked**
 
-Architecture §10: "Domain membership is recorded by a lateral connection arc from each language class node to the appropriate subcategory (e.g., English → Human Languages, nref 32)." These are template-scoped CONNECTION arcs (char 31). Template infrastructure is not yet implemented. Cannot land in M6. The bootstrap.terms comment on English (10000) confirms this is deferred.
+Architecture §10: "Domain membership is recorded by a lateral connection arc from each language class node to the appropriate subcategory (e.g., English → Human Languages, nref 32)." These are template-scoped CONNECTION arcs (char 31). Deferred from M6 because the connection firing engine was not yet implemented.
+
+F4 B4 (connection firing engine, PR #37) has now landed. The mechanism exists. What remains: add connection rules to `lang_human` (and equivalent class nodes for formal/diagram/renderer languages) that fire at `create_instance/4` and connect the new instance to the correct subcategory nref.
 
 **Why:** Bootstrap.terms carries the note `(b) composition arc to Human Languages category (nref 32) — requires` (cut off, referring to template infrastructure).
 
-**How to apply:** Before starting M6 Task 2 implementation, decide Option A vs B for the Language superclass and update the plan accordingly. Connection arcs remain deferred regardless.
+**How to apply:** Both gaps are now tracked in TASKS.md ("Multilingual overlay — structural gaps"). This memory file is archived; refer to TASKS.md for current status.
