@@ -350,10 +350,16 @@ plan_composition_firing(Scope, ClassNref, ConflictResolver) ->
 %%   kind = composition -> Pair = {RuleNode, Deploy}
 %%   kind = connection  -> Pair = {RuleNode, Deploy, ConnSpec}
 %%
-%% This identity stub is replaced by the real algorithm in Task 2/3/4.
+%% Bakes in the seed nrefs it needs (read ONCE here, in the caller's process)
+%% and returns a closure dispatching on the context `kind'.  Connection
+%% resolution is a pass-through until Task 4.
 %%-----------------------------------------------------------------------------
 default_conflict_resolver() ->
-	fun(#{rules := Rules}) -> Rules end.
+	{ok, Seeds} = seeded_nrefs(),
+	ChildAttr = maps:get(child_class_nref_attr, Seeds),
+	TplAttr   = maps:get(template_nref_attr, Seeds),
+	AppliedBy = maps:get(applied_by, Seeds),
+	fun(Ctx) -> resolve_conflicts(Ctx, ChildAttr, TplAttr, AppliedBy) end.
 
 %%-----------------------------------------------------------------------------
 %% rule_child_class(RuleNode :: #node{}) -> integer() | undefined
@@ -1028,6 +1034,142 @@ connection_spec(RuleNode, State) ->
 		  content_avp_value(RuleNode, State#state.reciprocal_nref_attr),
 	  target_class =>
 		  content_avp_value(RuleNode, State#state.target_class_nref_attr)}.
+
+%%---------------------------------------------------------------------
+%% B5 conflict resolution (default resolver body)
+%%---------------------------------------------------------------------
+%% resolve_conflicts(Ctx, ChildAttr, TplAttr, AppliedBy) -> [Pair]
+%% Ctx = #{kind, rules, class_nref}.  Pure over the seed nrefs + graphdb_class +
+%% the relationships table; no graphdb_rules gen_server call (deadlock-safe in
+%% either process).
+
+resolve_conflicts(#{kind := composition, rules := Pairs}, ChildAttr, TplAttr,
+				  AppliedBy) ->
+	Items = [comp_item(P, ChildAttr, TplAttr, AppliedBy) || P <- Pairs],
+	Groups = assign_groups(Items, composition),
+	lists:flatmap(fun(G) -> resolve_group(G, composition) end, Groups);
+resolve_conflicts(#{kind := connection, rules := Specs}, _ChildAttr, _TplAttr,
+				  _AppliedBy) ->
+	%% Additive pass-through until Task 4 implements connection resolution.
+	Specs.
+
+%% comp_item({RuleNode, Deploy}, ChildAttr, TplAttr, AppliedBy) -> item()
+%% item() = #{pair, ref, char, mode, min, max, owner, real_tpl}
+comp_item({RuleNode, Deploy} = Pair, ChildAttr, _TplAttr, AppliedBy) ->
+	{Min, Max} = maps:get(multiplicity, Deploy, {1, 1}),
+	#{pair  => Pair,
+	  ref   => content_avp_value(RuleNode, ChildAttr),
+	  char  => undefined,
+	  mode  => maps:get(mode, Deploy, mandatory),
+	  min   => Min,
+	  max   => Max,
+	  owner => owning_class(RuleNode, AppliedBy),
+	  real_tpl => false}.
+
+%% owning_class(RuleNode, AppliedBy) -> integer() | undefined
+%% Re-derives the rule's owning class from its applied_by arc (source=Rule,
+%% char=applied_by -> target=owning class).  See do_create_rule/7.
+owning_class(#node{nref = RuleNref}, AppliedBy) ->
+	Arcs = mnesia:dirty_index_read(relationships, RuleNref,
+								   #relationship.source_nref),
+	case [A#relationship.target_nref || A <- Arcs,
+		  A#relationship.characterization =:= AppliedBy] of
+		[Owner | _] -> Owner;
+		[]          -> undefined
+	end.
+
+%% assign_groups(Items, Kind) -> [[item()]]
+%% Walks nearest-first; each item joins the first group whose head (anchor =
+%% nearest member) it matches, else starts a new group.  Groups preserve
+%% nearest-first member order; group list preserves creation order.
+assign_groups(Items, Kind) ->
+	lists:foldl(fun(Item, Groups) ->
+		case find_group(Item, Groups, Kind, 1) of
+			{Idx, _G} -> append_to_group(Idx, Item, Groups);
+			none      -> Groups ++ [[Item]]
+		end
+	end, [], Items).
+
+find_group(_Item, [], _Kind, _Idx) ->
+	none;
+find_group(Item, [G | Rest], Kind, Idx) ->
+	case same_conflict(Kind, hd(G), Item) of
+		true  -> {Idx, G};
+		false -> find_group(Item, Rest, Kind, Idx + 1)
+	end.
+
+append_to_group(Idx, Item, Groups) ->
+	{Before, [G | After]} = lists:split(Idx - 1, Groups),
+	Before ++ [G ++ [Item]] ++ After.
+
+%% same_conflict(Kind, Anchor, Item) -> boolean()
+%% The anchor (nearest member) must be same-or-descendant of the candidate.
+%% class_in_ancestry(FartherRef, NearerRef): ANCESTOR first, DESCENDANT second
+%% (arg-order hazard -- B4 has a canary for the same call).  FartherRef =
+%% candidate's ref, NearerRef = anchor's ref.
+same_conflict(composition, Anchor, Item) ->
+	graphdb_class:class_in_ancestry(maps:get(ref, Item), maps:get(ref, Anchor));
+same_conflict(connection, Anchor, Item) ->
+	maps:get(char, Anchor) =:= maps:get(char, Item)
+		andalso graphdb_class:class_in_ancestry(maps:get(ref, Item),
+												maps:get(ref, Anchor)).
+
+%% resolve_group(Group, Kind) -> [Pair]
+%% Winner = highest mode-priority among the nearest-level prefix; losers are
+%% dropped (their Max merges) unless both winner and loser are real-templated,
+%% in which case the loser is re-emitted as an independent propose (B5-D4).
+resolve_group(Group, Kind) ->
+	OwnerHd = maps:get(owner, hd(Group)),
+	%% Nearest-level prefix assumes a distinct owning class per taxonomic
+	%% distance (linear chain).  An equidistant multi-parent diamond would
+	%% resolve by graphdb_class:ancestors/1 ordering -- see TASKS.md F4 B5
+	%% follow-up.
+	NearestLevel = lists:takewhile(
+		fun(I) -> maps:get(owner, I) =:= OwnerHd end, Group),
+	Winner = pick_winner(NearestLevel),
+	Losers = Group -- [Winner],
+	{Demoted, Dropped} = lists:partition(
+		fun(L) -> maps:get(real_tpl, Winner) andalso maps:get(real_tpl, L) end,
+		Losers),
+	MergedMax = lists:foldl(
+		fun(I, Acc) -> merge_max(Acc, maps:get(max, I)) end,
+		maps:get(max, Winner), Dropped),
+	WinnerOut = rebuild(Winner, Kind, {maps:get(min, Winner), MergedMax},
+						keep_mode),
+	DemotedOuts = [ rebuild(D, Kind, {maps:get(min, D), maps:get(max, D)},
+							propose) || D <- Demoted ],
+	[WinnerOut | DemotedOuts].
+
+%% pick_winner([item()]) -> item()
+%% Highest mode priority; ties keep the earliest (arc order).
+pick_winner([H | T]) ->
+	lists:foldl(fun(C, Best) ->
+		case priority(maps:get(mode, C)) > priority(maps:get(mode, Best)) of
+			true  -> C;
+			false -> Best
+		end
+	end, H, T).
+
+priority(mandatory) -> 3;
+priority(auto)      -> 2;
+priority(propose)   -> 1;
+priority(_)         -> 0.
+
+%% merge_max(MaxA, MaxB) -> Max  (unbounded dominates)
+merge_max(unbounded, _) -> unbounded;
+merge_max(_, unbounded) -> unbounded;
+merge_max(A, B)         -> max(A, B).
+
+%% rebuild(item(), Kind, {Min, Max}, keep_mode | propose) -> Pair
+rebuild(Item, composition, Mult, ModeSpec) ->
+	{RuleNode, Deploy} = maps:get(pair, Item),
+	{RuleNode, set_mode(Deploy#{multiplicity => Mult}, ModeSpec)};
+rebuild(Item, connection, Mult, ModeSpec) ->
+	{Rule, Deploy, Spec} = maps:get(pair, Item),
+	{Rule, set_mode(Deploy#{multiplicity => Mult}, ModeSpec), Spec}.
+
+set_mode(Deploy, keep_mode) -> Deploy;
+set_mode(Deploy, propose)   -> Deploy#{mode => propose}.
 
 %% plan_rules(Pairs, OnPath1, State, Resolver, Acc)
 %%   -> {ok, PlanNode} | {error, R, Failure}

@@ -43,6 +43,14 @@ shadow a farther one, or do they compose — and what the precedence order
 is. This is the last outstanding piece of the firing engine's core; the
 division is sketched in `docs/designs/f4-graphdb-rules-design.md` §11.
 
+**B5 follow-up — equidistant-diamond precedence.** The nearest-level
+resolution assumes a distinct owning class per taxonomic distance (a
+linear ancestor chain). An equidistant multi-parent diamond — two
+parents at the same taxonomic distance, each attaching a conflicting
+rule on the same child — resolves by `graphdb_class:ancestors/1` BFS
+order rather than by mode-priority arbitration across the equidistant
+parents. Revisit if equidistant-diamond ontologies become common.
+
 ### Instantiation engine — guided and automatic modes
 
 Spec §9. Two creation modes, chosen by the ontology rather than the

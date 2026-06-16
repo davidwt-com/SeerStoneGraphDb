@@ -191,7 +191,7 @@ create_instance(Name, ClassNref, ParentNref) ->
 %%
 %% As /3, but threads a connection ConnResolver.  /3 uses the built-in
 %% report_only resolver (defer-all): every connection rule surfaces as a report
-%% outcome and nothing is connected.  /4 supplies the B5 default (identity)
+%% outcome and nothing is connected.  /4 supplies the built-in B5 default
 %% conflict resolver.
 %%-----------------------------------------------------------------------------
 create_instance(Name, ClassNref, ParentNref, ConnResolver)
