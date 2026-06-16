@@ -92,7 +92,9 @@
 	b5_comp_descendant_shadow/1,
 	b5_comp_additive_unrelated/1,
 	b5_comp_max_merge_unbounded/1,
-	b5_comp_same_level_mode_priority/1
+	b5_comp_same_level_mode_priority/1,
+	b5_comp_both_real_template_demote/1,
+	b5_comp_mixed_template_drop/1
 ]).
 
 %%---------------------------------------------------------------------
@@ -278,7 +280,9 @@ groups() ->
 			b5_comp_descendant_shadow,
 			b5_comp_additive_unrelated,
 			b5_comp_max_merge_unbounded,
-			b5_comp_same_level_mode_priority
+			b5_comp_same_level_mode_priority,
+			b5_comp_both_real_template_demote,
+			b5_comp_mixed_template_drop
 		]}
 	].
 
@@ -1453,6 +1457,54 @@ b5_comp_same_level_mode_priority(_Config) ->
         environment, "CN-mand", Cell, Nucleus, mandatory, {1, 1}),
     {ok, [{_R, Dep}]} = resolve_comp(Cell),
     ?assertEqual(mandatory, maps:get(mode, Dep)).
+
+%%-----------------------------------------------------------------------------
+%% Both-real-template demote (B5-D4): Car@tplA auto Engine; Vehicle@tplA
+%% mandatory Engine.  Winner = Car's auto Engine (fires); loser re-emitted as
+%% an independent propose keeping its own {1,2} range.
+%%
+%% Both rules carry TplA (Engine's default template).  TplA differs from each
+%% rule's OWN owning class's default (Car's and Vehicle's), so both count as
+%% real templates per B5-D5.  (TplB / Vehicle's own default deliberately NOT
+%% used for the VE rule: it would equal Vehicle's own default -> not real ->
+%% mixed-pair drop, defeating the test.)
+%%-----------------------------------------------------------------------------
+b5_comp_both_real_template_demote(_Config) ->
+    {ok, Vehicle} = graphdb_class:create_class("Vehicle", 3),
+    {ok, Car}     = graphdb_class:create_class("Car", Vehicle),
+    {ok, Engine}  = graphdb_class:create_class("Engine", 3),
+    %% real (non-default) template: borrow Engine's default template for both
+    %% rules (non-default relative to Car AND Vehicle).
+    {ok, TplA} = graphdb_class:default_template(Engine),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "CE", Car, Engine, auto, {1, 1}, TplA),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "VE", Vehicle, Engine, mandatory, {1, 2}, TplA),
+    {ok, Pairs} = resolve_comp(Car),
+    ?assertEqual(2, length(Pairs)),
+    Modes = [maps:get(mode, D) || {_R, D} <- Pairs],
+    ?assertEqual([auto, propose], Modes),
+    %% the demoted propose keeps its OWN {1,2}, not merged
+    [{_, WinnerDep}, {_, PropDep}] = Pairs,
+    ?assertEqual({1, 1}, maps:get(multiplicity, WinnerDep)),
+    ?assertEqual({1, 2}, maps:get(multiplicity, PropDep)).
+
+%%-----------------------------------------------------------------------------
+%% Mixed template drop (B5-D4): only the nearest carries a real template; the
+%% ancestor uses its default.  Loser dropped, greatest-Max merged, no propose.
+%%-----------------------------------------------------------------------------
+b5_comp_mixed_template_drop(_Config) ->
+    {ok, Vehicle} = graphdb_class:create_class("Vehicle", 3),
+    {ok, Car}     = graphdb_class:create_class("Car", Vehicle),
+    {ok, Engine}  = graphdb_class:create_class("Engine", 3),
+    {ok, TplA}    = graphdb_class:default_template(Engine),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "CE", Car, Engine, auto, {1, 1}, TplA),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "VE", Vehicle, Engine, mandatory, {1, 2}),  %% default tpl
+    {ok, [{_R, Dep}]} = resolve_comp(Car),
+    ?assertEqual(auto, maps:get(mode, Dep)),
+    ?assertEqual({1, 2}, maps:get(multiplicity, Dep)).   %% greatest Max merged
 
 
 %%=============================================================================

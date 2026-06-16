@@ -1055,16 +1055,35 @@ resolve_conflicts(#{kind := connection, rules := Specs}, _ChildAttr, _TplAttr,
 
 %% comp_item({RuleNode, Deploy}, ChildAttr, TplAttr, AppliedBy) -> item()
 %% item() = #{pair, ref, char, mode, min, max, owner, real_tpl}
-comp_item({RuleNode, Deploy} = Pair, ChildAttr, _TplAttr, AppliedBy) ->
+comp_item({RuleNode, Deploy} = Pair, ChildAttr, TplAttr, AppliedBy) ->
 	{Min, Max} = maps:get(multiplicity, Deploy, {1, 1}),
+	Owner = owning_class(RuleNode, AppliedBy),
 	#{pair  => Pair,
 	  ref   => content_avp_value(RuleNode, ChildAttr),
 	  char  => undefined,
 	  mode  => maps:get(mode, Deploy, mandatory),
 	  min   => Min,
 	  max   => Max,
-	  owner => owning_class(RuleNode, AppliedBy),
-	  real_tpl => false}.
+	  owner => Owner,
+	  real_tpl => real_template(RuleNode, TplAttr, Owner)}.
+
+%% real_template(RuleNode, TplAttr, OwningClass) -> boolean()
+%% True iff the rule carries a content template_nref AVP whose value differs
+%% from its owning class's default template (B5-D5).  A rule created without an
+%% explicit template stores no template_nref content AVP (see
+%% optional_template_avp/2), so the undefined clause covers default-template
+%% rules; the TplNref =:= Default branch covers an explicit AVP that happens to
+%% equal the owner's default.  Either way default-template rules -> false.
+real_template(RuleNode, TplAttr, OwningClass) ->
+	case content_avp_value(RuleNode, TplAttr) of
+		undefined ->
+			false;
+		TplNref ->
+			case graphdb_class:default_template(OwningClass) of
+				{ok, Default} -> TplNref =/= Default;
+				_             -> true
+			end
+	end.
 
 %% owning_class(RuleNode, AppliedBy) -> integer() | undefined
 %% Re-derives the rule's owning class from its applied_by arc (source=Rule,
