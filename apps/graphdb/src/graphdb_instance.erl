@@ -120,6 +120,7 @@
 		%% Creators
 		create_instance/3,
 		create_instance/4,
+		create_instance/5,
 		add_relationship/4,
 		add_relationship/5,
 		add_relationship/6,
@@ -185,17 +186,32 @@ create_instance(Name, ClassNref, ParentNref) ->
 	create_instance(Name, ClassNref, ParentNref, fun report_only/1).
 
 %%-----------------------------------------------------------------------------
-%% create_instance(Name, ClassNref, ParentNref, Resolver) ->
+%% create_instance(Name, ClassNref, ParentNref, ConnResolver) ->
 %%     {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
-%% As /3, but threads a connection Resolver.  /3 uses the built-in
+%% As /3, but threads a connection ConnResolver.  /3 uses the built-in
 %% report_only resolver (defer-all): every connection rule surfaces as a report
-%% outcome and nothing is connected.
+%% outcome and nothing is connected.  /4 supplies the B5 default (identity)
+%% conflict resolver.
 %%-----------------------------------------------------------------------------
-create_instance(Name, ClassNref, ParentNref, Resolver)
-		when is_function(Resolver, 1) ->
+create_instance(Name, ClassNref, ParentNref, ConnResolver)
+		when is_function(ConnResolver, 1) ->
+	create_instance(Name, ClassNref, ParentNref, ConnResolver,
+					graphdb_rules:default_conflict_resolver()).
+
+%%-----------------------------------------------------------------------------
+%% create_instance(Name, ClassNref, ParentNref, ConnResolver, ConflictResolver)
+%%     -> {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
+%%
+%% As /4, but also threads a B5 ConflictResolver.  ConflictResolver is resolved
+%% in the CALLER's process (where seeded_nrefs/0 is safe) and applied per
+%% cascade level for composition rules and per plan node for connection rules.
+%%-----------------------------------------------------------------------------
+create_instance(Name, ClassNref, ParentNref, ConnResolver, ConflictResolver)
+		when is_function(ConnResolver, 1), is_function(ConflictResolver, 1) ->
 	gen_server:call(?MODULE,
-		{create_instance, Name, ClassNref, ParentNref, Resolver}).
+		{create_instance, Name, ClassNref, ParentNref, ConnResolver,
+		 ConflictResolver}).
 
 %% report_only(ConnContext) -> defer   (the built-in /3 resolver)
 report_only(_Ctx) -> defer.
@@ -372,9 +388,11 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Creators
 %%-----------------------------------------------------------------------------
-handle_call({create_instance, Name, ClassNref, ParentNref, Resolver}, _From,
+handle_call({create_instance, Name, ClassNref, ParentNref, Resolver,
+			 ConflictResolver}, _From,
 		#state{instantiable_nref = InstAttr} = State) ->
 	Ctx = #{inst_attr => InstAttr, on_path => [], resolver => Resolver,
+			conflict_resolver => ConflictResolver,
 			root_parent => ParentNref, root_source => undefined},
 	{reply, do_create_instance(Name, ClassNref, ParentNref, Ctx), State};
 
@@ -495,7 +513,8 @@ do_create_instance(Name, ClassNref, ParentNref, Ctx) ->
 %% fires auto children best-effort post-commit.
 %%-----------------------------------------------------------------------------
 fire_create(Name, ClassNref, ParentNref, Ctx) ->
-	case graphdb_rules:plan_composition_firing(?RULE_SCOPE, ClassNref) of
+	case graphdb_rules:plan_composition_firing(?RULE_SCOPE, ClassNref,
+											   maps:get(conflict_resolver, Ctx)) of
 		{ok, PlanTree} ->
 			case execute(Name, ClassNref, ParentNref, Ctx, PlanTree) of
 				{ok, RootNref, MandOutcomes, InstPlan, AutoConnPlan} ->
@@ -602,8 +621,11 @@ flatten_plan(#{nref := N, class := C, mandatory_children := Kids}) ->
 resolve_nodes([], _Ctx, {Rows, Auto, Rep}) ->
 	{ok, Rows, Auto, Rep};
 resolve_nodes([{SourceNref, Class} | Rest], Ctx, Acc) ->
-	{ok, ConnRules} =
+	{ok, ConnRules0} =
 		graphdb_rules:effective_connection_rules(?RULE_SCOPE, Class),
+	ConflictResolver = maps:get(conflict_resolver, Ctx),
+	ConnRules = ConflictResolver(#{kind => connection, rules => ConnRules0,
+								   class_nref => Class}),
 	case resolve_rules(ConnRules, SourceNref, Ctx, Acc) of
 		{ok, Acc1}          -> resolve_nodes(Rest, Ctx, Acc1);
 		{error, _, _} = Err -> Err

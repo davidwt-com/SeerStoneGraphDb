@@ -102,6 +102,8 @@
 		effective_connection_rules/2,
 		list_rules/1,
 		plan_composition_firing/2,
+		plan_composition_firing/3,
+		default_conflict_resolver/0,
 		rule_child_class/1,
 		rule_child_name/4
 		]).
@@ -323,6 +325,37 @@ plan_composition_firing(Scope, ClassNref) ->
 	gen_server:call(?MODULE, {plan_composition_firing, Scope, ClassNref}).
 
 %%-----------------------------------------------------------------------------
+%% plan_composition_firing(Scope, ClassNref, ConflictResolver) ->
+%%     {ok, PlanNode} | {error, Reason, #{plan_so_far, culprit}}
+%%
+%% As /2, but applies ConflictResolver to each cascade level's composition pairs
+%% before planning.  /2 is preserved as the additive (unresolved) public read.
+%%-----------------------------------------------------------------------------
+plan_composition_firing(Scope, ClassNref, ConflictResolver) ->
+	gen_server:call(?MODULE,
+		{plan_composition_firing, Scope, ClassNref, ConflictResolver}).
+
+%%-----------------------------------------------------------------------------
+%% default_conflict_resolver() -> fun((ConflictContext) -> [Pair])
+%%
+%% The built-in B5 conflict resolver.  Called in the CALLER's process (e.g. from
+%% graphdb_instance:create_instance/3,4), where seeded_nrefs/0 is safe.  Returns
+%% ONE closure that bakes in the seed nrefs it needs and dispatches on the
+%% context `kind'.  The closure is deadlock-safe in either the graphdb_rules or
+%% graphdb_instance process: it touches only in-memory #node AVPs, the
+%% relationships table (dirty), and graphdb_class (a different gen_server).
+%%
+%% ConflictContext :: #{kind := composition | connection,
+%%                      rules := [Pair], class_nref := integer()}
+%%   kind = composition -> Pair = {RuleNode, Deploy}
+%%   kind = connection  -> Pair = {RuleNode, Deploy, ConnSpec}
+%%
+%% This identity stub is replaced by the real algorithm in Task 2/3/4.
+%%-----------------------------------------------------------------------------
+default_conflict_resolver() ->
+	fun(#{rules := Rules}) -> Rules end.
+
+%%-----------------------------------------------------------------------------
 %% rule_child_class(RuleNode :: #node{}) -> integer() | undefined
 %%
 %% Reads the child_class_nref content AVP from a composition rule node.
@@ -499,9 +532,20 @@ handle_call({list_rules, environment}, _From, State) ->
 handle_call({list_rules, {project, _}}, _From, State) ->
 	{reply, {ok, []}, State};
 handle_call({plan_composition_firing, environment, ClassNref}, _From, State) ->
-	Reply = plan_node(ClassNref, root, undefined, undefined, [], State),
+	%% /2 is the additive, UNRESOLVED public read (B1 contract).  It must stay
+	%% identity forever — do NOT route it through default_conflict_resolver/0,
+	%% which becomes the real precedence algorithm in B5 Tasks 2-4.
+	Identity = fun(#{rules := R}) -> R end,
+	Reply = plan_node(ClassNref, root, undefined, undefined, [], State, Identity),
 	{reply, Reply, State};
 handle_call({plan_composition_firing, {project, _}, ClassNref}, _From, State) ->
+	{reply, {ok, leaf_plan(ClassNref, root, undefined, undefined)}, State};
+handle_call({plan_composition_firing, environment, ClassNref, Resolver},
+			_From, State) ->
+	Reply = plan_node(ClassNref, root, undefined, undefined, [], State, Resolver),
+	{reply, Reply, State};
+handle_call({plan_composition_firing, {project, _}, ClassNref, _Resolver},
+			_From, State) ->
 	{reply, {ok, leaf_plan(ClassNref, root, undefined, undefined)}, State};
 handle_call(Request, From, State) ->
 	?UEM(handle_call, {Request, From, State}),
@@ -935,16 +979,19 @@ leaf_plan(ClassNref, Rule, Deploy, Name) ->
 	#{class => ClassNref, name => Name, rule => Rule, deploy => Deploy,
 	  mandatory_children => [], auto_rules => [], propose_rules => []}.
 
-%% plan_node(ClassNref, Rule, Deploy, Name, OnPath, State)
+%% plan_node(ClassNref, Rule, Deploy, Name, OnPath, State, Resolver)
 %%   -> {ok, PlanNode} | {error, Reason, #{plan_so_far, culprit}}
 %% Recursively expands the mandatory cascade for ClassNref.  OnPath is the
 %% class path root->here (cycle guard).  Rule/Deploy describe the
 %% composition rule that mandated this node (`root`/`undefined` for the
-%% requested instance).
-plan_node(ClassNref, Rule, Deploy, Name, OnPath, State) ->
+%% requested instance).  Resolver is the B5 conflict resolver, applied to this
+%% level's composition pairs before planning.
+plan_node(ClassNref, Rule, Deploy, Name, OnPath, State, Resolver) ->
 	OnPath1 = [ClassNref | OnPath],
-	CompRules = composition_pairs(ClassNref, State),
-	plan_rules(CompRules, OnPath1, State,
+	CompRules0 = composition_pairs(ClassNref, State),
+	CompRules = Resolver(#{kind => composition, rules => CompRules0,
+						   class_nref => ClassNref}),
+	plan_rules(CompRules, OnPath1, State, Resolver,
 			   leaf_plan(ClassNref, Rule, Deploy, Name)).
 
 %% composition_pairs(ClassNref, State) -> [{#node{}, Deployment}]
@@ -982,33 +1029,36 @@ connection_spec(RuleNode, State) ->
 	  target_class =>
 		  content_avp_value(RuleNode, State#state.target_class_nref_attr)}.
 
-%% plan_rules(Pairs, OnPath1, State, Acc) -> {ok, PlanNode} | {error, R, Failure}
+%% plan_rules(Pairs, OnPath1, State, Resolver, Acc)
+%%   -> {ok, PlanNode} | {error, R, Failure}
 %% First-failure-aborts: a mandatory violation stops planning.
-plan_rules([], _OnPath1, _State, Acc) ->
+plan_rules([], _OnPath1, _State, _Resolver, Acc) ->
 	{ok, Acc};
-plan_rules([{RuleNode, Deploy} | Rest], OnPath1, State, Acc) ->
+plan_rules([{RuleNode, Deploy} | Rest], OnPath1, State, Resolver, Acc) ->
 	case maps:get(mode, Deploy, undefined) of
 		auto ->
 			Autos = maps:get(auto_rules, Acc) ++ [{RuleNode, Deploy}],
-			plan_rules(Rest, OnPath1, State, Acc#{auto_rules => Autos});
+			plan_rules(Rest, OnPath1, State, Resolver,
+					   Acc#{auto_rules => Autos});
 		propose ->
 			%% Accumulate (composition firing dropped these).  Mirrors the `auto` clause;
 			%% graphdb_instance:fire_propose/2 expands multiplicity post-commit
 			%% and emits `proposed` outcomes.  Unexpanded here, like auto_rules.
 			Proposes = maps:get(propose_rules, Acc) ++ [{RuleNode, Deploy}],
-			plan_rules(Rest, OnPath1, State, Acc#{propose_rules => Proposes});
+			plan_rules(Rest, OnPath1, State, Resolver,
+					   Acc#{propose_rules => Proposes});
 		mandatory ->
-			case plan_mandatory(RuleNode, Deploy, OnPath1, State, Acc) of
-				{ok, Acc1}          -> plan_rules(Rest, OnPath1, State, Acc1);
+			case plan_mandatory(RuleNode, Deploy, OnPath1, State, Resolver, Acc) of
+				{ok, Acc1}          -> plan_rules(Rest, OnPath1, State, Resolver, Acc1);
 				{error, _, _} = Err -> Err                  %% first-failure abort
 			end;
 		_ ->
-			plan_rules(Rest, OnPath1, State, Acc)
+			plan_rules(Rest, OnPath1, State, Resolver, Acc)
 	end.
 
-%% plan_mandatory(RuleNode, Deploy, OnPath1, State, Acc)
+%% plan_mandatory(RuleNode, Deploy, OnPath1, State, Resolver, Acc)
 %%   -> {ok, Acc'} | {error, Reason, #{plan_so_far, culprit}}
-plan_mandatory(RuleNode, Deploy, OnPath1, State, Acc) ->
+plan_mandatory(RuleNode, Deploy, OnPath1, State, Resolver, Acc) ->
 	ChildClass = content_avp_value(RuleNode,
 								   State#state.child_class_nref_attr),
 	case lists:member(ChildClass, OnPath1) of
@@ -1019,7 +1069,7 @@ plan_mandatory(RuleNode, Deploy, OnPath1, State, Acc) ->
 			case graphdb_class:is_instantiable(ChildClass) of
 				true ->
 					expand_children(RuleNode, Deploy, ChildClass, Min, 1,
-									OnPath1, State, Acc);
+									OnPath1, State, Resolver, Acc);
 				false ->
 					fail({class_not_instantiable, ChildClass},
 						 RuleNode, Acc);
@@ -1033,18 +1083,20 @@ plan_mandatory(RuleNode, Deploy, OnPath1, State, Acc) ->
 fail(Reason, CulpritRule, Acc) ->
 	{error, Reason, #{plan_so_far => Acc, culprit => CulpritRule}}.
 
-%% expand_children(RuleNode, Deploy, ChildClass, Mult, I, OnPath1, State, Acc)
+%% expand_children(RuleNode, Deploy, ChildClass, Mult, I, OnPath1, State,
+%%                 Resolver, Acc)
 %%   -> {ok, Acc'} | {error, R, Failure}
-expand_children(_RuleNode, _Deploy, _ChildClass, Mult, I, _OnPath1, _State, Acc)
-		when I > Mult ->
+expand_children(_RuleNode, _Deploy, _ChildClass, Mult, I, _OnPath1, _State,
+				_Resolver, Acc) when I > Mult ->
 	{ok, Acc};
-expand_children(RuleNode, Deploy, ChildClass, Mult, I, OnPath1, State, Acc) ->
+expand_children(RuleNode, Deploy, ChildClass, Mult, I, OnPath1, State, Resolver,
+				Acc) ->
 	Name = resolve_child_name(RuleNode, ChildClass, I, Mult, State),
-	case plan_node(ChildClass, RuleNode, Deploy, Name, OnPath1, State) of
+	case plan_node(ChildClass, RuleNode, Deploy, Name, OnPath1, State, Resolver) of
 		{ok, ChildPlan} ->
 			Kids = maps:get(mandatory_children, Acc) ++ [ChildPlan],
 			expand_children(RuleNode, Deploy, ChildClass, Mult, I + 1, OnPath1,
-							State, Acc#{mandatory_children => Kids});
+							State, Resolver, Acc#{mandatory_children => Kids});
 		{error, R, Failure} ->
 			%% Nested failure: rewrite plan_so_far to THIS level's Acc (parent
 			%% with completed siblings; failing branch dropped), keep the leaf
