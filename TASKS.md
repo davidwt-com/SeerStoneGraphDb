@@ -131,25 +131,83 @@ Tracked follow-ups (not in the seam spec):
   convention, no behaviour change.
 - **Batch `mutate([Mutation])`** — the tier-3 entry point.
 
-### Node deletion (slice A, after the seam)
+### Node deletion (slice A) — DESIGNED
 
-`graphdb_mgr:delete_node/1` still returns `{error, not_implemented}`.
-Decided policy: **refuse-if-referenced**. The node's own upward attachment
-(its parent↔child arc pair, its class-membership arc pair, its own AVPs)
-is removed as part of the delete; deletion is refused when other things
-depend on the node:
+Designed in `docs/designs/delete-node-soft-retire-design.md`. Decided
+policy: **soft-retire, applied uniformly to all runtime nodes.** Two new
+operations, `graphdb_mgr:retire_node/1` and its inverse
+`graphdb_mgr:unretire_node/1`, mark a node retired (a boolean `retired`
+lifecycle AVP on the node row); the node and its arcs stay in Mnesia, and
+the public `get_node/1` returns `{error, retired}` for a retired node.
+Because nothing is removed, no arc or cache is ever orphaned — so the
+operation needs **no environment-vs-project discriminator**, and
+refuse-if-referenced is not required for integrity. Retire additionally
+blocks a retired node from taking on **new** participation (new instance
+target/parent, new arc endpoint); existing structural participation is left
+intact.
 
-- it is a compositional/taxonomic parent with children;
-- it is a class with live instances;
-- it is targeted by an incoming connection arc from a peer.
+`delete_node/1` is **left untouched** (still `{error, not_implemented}`) and
+reserved for a future *real* (hard) delete; `retire_node`/`unretire_node`
+refuse the whole permanent tier (`nref < ?NREF_START`) with a new
+`permanent_node_immutable` atom. Built on the seam (`transaction/1`, merged
+in PR #41).
 
-Only runtime nodes (`nref >= ?NREF_START`) are deletable — the entire
-permanent tier (categories, bootstrap attributes, arc labels, init seeds)
-is refused, extending the current category-only guard. **Known non-goal:**
-detecting a node referenced as an AVP *value* on another node or arc (no
-index exists; not treated as a blocker). The blocker reads must run in the
-same transaction as the deletes (TOCTOU). `delete_node` is the first
-tier-1 primitive + tier-2 wrapper built on the seam.
+This is forward-compatible with the planned history / versioning /
+bounded-lifetime feature: retirement is a degenerate lifetime bound, and a
+later purge pass under that feature reclaims retired nodes once it defines
+what is safe to forget — so mistakes are hidden now without being
+destroyed.
+
+**Superseded:** the earlier refuse-if-referenced *hard-delete* policy. A
+hard-delete fast-path for project instances — where dependencies are
+local and knowable — is deferred behind the project-boundary work below
+(it has no distinguishable node population until projects are physically
+realized) and is where the reserved `delete_node` eventually lands.
+
+Follow-ups this design adds:
+
+- **Retired rules must not fire.** A retired `graphdb_rules` rule node is
+  still reached through existing structure, so retiring it does not stop it
+  firing. Exclude retired rule nodes at the firing read chokepoint
+  (`effective_rules_for_class` / `effective_connection_rules`). Deferred
+  from slice A to keep that slice scoped to the retire mechanism.
+- **Unify permanent-tier immutability.** `delete_node`'s category-only
+  guard (`category_nodes_are_immutable`) is too narrow — categories are not
+  the only permanent nodes. When the real `delete_node` lands, its guard
+  (and `update_node_avps`') should refuse the whole permanent tier,
+  consistent with `retire_node`'s `permanent_node_immutable`.
+
+### Project boundary (architectural; prerequisite for the delete hard-delete fast-path)
+
+The environment/project split described in the knowledge model is not
+physically realized. Today there is a single shared `nodes` /
+`relationships` pair; instances draw nrefs from the environment runtime
+allocator (`graphdb_nref`); and the Projects category (`nref` 5) is a bare
+scaffold with nothing attached. Consequently a project instance is not
+reliably distinguishable from an environment instance-kind node (e.g. a
+rule), and there is no project-local identity space.
+
+Until this exists, several things stay blocked or degraded:
+
+- the delete hard-delete fast-path for project instances (slice A above);
+- project-scoped rules (`graphdb_rules` returns
+  `project_rules_not_yet_supported`);
+- any per-project isolation, addressing, or lifecycle.
+
+How projects are separated, identified, and addressed is an **open
+architectural question to be brainstormed** — this entry records the need
+and what it unblocks, not the solution.
+
+### Retired-node purge (deferred; depends on the history/versioning feature)
+
+Soft-retire (node deletion, slice A above) hides nodes without removing
+them, so retired rows accumulate. Reclaiming them is a separate
+**asynchronous background operation** — scheduled or explicitly triggered,
+never part of the synchronous delete path. It can run safely only once the
+planned history / versioning / bounded-lifetime feature defines what is
+safe to forget (e.g. a retired node past its lifetime bound with no live
+references). Scheduling, triggering, batching, and traversal are an open
+design — recorded here as a need, not a solution.
 
 ### Node AVP update (slice B)
 
