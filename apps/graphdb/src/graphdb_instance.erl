@@ -105,7 +105,8 @@
 							%% literal-attribute, cached from graphdb_attr
 							%% at init time and used by add_relationship
 							%% validation.
-	instantiable_nref		%% integer() -- seeded `instantiable` marker
+	instantiable_nref,		%% integer() -- seeded `instantiable` marker
+	retired_nref			%% integer() -- seeded `retired` marker
 }).
 
 
@@ -379,10 +380,11 @@ init([]) ->
 	%% create_instance time that the class is not marked non-instantiable.
 	%% graphdb_attr is started before graphdb_instance by graphdb_sup,
 	%% so this call is safe at init time.
-	{ok, #{target_kind := TkAttr, instantiable := InstAttr}} =
-		graphdb_attr:seeded_nrefs(),
+	{ok, #{target_kind := TkAttr, instantiable := InstAttr,
+		   retired := RetAttr}} = graphdb_attr:seeded_nrefs(),
 	{ok, #state{target_kind_avp_nref = TkAttr,
-				instantiable_nref = InstAttr}}.
+				instantiable_nref = InstAttr,
+				retired_nref = RetAttr}}.
 
 
 %%-----------------------------------------------------------------------------
@@ -390,9 +392,9 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 handle_call({create_instance, Name, ClassNref, ParentNref, Resolver,
 			 ConflictResolver}, _From,
-		#state{instantiable_nref = InstAttr} = State) ->
-	Ctx = #{inst_attr => InstAttr, on_path => [], resolver => Resolver,
-			conflict_resolver => ConflictResolver,
+		#state{instantiable_nref = InstAttr, retired_nref = RetAttr} = State) ->
+	Ctx = #{inst_attr => InstAttr, ret_attr => RetAttr, on_path => [],
+			resolver => Resolver, conflict_resolver => ConflictResolver,
 			root_parent => ParentNref, root_source => undefined},
 	{reply, do_create_instance(Name, ClassNref, ParentNref, Ctx), State};
 
@@ -403,8 +405,8 @@ handle_call({add_relationship, S, C, T, R, TemplateSpec, AVPSpec},
 		State};
 
 handle_call({add_class_membership, InstanceNref, ClassNref}, _From,
-		#state{instantiable_nref = InstAttr} = State) ->
-	{reply, do_add_class_membership(InstanceNref, ClassNref, InstAttr),
+		#state{instantiable_nref = InstAttr, retired_nref = RetAttr} = State) ->
+	{reply, do_add_class_membership(InstanceNref, ClassNref, InstAttr, RetAttr),
 		State};
 
 %%-----------------------------------------------------------------------------
@@ -492,9 +494,10 @@ find_avp_value([_ | Rest], AttrNref) ->
 %%-----------------------------------------------------------------------------
 do_create_instance(Name, ClassNref, ParentNref, Ctx) ->
 	InstAttr = maps:get(inst_attr, Ctx),
-	case do_validate_class(ClassNref, InstAttr) of
+	RetAttr  = maps:get(ret_attr, Ctx),
+	case do_validate_class(ClassNref, InstAttr, RetAttr) of
 		ok ->
-			case do_validate_parent(ParentNref) of
+			case do_validate_parent(ParentNref, RetAttr) of
 				ok ->
 					fire_create(Name, ClassNref, ParentNref, Ctx);
 				{error, _} = Err ->
@@ -1103,19 +1106,26 @@ propose_children(RuleNode, Deploy, ChildClass, Count, Max, I, OwnerNref, Acc) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_validate_class(ClassNref, InstAttr) -> ok | {error, term()}
+%% do_validate_class(ClassNref, InstAttr, RetAttr) -> ok | {error, term()}
 %%
-%% Validates that ClassNref is an existing kind=class node and is not
-%% marked non-instantiable (instantiable => false AVP under InstAttr).
-%% Absence of the marker is permissive — only classes explicitly stamped
-%% with `instantiable => false` are blocked.
+%% Validates that ClassNref is an existing kind=class node, is not
+%% retired (retired => true AVP under RetAttr), and is not marked
+%% non-instantiable (instantiable => false AVP under InstAttr).
+%% Retired check runs first; absence of either marker is permissive.
+%% The duplication of is_retired/2 in graphdb_mgr is intentional — the
+%% workers do not share a module, and this does NOT introduce a shared util
+%% module for one small predicate (YAGNI).
 %%-----------------------------------------------------------------------------
-do_validate_class(ClassNref, InstAttr) ->
+do_validate_class(ClassNref, InstAttr, RetAttr) ->
 	case mnesia:dirty_read(nodes, ClassNref) of
 		[#node{kind = class, attribute_value_pairs = AVPs}] ->
-			case is_marked_non_instantiable(AVPs, InstAttr) of
-				true  -> {error, {class_not_instantiable, ClassNref}};
-				false -> ok
+			case is_retired(AVPs, RetAttr) of
+				true  -> {error, {class_retired, ClassNref}};
+				false ->
+					case is_marked_non_instantiable(AVPs, InstAttr) of
+						true  -> {error, {class_not_instantiable, ClassNref}};
+						false -> ok
+					end
 			end;
 		[#node{kind = Kind}] -> {error, {not_a_class, Kind}};
 		[]                   -> {error, class_not_found}
@@ -1134,15 +1144,32 @@ is_marked_non_instantiable(AVPs, InstAttr) ->
 		(_) -> false
 	end, AVPs).
 
+%% is_retired(AVPs, RetAttr) -> boolean()
+%%
+%% Returns true only when AVPs contains #{attribute => RetAttr, value => true}.
+%% The duplication of this helper across workers is intentional — workers do
+%% not share a module, and this does NOT introduce a shared util module for
+%% one small predicate (YAGNI).
+is_retired(AVPs, RetAttr) ->
+	lists:any(fun
+		(#{attribute := A, value := true}) when A =:= RetAttr -> true;
+		(_) -> false
+	end, AVPs).
+
 
 %%-----------------------------------------------------------------------------
-%% do_validate_parent(ParentNref) -> ok | {error, term()}
+%% do_validate_parent(ParentNref, RetAttr) -> ok | {error, term()}
 %%
-%% Validates that ParentNref references an existing node.
+%% Validates that ParentNref references an existing node and is not
+%% retired (retired => true AVP under RetAttr).
 %%-----------------------------------------------------------------------------
-do_validate_parent(ParentNref) ->
+do_validate_parent(ParentNref, RetAttr) ->
 	case mnesia:dirty_read(nodes, ParentNref) of
-		[_Node] -> ok;
+		[#node{attribute_value_pairs = AVPs}] ->
+			case is_retired(AVPs, RetAttr) of
+				true  -> {error, {parent_retired, ParentNref}};
+				false -> ok
+			end;
 		[]      -> {error, parent_not_found}
 	end.
 
@@ -1162,7 +1189,7 @@ do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateSpec, AVPSpec, State) ->
 	TkAttr = State#state.target_kind_avp_nref,
 	case validate_arc_endpoints(SourceNref, CharNref, TargetNref,
-			ReciprocalNref, TkAttr) of
+			ReciprocalNref, TkAttr, State#state.retired_nref) of
 		ok ->
 			case resolve_arc_classes(SourceNref, TargetNref) of
 				{ok, SourceClass, TargetClass} ->
@@ -1187,18 +1214,20 @@ do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 
 
 %%-----------------------------------------------------------------------------
-%% validate_arc_endpoints(Source, Char, Target, Reciprocal, TkAttr) ->
+%% validate_arc_endpoints(Source, Char, Target, Reciprocal, TkAttr, RetAttr) ->
 %%     ok | {error, term()}
 %%
 %% Arc validation.  Reads all four nodes inside one mnesia transaction
 %% and rejects:
 %%   - missing source / target / characterization / reciprocal
+%%   - any endpoint that is retired (retired => true AVP under RetAttr);
+%%     reports the first retired nref as {endpoint_retired, Nref}
 %%   - characterization or reciprocal that is not kind=attribute
 %%   - target whose kind disagrees with the characterization's
 %%     `target_kind` AVP (the value stored under attribute=TkAttr)
 %%-----------------------------------------------------------------------------
 validate_arc_endpoints(SourceNref, CharNref, TargetNref, ReciprocalNref,
-		TkAttr) ->
+		TkAttr, RetAttr) ->
 	F = fun() ->
 		Source = mnesia:read(nodes, SourceNref),
 		Target = mnesia:read(nodes, TargetNref),
@@ -1215,20 +1244,39 @@ validate_arc_endpoints(SourceNref, CharNref, TargetNref, ReciprocalNref,
 			{error, {characterization_not_found, CharNref}};
 		{atomic, {_, _, _, []}} ->
 			{error, {reciprocal_not_found, ReciprocalNref}};
-		{atomic, {[_], [#node{kind = TKind}], [#node{kind = CKind} = CharNode],
-				[#node{kind = RKind}]}} ->
-			case {CKind, RKind} of
-				{attribute, attribute} ->
-					check_target_kind(CharNode, TKind, TkAttr);
-				{attribute, _} ->
-					{error, {reciprocal_not_an_attribute, ReciprocalNref,
-						RKind}};
-				{_, _} ->
-					{error, {characterization_not_an_attribute, CharNref,
-						CKind}}
+		{atomic, {[#node{attribute_value_pairs = SAVPs}],
+				  [#node{kind = TKind, attribute_value_pairs = TAVPs}],
+				  [#node{kind = CKind, attribute_value_pairs = CAVPs} = CharNode],
+				  [#node{kind = RKind, attribute_value_pairs = RAVPs}]}} ->
+			case first_retired([{SourceNref, SAVPs}, {TargetNref, TAVPs},
+								 {CharNref, CAVPs}, {ReciprocalNref, RAVPs}],
+							   RetAttr) of
+				{retired, RNref} ->
+					{error, {endpoint_retired, RNref}};
+				none ->
+					case {CKind, RKind} of
+						{attribute, attribute} ->
+							check_target_kind(CharNode, TKind, TkAttr);
+						{attribute, _} ->
+							{error, {reciprocal_not_an_attribute, ReciprocalNref,
+								RKind}};
+						{_, _} ->
+							{error, {characterization_not_an_attribute, CharNref,
+								CKind}}
+					end
 			end;
 		{aborted, Reason} ->
 			{error, Reason}
+	end.
+
+%% first_retired([{Nref, AVPs}], RetAttr) -> {retired, Nref} | none
+%%
+%% Returns the first entry whose AVP list carries the retired marker, or none.
+first_retired([], _RetAttr) -> none;
+first_retired([{Nref, AVPs} | Rest], RetAttr) ->
+	case is_retired(AVPs, RetAttr) of
+		true  -> {retired, Nref};
+		false -> first_retired(Rest, RetAttr)
 	end.
 
 check_target_kind(#node{attribute_value_pairs = AVPs}, ActualKind, TkAttr) ->
@@ -1350,17 +1398,18 @@ write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
 
 
 %%-----------------------------------------------------------------------------
-%% do_add_class_membership(InstanceNref, ClassNref, InstAttr) ->
+%% do_add_class_membership(InstanceNref, ClassNref, InstAttr, RetAttr) ->
 %%     ok | {error, term()}
 %%
 %% Validates the subject (must be an instance) and the target (must be
-%% a class and instantiable), then atomically writes the 29/30 arc pair
-%% and appends ClassNref to the instance's classes cache.  Idempotent.
+%% a class, not retired, and instantiable), then atomically writes the
+%% 29/30 arc pair and appends ClassNref to the instance's classes cache.
+%% Idempotent.
 %%-----------------------------------------------------------------------------
-do_add_class_membership(InstanceNref, ClassNref, InstAttr) ->
+do_add_class_membership(InstanceNref, ClassNref, InstAttr, RetAttr) ->
 	case do_get_instance(InstanceNref) of
 		{ok, _} ->
-			case do_validate_class(ClassNref, InstAttr) of
+			case do_validate_class(ClassNref, InstAttr, RetAttr) of
 				ok               -> do_write_class_membership(InstanceNref,
 									ClassNref);
 				{error, _} = Err -> Err
