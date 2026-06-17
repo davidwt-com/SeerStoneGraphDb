@@ -131,10 +131,14 @@ Tracked follow-ups (not in the seam spec):
   convention, no behaviour change.
 - **Batch `mutate([Mutation])`** — the tier-3 entry point.
 
-### Node deletion (slice A) — DESIGNED
+### Node deletion (slice A) — IMPLEMENTED
 
-Designed in `docs/designs/delete-node-soft-retire-design.md`. Decided
-policy: **soft-retire, applied uniformly to all runtime nodes.** Two new
+Design: `docs/designs/delete-node-soft-retire-design.md`. Delivered:
+`graphdb_mgr:retire_node/1` / `unretire_node/1` (idempotent, permanent-tier
+guard), `graphdb_attr` seeds the `retired` boolean marker, `graphdb_instance`
+refuses retired nodes as new targets/parents/endpoints.
+
+Decided policy: **soft-retire, applied uniformly to all runtime nodes.** Two
 operations, `graphdb_mgr:retire_node/1` and its inverse
 `graphdb_mgr:unretire_node/1`, mark a node retired (a boolean `retired`
 lifecycle AVP on the node row); the node and its arcs stay in Mnesia, and

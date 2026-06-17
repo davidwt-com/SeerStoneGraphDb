@@ -1,6 +1,6 @@
 # Ontology Tree — Bootstrap + Runtime Init Seeds
 
-**Status:** current as of 2026-06-11 (post F4 B4 Task 1 — `reciprocal_nref` literal added).
+**Status:** current as of 2026-06-17 (post soft-retire Task 1 — `retired` lifecycle marker added).
 
 This diagram is the **organisational shape of the environment ontology**
 immediately after `application:start(database)` finishes. It captures:
@@ -79,6 +79,7 @@ graph LR
   NRA["relationship_avp<br/>(runtime, attribute)"]:::attr
   NAT["attribute_type<br/>(runtime, attribute)"]:::attr
   NIN["instantiable<br/>(runtime, attribute)"]:::attr
+  NRE["retired<br/>(runtime, attribute)"]:::attr
   NBL["base_language<br/>(runtime, attribute)"]:::attr
   NPL["project_language<br/>(runtime, attribute)"]:::attr
   NRCC["child_class_nref<br/>(runtime, attribute)"]:::attr
@@ -168,6 +169,7 @@ graph LR
   NAL ==> NRA
   NAL ==> NAT
   NAL ==> NIN
+  NAL ==> NRE
   NLL ==> NBL
   NLL ==> NPL
   NRL ==> NRCC
@@ -246,12 +248,13 @@ Subtree → arc kind:
 
 Runtime sub-group / attribute / class nrefs sit at 10000+ and are not
 enumerated here (they shift between sessions); the L7 Attribute
-Literals and Language Literals sub-groups are seeded by
-`graphdb_attr:init/1` and `graphdb_language:init/1`, and the F4
-Rule Literals sub-group (8 literals, including `reciprocal_nref` added
-in B4) plus the `Rule` / `CompositionRule` / `ConnectionRule`
-meta-classes and the `applies_to` / `applied_by` pair are seeded by
-`graphdb_rules:init/1`.
+Literals sub-group (6 literals: `literal_type`, `target_kind`,
+`relationship_avp`, `attribute_type`, `instantiable`, `retired`) and
+Language Literals sub-group are seeded by `graphdb_attr:init/1` and
+`graphdb_language:init/1`, and the F4 Rule Literals sub-group (8
+literals, including `reciprocal_nref` added in B4) plus the `Rule` /
+`CompositionRule` / `ConnectionRule` meta-classes and the `applies_to`
+/ `applied_by` pair are seeded by `graphdb_rules:init/1`.
 
 ## Maintenance
 
