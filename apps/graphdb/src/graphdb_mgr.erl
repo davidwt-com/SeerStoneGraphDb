@@ -113,6 +113,8 @@
 		add_relationship/4,
 		delete_node/1,
 		update_node_avps/2,
+		%% Transaction helper (write-path seam)
+		transaction/1,
 		%% Cache invariant audit / repair
 		verify_caches/0,
 		rebuild_caches/0
@@ -248,6 +250,30 @@ delete_node(Nref) ->
 %%-----------------------------------------------------------------------------
 update_node_avps(Nref, AVPs) ->
 	gen_server:call(?MODULE, {update_node_avps, Nref, AVPs}).
+
+
+%%-----------------------------------------------------------------------------
+%% transaction(Fun) -> {ok, Result} | {error, Reason}
+%%
+%% Runs Fun inside one Mnesia transaction and normalises the result:
+%% {atomic, R} -> {ok, R}; {aborted, Reason} -> {error, Reason}.
+%%
+%% Fun is a tier-1 write-path primitive (or a composition of them): it
+%% performs its reads/writes with bare mnesia ops, never opens its own
+%% transaction, and signals a domain failure via mnesia:abort/1.  This is
+%% the single transaction boundary the write-path seam standardises on;
+%% see docs/designs/write-path-transaction-seam-design.md.
+%%
+%% This is a plain function, not a gen_server:call -- mnesia:transaction/1
+%% runs in the calling process, so routing writes through the graphdb_mgr
+%% server would needlessly serialise them.
+%%-----------------------------------------------------------------------------
+-spec transaction(fun(() -> Result)) -> {ok, Result} | {error, term()}.
+transaction(Fun) ->
+	case mnesia:transaction(Fun) of
+		{atomic,  Result} -> {ok, Result};
+		{aborted, Reason} -> {error, Reason}
+	end.
 
 
 %%-----------------------------------------------------------------------------

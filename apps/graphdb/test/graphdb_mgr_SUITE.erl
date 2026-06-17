@@ -90,7 +90,11 @@
 	verify_caches_clean_after_bootstrap/1,
 	verify_caches_detects_poisoned_parents/1,
 	verify_caches_detects_poisoned_classes/1,
-	rebuild_caches_restores_after_poison/1
+	rebuild_caches_restores_after_poison/1,
+	%% Transaction seam
+	transaction_commit_returns_ok/1,
+	transaction_abort_rolls_back/1,
+	transaction_composition_rolls_back/1
 ]).
 
 
@@ -104,7 +108,7 @@ suite() ->
 all() ->
 	[{group, init_tests}, {group, read_ops},
 	 {group, category_guard}, {group, write_delegation},
-	 {group, cache_audit}].
+	 {group, cache_audit}, {group, transaction_seam}].
 
 groups() ->
 	[
@@ -145,6 +149,11 @@ groups() ->
 			verify_caches_detects_poisoned_parents,
 			verify_caches_detects_poisoned_classes,
 			rebuild_caches_restores_after_poison
+		]},
+		{transaction_seam, [], [
+			transaction_commit_returns_ok,
+			transaction_abort_rolls_back,
+			transaction_composition_rolls_back
 		]}
 	].
 
@@ -713,3 +722,65 @@ do_delete_dir(Dir) ->
 		false ->
 			ok
 	end.
+
+
+%%=============================================================================
+%% Transaction Seam Tests
+%%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% transaction/1 commits a primitive's writes and returns {ok, Result}.
+%%-----------------------------------------------------------------------------
+transaction_commit_returns_ok(_Config) ->
+	{ok, _} = graphdb_mgr:start_link(),
+	Nref1 = ?NREF_START + 500001,
+	Nref2 = ?NREF_START + 500002,
+	Fun = fun() ->
+		ok = mnesia:write(nodes,
+			#node{nref = Nref1, kind = instance,
+				parents = [], classes = [], attribute_value_pairs = []},
+			write),
+		ok = mnesia:write(nodes,
+			#node{nref = Nref2, kind = instance,
+				parents = [], classes = [], attribute_value_pairs = []},
+			write),
+		{written, 2}
+	end,
+	?assertEqual({ok, {written, 2}}, graphdb_mgr:transaction(Fun)),
+	?assertMatch([#node{nref = Nref1}], mnesia:dirty_read(nodes, Nref1)),
+	?assertMatch([#node{nref = Nref2}], mnesia:dirty_read(nodes, Nref2)).
+
+%%-----------------------------------------------------------------------------
+%% transaction/1 maps mnesia:abort/1 to {error, Reason} and rolls back the
+%% primitive's write (single-primitive atomicity).
+%%-----------------------------------------------------------------------------
+transaction_abort_rolls_back(_Config) ->
+	{ok, _} = graphdb_mgr:start_link(),
+	NrefA = ?NREF_START + 500010,
+	Fun = fun() ->
+		ok = mnesia:write(nodes,
+			#node{nref = NrefA, kind = instance,
+				parents = [], classes = [], attribute_value_pairs = []},
+			write),
+		mnesia:abort(blocked)
+	end,
+	?assertEqual({error, blocked}, graphdb_mgr:transaction(Fun)),
+	?assertEqual([], mnesia:dirty_read(nodes, NrefA)).
+
+%%-----------------------------------------------------------------------------
+%% transaction/1 over a composition of two primitives rolls back BOTH when
+%% the second aborts -- the property tier-3 batch composition relies on.
+%%-----------------------------------------------------------------------------
+transaction_composition_rolls_back(_Config) ->
+	{ok, _} = graphdb_mgr:start_link(),
+	NrefP = ?NREF_START + 500020,
+	First = fun() ->
+		ok = mnesia:write(nodes,
+			#node{nref = NrefP, kind = instance,
+				parents = [], classes = [], attribute_value_pairs = []},
+			write)
+	end,
+	Second = fun() -> mnesia:abort(second_failed) end,
+	Fun = fun() -> First(), Second() end,
+	?assertEqual({error, second_failed}, graphdb_mgr:transaction(Fun)),
+	?assertEqual([], mnesia:dirty_read(nodes, NrefP)).
