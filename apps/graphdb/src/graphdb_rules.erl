@@ -283,7 +283,7 @@ effective_rules_for_class(Scope, ClassNref) ->
 %% deployment and a ConnSpec decoded from the rule node's content AVPs.  The
 %% connection-firing engine consumes this during create_instance.  Additive -- a
 %% rule reached from two ancestors appears twice; horizontal precedence is
-%% applied at firing time by the conflict resolver (B5), not here.
+%% applied at firing time by the conflict resolver, not here.
 %% {project, _} -> {ok, []}.
 %%-----------------------------------------------------------------------------
 effective_connection_rules(Scope, ClassNref) ->
@@ -339,7 +339,7 @@ plan_composition_firing(Scope, ClassNref, ConflictResolver) ->
 %%-----------------------------------------------------------------------------
 %% default_conflict_resolver() -> fun((ConflictContext) -> [Pair])
 %%
-%% The built-in B5 conflict resolver.  Called in the CALLER's process (e.g. from
+%% The built-in conflict resolver.  Called in the CALLER's process (e.g. from
 %% graphdb_instance:create_instance/3,4), where seeded_nrefs/0 is safe.  Returns
 %% ONE closure that bakes in the seed nrefs it needs and dispatches on the
 %% context `kind'.  The closure is deadlock-safe in either the graphdb_rules or
@@ -540,9 +540,9 @@ handle_call({list_rules, environment}, _From, State) ->
 handle_call({list_rules, {project, _}}, _From, State) ->
 	{reply, {ok, []}, State};
 handle_call({plan_composition_firing, environment, ClassNref}, _From, State) ->
-	%% /2 is the additive, UNRESOLVED public read (B1 contract).  It must stay
+	%% /2 is the additive, UNRESOLVED public read contract.  It must stay
 	%% identity forever — do NOT route it through default_conflict_resolver/0,
-	%% which is the B5 precedence algorithm (used only by the /3 firing path).
+	%% which is the precedence algorithm (used only by the /3 firing path).
 	Identity = fun(#{rules := R}) -> R end,
 	Reply = plan_node(ClassNref, root, undefined, undefined, [], State, Identity),
 	{reply, Reply, State};
@@ -992,7 +992,7 @@ leaf_plan(ClassNref, Rule, Deploy, Name) ->
 %% Recursively expands the mandatory cascade for ClassNref.  OnPath is the
 %% class path root->here (cycle guard).  Rule/Deploy describe the
 %% composition rule that mandated this node (`root`/`undefined` for the
-%% requested instance).  Resolver is the B5 conflict resolver, applied to this
+%% requested instance).  Resolver is the conflict resolver, applied to this
 %% level's composition pairs before planning.
 plan_node(ClassNref, Rule, Deploy, Name, OnPath, State, Resolver) ->
 	OnPath1 = [ClassNref | OnPath],
@@ -1038,7 +1038,7 @@ connection_spec(RuleNode, State) ->
 		  content_avp_value(RuleNode, State#state.target_class_nref_attr)}.
 
 %%---------------------------------------------------------------------
-%% B5 conflict resolution (default resolver body)
+%% Conflict resolution (default resolver body)
 %%---------------------------------------------------------------------
 %% resolve_conflicts(Ctx, ChildAttr, TplAttr, AppliedBy) -> [Pair]
 %% Ctx = #{kind, rules, class_nref}.  Pure over the seed nrefs + graphdb_class +
@@ -1058,13 +1058,17 @@ resolve_conflicts(#{kind := connection, rules := Specs}, _ChildAttr, TplAttr,
 
 %% comp_item({RuleNode, Deploy}, ChildAttr, TplAttr, AppliedBy) -> item()
 %% item() = #{pair, ref, char, mode, min, max, owner, real_tpl}
+%% The `mode' field feeds only pick_winner/1.  An absent mode defaults to
+%% `undefined' (priority 0) so a mode-less deployment yields to real rules
+%% rather than winning its group -- matching plan_rules/5's own absent-mode
+%% default.  Rule creation always writes mode, so this is a defensive path.
 comp_item({RuleNode, Deploy} = Pair, ChildAttr, TplAttr, AppliedBy) ->
 	{Min, Max} = maps:get(multiplicity, Deploy, {1, 1}),
 	Owner = owning_class(RuleNode, AppliedBy),
 	#{pair  => Pair,
 	  ref   => content_avp_value(RuleNode, ChildAttr),
 	  char  => undefined,
-	  mode  => maps:get(mode, Deploy, mandatory),
+	  mode  => maps:get(mode, Deploy, undefined),
 	  min   => Min,
 	  max   => Max,
 	  owner => Owner,
@@ -1079,7 +1083,7 @@ conn_item({Rule, Deploy, Spec} = Pair, TplAttr, AppliedBy) ->
 	#{pair  => Pair,
 	  ref   => maps:get(target_class, Spec),
 	  char  => maps:get(characterization, Spec),
-	  mode  => maps:get(mode, Deploy, mandatory),
+	  mode  => maps:get(mode, Deploy, undefined),
 	  min   => Min,
 	  max   => Max,
 	  owner => Owner,
@@ -1087,7 +1091,7 @@ conn_item({Rule, Deploy, Spec} = Pair, TplAttr, AppliedBy) ->
 
 %% real_template(RuleNode, TplAttr, OwningClass) -> boolean()
 %% True iff the rule carries a content template_nref AVP whose value differs
-%% from its owning class's default template (B5-D5).  A rule created without an
+%% from its owning class's default template.  A rule created without an
 %% explicit template stores no template_nref content AVP (see
 %% optional_template_avp/2), so the undefined clause covers default-template
 %% rules; the TplNref =:= Default branch covers an explicit AVP that happens to
@@ -1142,7 +1146,7 @@ append_to_group(Idx, Item, Groups) ->
 %% same_conflict(Kind, Anchor, Item) -> boolean()
 %% The anchor (nearest member) must be same-or-descendant of the candidate.
 %% class_in_ancestry(FartherRef, NearerRef): ANCESTOR first, DESCENDANT second
-%% (arg-order hazard -- B4 has a canary for the same call).  FartherRef =
+%% (arg-order hazard -- the connection path has a canary for the same call).  FartherRef =
 %% candidate's ref, NearerRef = anchor's ref.
 same_conflict(composition, Anchor, Item) ->
 	graphdb_class:class_in_ancestry(maps:get(ref, Item), maps:get(ref, Anchor));
@@ -1154,13 +1158,13 @@ same_conflict(connection, Anchor, Item) ->
 %% resolve_group(Group, Kind) -> [Pair]
 %% Winner = highest mode-priority among the nearest-level prefix; losers are
 %% dropped (their Max merges) unless both winner and loser are real-templated,
-%% in which case the loser is re-emitted as an independent propose (B5-D4).
+%% in which case the loser is re-emitted as an independent propose.
 resolve_group(Group, Kind) ->
 	OwnerHd = maps:get(owner, hd(Group)),
 	%% Nearest-level prefix assumes a distinct owning class per taxonomic
 	%% distance (linear chain).  An equidistant multi-parent diamond would
-	%% resolve by graphdb_class:ancestors/1 ordering -- see TASKS.md F4 B5
-	%% follow-up.
+	%% resolve by graphdb_class:ancestors/1 ordering -- see the
+	%% equidistant-diamond precedence follow-up in TASKS.md.
 	NearestLevel = lists:takewhile(
 		fun(I) -> maps:get(owner, I) =:= OwnerHd end, Group),
 	Winner = pick_winner(NearestLevel),

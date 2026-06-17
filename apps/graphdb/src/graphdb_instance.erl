@@ -191,7 +191,7 @@ create_instance(Name, ClassNref, ParentNref) ->
 %%
 %% As /3, but threads a connection ConnResolver.  /3 uses the built-in
 %% report_only resolver (defer-all): every connection rule surfaces as a report
-%% outcome and nothing is connected.  /4 supplies the built-in B5 default
+%% outcome and nothing is connected.  /4 supplies the built-in default
 %% conflict resolver.
 %%-----------------------------------------------------------------------------
 create_instance(Name, ClassNref, ParentNref, ConnResolver)
@@ -203,7 +203,7 @@ create_instance(Name, ClassNref, ParentNref, ConnResolver)
 %% create_instance(Name, ClassNref, ParentNref, ConnResolver, ConflictResolver)
 %%     -> {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
-%% As /4, but also threads a B5 ConflictResolver.  ConflictResolver is resolved
+%% As /4, but also threads a ConflictResolver.  ConflictResolver is resolved
 %% in the CALLER's process (where seeded_nrefs/0 is safe) and applied per
 %% cascade level for composition rules and per plan node for connection rules.
 %%-----------------------------------------------------------------------------
