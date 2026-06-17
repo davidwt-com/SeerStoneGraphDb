@@ -94,7 +94,8 @@
 	%% Transaction seam
 	transaction_commit_returns_ok/1,
 	transaction_abort_rolls_back/1,
-	transaction_composition_rolls_back/1
+	transaction_composition_rolls_back/1,
+	transaction_crash_passes_through/1
 ]).
 
 
@@ -153,7 +154,8 @@ groups() ->
 		{transaction_seam, [], [
 			transaction_commit_returns_ok,
 			transaction_abort_rolls_back,
-			transaction_composition_rolls_back
+			transaction_composition_rolls_back,
+			transaction_crash_passes_through
 		]}
 	].
 
@@ -726,6 +728,10 @@ do_delete_dir(Dir) ->
 
 %%=============================================================================
 %% Transaction Seam Tests
+%%
+%% Sample throwaway primitives write bare #node rows at scratch nrefs in the
+%% ?NREF_START + 500_000 band (well clear of bootstrap and other suites'
+%% runtime allocations); each case runs in its own isolated Mnesia DB.
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
@@ -784,3 +790,24 @@ transaction_composition_rolls_back(_Config) ->
 	Fun = fun() -> First(), Second() end,
 	?assertEqual({error, second_failed}, graphdb_mgr:transaction(Fun)),
 	?assertEqual([], mnesia:dirty_read(nodes, NrefP)).
+
+%%-----------------------------------------------------------------------------
+%% An uncaught crash inside the fun surfaces as Mnesia's standard
+%% {aborted, {Reason, Stacktrace}} shape, passed through unreshaped as
+%% {error, {Reason, Stacktrace}} (design doc section 4), and rolls back the
+%% primitive's write.
+%%-----------------------------------------------------------------------------
+transaction_crash_passes_through(_Config) ->
+	{ok, _} = graphdb_mgr:start_link(),
+	NrefC = ?NREF_START + 500030,
+	Fun = fun() ->
+		ok = mnesia:write(nodes,
+			#node{nref = NrefC, kind = instance,
+				parents = [], classes = [], attribute_value_pairs = []},
+			write),
+		%% Uncaught crash -- not a deliberate mnesia:abort/1.
+		erlang:error(crash_in_txn)
+	end,
+	?assertMatch({error, {crash_in_txn, _Stack}},
+		graphdb_mgr:transaction(Fun)),
+	?assertEqual([], mnesia:dirty_read(nodes, NrefC)).
