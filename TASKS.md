@@ -94,18 +94,70 @@ authoring:
 ## Write-path completion
 
 `graphdb_mgr` routes node and relationship creation to the workers. The
-gaps that remain are node mutation, the template attribute list, and
-wiring the multilingual write path.
+gaps that remain are node mutation, relationship mutation, the template
+attribute list, and wiring the multilingual write path. They are
+independent and broken into slices A–E below. `graphdb_mgr` owns the
+generic low-level node/relationship CRUD; type-specific behaviour
+delegates to the owning worker.
 
-### Node deletion and attribute-value-pair update
+### Transaction-layering seam (slice A prerequisite) — IN DESIGN
 
-`graphdb_mgr:delete_node/1` and `update_node_avps/2` still return
-`{error, not_implemented}`: no worker implements node deletion or general
-AVP update. Both already pass through the category guard (rejecting the
-scaffold category nodes) before returning. Wire them to a worker once one
-provides the underlying functionality.
+The decided convention for all write-path mutation: separate the Mnesia
+transaction boundary from the CRUD logic, so operations compose into one
+atomic transaction without nesting.
 
-### Template attribute list and instance-only enforcement
+- **Tier 1 — in-transaction primitives.** Assume they already run inside
+  an Mnesia activity; do their reads + writes with bare Mnesia ops; signal
+  failure via `mnesia:abort/1`. They never open a transaction, so they
+  compose.
+- **Tier 2 — single-op public API** (e.g. `graphdb_mgr:delete_node/1`).
+  Owns the transaction: static guards, then
+  `mnesia:transaction(fun() -> Primitive end)`, mapping `{atomic, R}` →
+  `{ok, R}` and `{aborted, Reason}` → `{error, Reason}`.
+- **Tier 3 — batch / composite** (a future `mutate([Mutation])`, or
+  "delete an instance with its parts"). Wraps one transaction and calls
+  the tier-1 primitives directly — never the tier-2 wrappers; no nested
+  transactions.
+
+This slice delivers the **minimal seam only**: the convention plus a
+shared transaction-runner helper in `graphdb_mgr`, with tests proven
+against a sample primitive. No existing write op changes. `delete_node`
+and `remove_relationship` adopt it as their first consumers.
+
+Tracked follow-ups (not in the seam spec):
+
+- **Retrofit existing write ops** (`create_instance`, `add_relationship`,
+  the membership `do_*` ops) onto the primitive/wrapper layering — uniform
+  convention, no behaviour change.
+- **Batch `mutate([Mutation])`** — the tier-3 entry point.
+
+### Node deletion (slice A, after the seam)
+
+`graphdb_mgr:delete_node/1` still returns `{error, not_implemented}`.
+Decided policy: **refuse-if-referenced**. The node's own upward attachment
+(its parent↔child arc pair, its class-membership arc pair, its own AVPs)
+is removed as part of the delete; deletion is refused when other things
+depend on the node:
+
+- it is a compositional/taxonomic parent with children;
+- it is a class with live instances;
+- it is targeted by an incoming connection arc from a peer.
+
+Only runtime nodes (`nref >= ?NREF_START`) are deletable — the entire
+permanent tier (categories, bootstrap attributes, arc labels, init seeds)
+is refused, extending the current category-only guard. **Known non-goal:**
+detecting a node referenced as an AVP *value* on another node or arc (no
+index exists; not treated as a blocker). The blocker reads must run in the
+same transaction as the deletes (TOCTOU). `delete_node` is the first
+tier-1 primitive + tier-2 wrapper built on the seam.
+
+### Node AVP update (slice B)
+
+`graphdb_mgr:update_node_avps/2` still returns `{error, not_implemented}`:
+basic AVP merge/replace + validation on a node row. Independent. Mirrors
+the arc-AVP edit in slice E.
+
+### Template attribute list and instance-only enforcement (slice C, depends on slice B)
 
 A template currently carries only a name and its compositional arc into
 the owning class — there is no per-template list of which attributes the
@@ -129,7 +181,17 @@ characteristic AVP shape (a declared-but-unbound attribute carries
 `value => undefined`) already accommodates an instance-only attribute
 naturally — it stays `undefined` at every class level.
 
-### Multilingual write-path integration
+### Relationship mutation (slice E)
+
+Only `add_relationship` (create) exists today — there is no remove or
+update. `remove_relationship` deletes both directed rows of a logical edge
+atomically and fixes the `parents`/`classes` caches on the referrers; it
+shares the arc-removal primitive with `delete_node` (slice A).
+`update_relationship` changes `characterization` / `target_nref` /
+`reciprocal` / AVPs; the AVP-only edit mirrors `update_node_avps`
+(slice B). Built on the transaction seam.
+
+### Multilingual write-path integration (slice D)
 
 Now unblocked — the `graphdb_mgr` write-side is wired. When an
 environment node is created, the write path must additionally:
