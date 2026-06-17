@@ -85,6 +85,21 @@
 ]).
 
 %%---------------------------------------------------------------------
+%% Conflict resolution test case exports (F4 B5)
+%%---------------------------------------------------------------------
+-export([
+	b5_comp_cross_level_shadow/1,
+	b5_comp_descendant_shadow/1,
+	b5_comp_additive_unrelated/1,
+	b5_comp_max_merge_unbounded/1,
+	b5_comp_same_level_mode_priority/1,
+	b5_comp_both_real_template_demote/1,
+	b5_comp_mixed_template_drop/1,
+	b5_conn_target_shadow/1,
+	b5_conn_additive_unrelated/1
+]).
+
+%%---------------------------------------------------------------------
 %% Test cases
 %%---------------------------------------------------------------------
 -export([
@@ -167,7 +182,7 @@ all() ->
 	[{group, seeding}, {group, composition}, {group, connection},
 	 {group, validation}, {group, retrieval}, {group, scope},
 	 {group, complex_scenarios}, {group, effective}, {group, cache_audit},
-	 {group, plan_firing}].
+	 {group, plan_firing}, {group, conflict_resolution}].
 
 groups() ->
 	[
@@ -261,6 +276,17 @@ groups() ->
 			plan_propose_accumulated,
 			plan_mixed_modes,
 			plan_propose_at_mandatory_child
+		]},
+		{conflict_resolution, [], [
+			b5_comp_cross_level_shadow,
+			b5_comp_descendant_shadow,
+			b5_comp_additive_unrelated,
+			b5_comp_max_merge_unbounded,
+			b5_comp_same_level_mode_priority,
+			b5_comp_both_real_template_demote,
+			b5_comp_mixed_template_drop,
+			b5_conn_target_shadow,
+			b5_conn_additive_unrelated
 		]}
 	].
 
@@ -1354,9 +1380,198 @@ verify_caches_passes_after_rule_creation(_Config) ->
 	?assertEqual(ok, graphdb_mgr:verify_caches()).
 
 
+%%-----------------------------------------------------------------------------
+%% Group: conflict_resolution (F4 B5 default composition resolver)
+%%-----------------------------------------------------------------------------
+
+%%-----------------------------------------------------------------------------
+%% Cross-level shadow: Car (nearest) and Vehicle (ancestor) both mandate Engine.
+%% Resolved to ONE pair: nearest mode + nearest Min, greatest Max.
+%%-----------------------------------------------------------------------------
+b5_comp_cross_level_shadow(_Config) ->
+    {ok, Vehicle} = graphdb_class:create_class("Vehicle", 3),
+    {ok, Car}     = graphdb_class:create_class("Car", Vehicle),
+    {ok, Engine}  = graphdb_class:create_class("Engine", 3),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "CE", Car, Engine, mandatory, {1, 1}),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "VE", Vehicle, Engine, mandatory, {1, 3}),
+    {ok, [{_R, Dep}]} = resolve_comp(Car),
+    ?assertEqual(mandatory, maps:get(mode, Dep)),
+    ?assertEqual({1, 3}, maps:get(multiplicity, Dep)).
+
+%%-----------------------------------------------------------------------------
+%% Descendant shadow (B5-D1): Car mandates ElectricMotor (is-a Engine);
+%% Vehicle mandates Engine.  ElectricMotor wins; Vehicle's Engine rule shadowed.
+%%-----------------------------------------------------------------------------
+b5_comp_descendant_shadow(_Config) ->
+    {ok, Vehicle}  = graphdb_class:create_class("Vehicle", 3),
+    {ok, Car}      = graphdb_class:create_class("Car", Vehicle),
+    {ok, Engine}   = graphdb_class:create_class("Engine", 3),
+    {ok, EMotor}   = graphdb_class:create_class("ElectricMotor", Engine),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "CEM", Car, EMotor, mandatory, {1, 1}),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "VE", Vehicle, Engine, mandatory, {1, 1}),
+    {ok, [{R, _Dep}]} = resolve_comp(Car),
+    ?assertEqual(EMotor, graphdb_rules:rule_child_class(R)).
+
+%%-----------------------------------------------------------------------------
+%% Additive: unrelated child classes both survive (two pairs).
+%%-----------------------------------------------------------------------------
+b5_comp_additive_unrelated(_Config) ->
+    {ok, Vehicle} = graphdb_class:create_class("Vehicle", 3),
+    {ok, Car}     = graphdb_class:create_class("Car", Vehicle),
+    {ok, Engine}  = graphdb_class:create_class("Engine", 3),
+    {ok, Radio}   = graphdb_class:create_class("Radio", 3),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "CE", Car, Engine, mandatory, {1, 1}),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "VR", Vehicle, Radio, mandatory, {1, 1}),
+    {ok, Pairs} = resolve_comp(Car),
+    ?assertEqual(2, length(Pairs)).
+
+%%-----------------------------------------------------------------------------
+%% Greatest-Max merge across 3 levels including unbounded -> unbounded dominates.
+%%-----------------------------------------------------------------------------
+b5_comp_max_merge_unbounded(_Config) ->
+    {ok, A}   = graphdb_class:create_class("A", 3),
+    {ok, B}   = graphdb_class:create_class("B", A),
+    {ok, C}   = graphdb_class:create_class("C", B),
+    {ok, Eng} = graphdb_class:create_class("Engine", 3),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "CE", C, Eng, mandatory, {1, 1}),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "BE", B, Eng, mandatory, {1, 2}),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "AE", A, Eng, mandatory, {1, unbounded}),
+    {ok, [{_R, Dep}]} = resolve_comp(C),
+    ?assertEqual({1, unbounded}, maps:get(multiplicity, Dep)).
+
+%%-----------------------------------------------------------------------------
+%% Same-level mode-priority tie (B5-D2): two rules on Cell, both child=Nucleus,
+%% one mandatory one propose.  mandatory wins; one pair survives.
+%%-----------------------------------------------------------------------------
+b5_comp_same_level_mode_priority(_Config) ->
+    {ok, Cell}    = graphdb_class:create_class("Cell", 3),
+    {ok, Nucleus} = graphdb_class:create_class("Nucleus", 3),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "CN-prop", Cell, Nucleus, propose, {1, 1}),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "CN-mand", Cell, Nucleus, mandatory, {1, 1}),
+    {ok, [{_R, Dep}]} = resolve_comp(Cell),
+    ?assertEqual(mandatory, maps:get(mode, Dep)).
+
+%%-----------------------------------------------------------------------------
+%% Both-real-template demote (B5-D4): Car@tplA auto Engine; Vehicle@tplA
+%% mandatory Engine.  Winner = Car's auto Engine (fires); loser re-emitted as
+%% an independent propose keeping its own {1,2} range.
+%%
+%% Both rules carry TplA (Engine's default template).  TplA differs from each
+%% rule's OWN owning class's default (Car's and Vehicle's), so both count as
+%% real templates per B5-D5.  (TplB / Vehicle's own default deliberately NOT
+%% used for the VE rule: it would equal Vehicle's own default -> not real ->
+%% mixed-pair drop, defeating the test.)
+%%-----------------------------------------------------------------------------
+b5_comp_both_real_template_demote(_Config) ->
+    {ok, Vehicle} = graphdb_class:create_class("Vehicle", 3),
+    {ok, Car}     = graphdb_class:create_class("Car", Vehicle),
+    {ok, Engine}  = graphdb_class:create_class("Engine", 3),
+    %% real (non-default) template: borrow Engine's default template for both
+    %% rules (non-default relative to Car AND Vehicle).
+    {ok, TplA} = graphdb_class:default_template(Engine),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "CE", Car, Engine, auto, {1, 1}, TplA),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "VE", Vehicle, Engine, mandatory, {1, 2}, TplA),
+    {ok, Pairs} = resolve_comp(Car),
+    ?assertEqual(2, length(Pairs)),
+    Modes = [maps:get(mode, D) || {_R, D} <- Pairs],
+    ?assertEqual([auto, propose], Modes),
+    %% the demoted propose keeps its OWN {1,2}, not merged
+    [{_, WinnerDep}, {_, PropDep}] = Pairs,
+    ?assertEqual({1, 1}, maps:get(multiplicity, WinnerDep)),
+    ?assertEqual({1, 2}, maps:get(multiplicity, PropDep)).
+
+%%-----------------------------------------------------------------------------
+%% Mixed template drop (B5-D4): only the nearest carries a real template; the
+%% ancestor uses its default.  Loser dropped, greatest-Max merged, no propose.
+%%-----------------------------------------------------------------------------
+b5_comp_mixed_template_drop(_Config) ->
+    {ok, Vehicle} = graphdb_class:create_class("Vehicle", 3),
+    {ok, Car}     = graphdb_class:create_class("Car", Vehicle),
+    {ok, Engine}  = graphdb_class:create_class("Engine", 3),
+    {ok, TplA}    = graphdb_class:default_template(Engine),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "CE", Car, Engine, auto, {1, 1}, TplA),
+    {ok, _} = graphdb_rules:create_composition_rule(
+        environment, "VE", Vehicle, Engine, mandatory, {1, 2}),  %% default tpl
+    {ok, [{_R, Dep}]} = resolve_comp(Car),
+    ?assertEqual(auto, maps:get(mode, Dep)),
+    ?assertEqual({1, 2}, maps:get(multiplicity, Dep)).   %% greatest Max merged
+
+%%-----------------------------------------------------------------------------
+%% Connection target shadow (B5-D1): Car owns Garage (is-a Building); Vehicle
+%% owns Building, same `owns' characterization.  One winner -> Garage.
+%%-----------------------------------------------------------------------------
+b5_conn_target_shadow(_Config) ->
+    {ok, Vehicle}  = graphdb_class:create_class("Vehicle", 3),
+    {ok, Car}      = graphdb_class:create_class("Car", Vehicle),
+    {ok, Building} = graphdb_class:create_class("Building", 3),
+    {ok, Garage}   = graphdb_class:create_class("Garage", Building),
+    {Owns, Owned}  = make_rel_pair("owns", "owned_by"),
+    {ok, _} = graphdb_rules:create_connection_rule(
+        environment, "CG", Car, Owns, Owned, Garage, mandatory, {1, 1}),
+    {ok, _} = graphdb_rules:create_connection_rule(
+        environment, "VB", Vehicle, Owns, Owned, Building, mandatory, {1, 1}),
+    {ok, [{_R, _Dep, Spec}]} = resolve_conn(Car),
+    ?assertEqual(Garage, maps:get(target_class, Spec)).
+
+%%-----------------------------------------------------------------------------
+%% Connection additive (unrelated targets, same characterization): both survive.
+%%-----------------------------------------------------------------------------
+b5_conn_additive_unrelated(_Config) ->
+    {ok, Vehicle}  = graphdb_class:create_class("Vehicle", 3),
+    {ok, Car}      = graphdb_class:create_class("Car", Vehicle),
+    {ok, Building} = graphdb_class:create_class("Building", 3),
+    {ok, Boat}     = graphdb_class:create_class("Boat", 3),
+    {Owns, Owned}  = make_rel_pair("owns", "owned_by"),
+    {ok, _} = graphdb_rules:create_connection_rule(
+        environment, "CB", Car, Owns, Owned, Boat, mandatory, {1, 1}),
+    {ok, _} = graphdb_rules:create_connection_rule(
+        environment, "VB", Vehicle, Owns, Owned, Building, mandatory, {1, 1}),
+    {ok, Pairs} = resolve_conn(Car),
+    ?assertEqual(2, length(Pairs)).
+
+
 %%=============================================================================
 %% Local test helpers
 %%=============================================================================
+
+%% resolve_comp(ClassNref) -> {ok, [{#node{}, Deploy}]}
+%% Drives the default conflict resolver over the composition rules effective for
+%% ClassNref, exactly as plan_node would.
+resolve_comp(ClassNref) ->
+    {ok, Effective} = graphdb_rules:effective_rules_for_class(environment,
+                                                              ClassNref),
+    Pairs = [P || {_Level, LvlPairs} <- Effective, P <- LvlPairs,
+                  is_composition_pair(P)],
+    Resolver = graphdb_rules:default_conflict_resolver(),
+    {ok, Resolver(#{kind => composition, rules => Pairs, class_nref => ClassNref})}.
+
+%% resolve_conn(ClassNref) -> {ok, [{#node{}, Deploy, Spec}]}
+%% Drives the default conflict resolver over the connection rules effective for
+%% ClassNref, exactly as the connection-firing path would.
+resolve_conn(ClassNref) ->
+    {ok, Specs} = graphdb_rules:effective_connection_rules(environment, ClassNref),
+    Resolver = graphdb_rules:default_conflict_resolver(),
+    {ok, Resolver(#{kind => connection, rules => Specs, class_nref => ClassNref})}.
+
+%% is_composition_pair({RuleNode, _Deploy}) -> boolean()
+%% A pair is composition iff its rule node is a CompositionRule instance.
+is_composition_pair({#node{classes = Classes}, _Deploy}) ->
+    {ok, S} = graphdb_rules:seeded_nrefs(),
+    lists:member(maps:get(composition_rule, S), Classes).
 
 %% find_avp(AVPs, AttrNref) -> {ok, Value} | not_found
 %% Searches an AVP list for an entry whose attribute key equals AttrNref;

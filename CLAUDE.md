@@ -275,7 +275,7 @@ A logical bidirectional edge is two `relationship` rows written atomically (one 
 
 These are outstanding items — all previously known bugs have been fixed.
 
-- **`graphdb_rules` rule-firing engine** — the rule meta-ontology, create/retrieve, taxonomy walk, composition firing, propose mode, and connection firing are implemented. Conflict precedence and the later firing-engine phases (instantiation engine, reactive learning) remain outstanding (see `TASKS.md`)
+- **`graphdb_rules` rule-firing engine** — the rule meta-ontology, create/retrieve, taxonomy walk, composition firing, propose mode, connection firing, and horizontal conflict precedence are implemented. The later firing-engine phases (instantiation engine, reactive learning) remain outstanding (see `TASKS.md`)
 - **`graphdb_mgr` write operations** — `create_attribute/3`, `create_class/2`, `create_instance/3`, `add_relationship/4` delegate to the workers; `delete_node/1` and `update_node_avps/2` still return `{error, not_implemented}` pending a worker that implements them
 - **`code_change/3`** — deferred in every gen_server until the first hot-upgrade deployment (see `TASKS.md`)
 - **App lifecycle callbacks** — `start_phase/3`, `prep_stop/1`, `stop/1`, `config_change/3` return `ok` (no-op) across all five app modules; correct for current deployment model

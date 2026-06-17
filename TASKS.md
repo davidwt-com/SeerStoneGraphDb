@@ -32,16 +32,29 @@ consumes the rule data: conflict resolution, the interactive
 instantiation modes, and reactive learning. The durable design contract
 is `docs/designs/f4-graphdb-rules-design.md`.
 
-### Conflict precedence
+### Conflict precedence — IMPLEMENTED (F4 B5)
 
 When a class and its taxonomy ancestors each attach a rule that touches
-the same component type or connection, the effective-rules gather
-currently returns them additively, nearest-first, and resolves nothing.
-Decide and implement horizontal conflict resolution: when two rules at
-different levels genuinely conflict, which wins — does a nearer rule
-shadow a farther one, or do they compose — and what the precedence order
-is. This is the last outstanding piece of the firing engine's core; the
-division is sketched in `docs/designs/f4-graphdb-rules-design.md` §11.
+the same component type or connection, the effective-rules gather returns
+them additively, nearest-first, and resolves nothing. Horizontal
+conflict resolution is now applied at firing time by a **conflict
+resolver** threaded through `create_instance/5`: the nearest-level member
+of each conflict group wins by mode priority (mandatory > auto >
+propose), surviving Min is the winner's and Max is the greatest across
+winner + dropped losers, and a loser is demoted to `propose` only when it
+and the winner both carry a non-default template. The default policy is
+`graphdb_rules:default_conflict_resolver/0` (injected by `/3` and `/4`);
+callers can override it via `/5`. Design
+`docs/designs/f4-phase-b5-conflict-precedence-design.md`; the division is
+also sketched in `docs/designs/f4-graphdb-rules-design.md` §11.
+
+**B5 follow-up — equidistant-diamond precedence.** The nearest-level
+resolution assumes a distinct owning class per taxonomic distance (a
+linear ancestor chain). An equidistant multi-parent diamond — two
+parents at the same taxonomic distance, each attaching a conflicting
+rule on the same child — resolves by `graphdb_class:ancestors/1` BFS
+order rather than by mode-priority arbitration across the equidistant
+parents. Revisit if equidistant-diamond ontologies become common.
 
 ### Instantiation engine — guided and automatic modes
 

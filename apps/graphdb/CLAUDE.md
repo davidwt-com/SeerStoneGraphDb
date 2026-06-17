@@ -18,7 +18,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_nref.erl`      | Switchable node-nref allocation facade gen_server (first child; permanent during init)                                                                                 |
 | `graphdb_bootstrap.erl` | Bootstrap file loader + Mnesia schema creator (implemented)                                                                                                            |
 | `graphdb_mgr.erl`       | Primary coordinator gen_server (implemented — bootstrap init, read API, category guard)                                                                                |
-| `graphdb_rules.erl`     | Graph rules gen_server (implemented — F4 Phase A+B1+B2+B3+B4: rule meta-ontology, create/retrieve, taxonomy walk, composition firing, propose mode, connection firing) |
+| `graphdb_rules.erl`     | Graph rules gen_server (implemented — F4 Phase A+B1+B2+B3+B4+B5: rule meta-ontology, create/retrieve, taxonomy walk, composition firing, propose mode, connection firing, conflict precedence) |
 | `graphdb_attr.erl`      | Attribute library gen_server (implemented)                                                                                                                             |
 | `graphdb_class.erl`     | Taxonomic hierarchy gen_server (implemented)                                                                                                                           |
 | `graphdb_instance.erl`  | Instance/compositional hierarchy gen_server (implemented)                                                                                                              |
@@ -252,16 +252,16 @@ Manages the "is a" hierarchy of class nodes in the ontology.
 
 Creates and manages instance nodes in the project (instance space).
 
-- `create_instance/3,4` (name, class_nref, compositional_parent_nref [, resolver]) — atomically writes the node record AND the instance→class membership relationship pair (arc labels nref=29 and nref=30), then fires composition rules (F4 B2). Returns `{ok, Nref, Report}` on success or `{error, Reason, Report}` on rule-firing failure; pre-plan validation errors (unknown class, non-instantiable class, etc.) return `{error, Reason}` (2-tuple). Rejects a class marked non-instantiable with `{error, {class_not_instantiable, ClassNref}}` (L9). Propose-mode composition rules surface as `proposed` outcomes in the report (B3); nothing is materialised for them. `/4` threads a connection **resolver** (`fun((ConnContext) -> {connect, [Target]} | defer end`): the RESOLVE step fires effective ConnectionRules (F4 B4) — `mandatory` connections to existing targets land in the root transaction, `auto` post-commit, `defer`/`propose` are reported only; targets are validated (exists, instance, instance-of target_class-or-subclass). `/3` uses the built-in `report_only` (defer-all) resolver, so connection rules surface as `required`/`not_connected`/`proposed` outcomes and nothing is connected.
+- `create_instance/3,4,5` (name, class_nref, compositional_parent_nref [, connection_resolver [, conflict_resolver]]) — atomically writes the node record AND the instance→class membership relationship pair (arc labels nref=29 and nref=30), then fires composition rules (F4 B2). Returns `{ok, Nref, Report}` on success or `{error, Reason, Report}` on rule-firing failure; pre-plan validation errors (unknown class, non-instantiable class, etc.) return `{error, Reason}` (2-tuple). Rejects a class marked non-instantiable with `{error, {class_not_instantiable, ClassNref}}` (L9). Propose-mode composition rules surface as `proposed` outcomes in the report (B3); nothing is materialised for them. `/4` threads a connection **resolver** (`fun((ConnContext) -> {connect, [Target]} | defer end`): the RESOLVE step fires effective ConnectionRules (F4 B4) — `mandatory` connections to existing targets land in the root transaction, `auto` post-commit, `defer`/`propose` are reported only; targets are validated (exists, instance, instance-of target_class-or-subclass). `/3` uses the built-in `report_only` (defer-all) connection resolver, so connection rules surface as `required`/`not_connected`/`proposed` outcomes and nothing is connected. `/5` threads a B5 **conflict resolver** (`fun((#{kind, rules, class_nref}) -> [Pair])`); `/3` and `/4` inject the built-in `graphdb_rules:default_conflict_resolver/0`, which shadows conflicting inherited rules (nearest-level winner by mode priority), merges multiplicity (nearest Min, greatest Max), and demotes both-real-template losers to `propose` (F4 B5).
 - `add_relationship/4` (source_nref, characterization_nref, target_nref, reciprocal_nref) — writes two directed rows atomically; IDs allocated via `get_nref()`
 - `add_class_membership/2` (instance_nref, class_nref) — adds a membership arc pair; also rejects a non-instantiable class target with `{error, {class_not_instantiable, ClassNref}}` (L9)
 - `get_instance/1`, `children/1`, `compositional_ancestors/1`, `resolve_value/2`
 
-### `graphdb_rules` — Graph Rules (F4 Phase A + B1 + B2 + B3 + B4)
+### `graphdb_rules` — Graph Rules (F4 Phase A + B1 + B2 + B3 + B4 + B5)
 
 Stores composition and connection rules as instances of a seeded rule
-meta-ontology. Phases A, B1, B2, B3, and B4 are implemented; Phase B5
-(precedence) and Phases C–F are tracked in `TASKS.md`.
+meta-ontology. Phases A, B1, B2, B3, B4, and B5 are implemented; Phases C–F
+are tracked in `TASKS.md`.
 
 - `create_composition_rule/6,7,8` (scope, name, parent_class, child_class, mode, multiplicity [, template_nref] [, opts]); `multiplicity :: {Min, Max}` where `Min :: non_neg_integer()`, `Max :: pos_integer() | unbounded` (`unbounded` legal only as `Max`); `opts #{name_pattern => string()}` sets the naming pattern for auto-named child instances
 - `create_connection_rule/8,9` (scope, name, source_class, characterization, **reciprocal**, target_class, mode, multiplicity [, template_nref]); same `{Min, Max}` multiplicity shape. The `reciprocal` arg (B4-D3) is the reverse arc label, stored as a `reciprocal_nref` content AVP; it supersedes the Phase A `/7,/8` forms (no reciprocal)
@@ -276,9 +276,21 @@ meta-ontology. Phases A, B1, B2, B3, and B4 are implemented; Phase B5
   each paired with its deployment and a content spec
   `#{characterization, reciprocal, target_class}`. Consumed by the connection
   firing engine in `graphdb_instance`.
-- `plan_composition_firing/2` (scope, class_nref) — pure-read; returns an
-  abstract plan tree (maps, no nrefs) consumed by `graphdb_instance` during
-  `create_instance/3` and reused by B3 propose mode.
+- `plan_composition_firing/2,3` (scope, class_nref [, conflict_resolver]) —
+  pure-read; returns an abstract plan tree (maps, no nrefs) consumed by
+  `graphdb_instance` during `create_instance/3` and reused by B3 propose mode.
+  The `/3` form applies a B5 conflict resolver at each cascade level; `/2` is
+  the additive identity path (no resolution) that preserves the B1 read
+  contract.
+- `default_conflict_resolver/0` (F4 B5) — builds the default conflict-resolver
+  closure (reading the seed nrefs once, in the caller's process). The closure
+  dispatches on a `#{kind, rules, class_nref}` context: composition conflicts
+  group by referenced child class, connection conflicts by characterization +
+  referenced target class; within a group the nearest-level member wins by mode
+  priority (mandatory > auto > propose), surviving Min is the winner's, Max is
+  the greatest across winner + dropped losers, and both-real-template losers are
+  demoted to `propose`. Deadlock-safe in either gen_server (touches only
+  in-memory `#node` AVPs, dirty `relationships` reads, and `graphdb_class`).
 - `rule_child_class/1`, `rule_child_name/4`
 - `seeded_nrefs/0`
 - The `applies_to` arc's `multiplicity` deployment AVP stores the `{Min, Max}` tuple. Creation firing mints `Min` children/connections; `Max` is the ceiling for a future interactive-creation session. Propose-mode rules surface `Min` `proposed` outcomes, each carrying `max => Max` (B-prep / `docs/designs/f4-bprep-multiplicity-range-design.md`).
@@ -350,13 +362,13 @@ The following callbacks in `graphdb.erl` return `ok` (no-op stubs correct for cu
 There are no remaining empty gen_server stubs. `graphdb_bootstrap`,
 `graphdb_mgr`, `graphdb_attr`, `graphdb_class`, `graphdb_instance`,
 `graphdb_language` (M6), `graphdb_query` (F3), and `graphdb_rules`
-(F4 Phases A + B1 + B2 + B3 + B4) are all implemented. The `graphdb_rules`
-firing engine (Phase B5 precedence + Phases C–F) remains, tracked in `TASKS.md`.
+(F4 Phases A + B1 + B2 + B3 + B4 + B5) are all implemented. The `graphdb_rules`
+firing engine Phases C–F remain, tracked in `TASKS.md`.
 
 ## Key Design Notes
 
 - `graphdb_sup:start_link/0` takes no args, matching every supervisor in the umbrella. It is called from `graphdb:start/2` after `graphdb_nref:set_permanent_phase/0` arms the permanent-tier allocator. `graphdb:start/2` then calls `graphdb_nref:set_runtime_phase/0` after `start_link` returns.
-- `graphdb_bootstrap`, `graphdb_mgr` (startup + read API), `graphdb_attr`, `graphdb_class`, `graphdb_instance`, `graphdb_language`, `graphdb_query`, and `graphdb_rules` (F4 A+B1+B2+B3+B4) are implemented. Remaining work is in `TASKS.md` at the project root.
+- `graphdb_bootstrap`, `graphdb_mgr` (startup + read API), `graphdb_attr`, `graphdb_class`, `graphdb_instance`, `graphdb_language`, `graphdb_query`, and `graphdb_rules` (F4 A+B1+B2+B3+B4+B5) are implemented. Remaining work is in `TASKS.md` at the project root.
 - Consult `../../docs/TheKnowledgeNetwork.md` for the full model spec before implementing
 
 ## Compile
@@ -373,5 +385,5 @@ erlc apps/graphdb/src/graphdb_sup.erl apps/graphdb/src/graphdb.erl
 
 `graphdb_bootstrap.erl` is implemented; `graphdb_mgr`, `graphdb_attr`,
 `graphdb_class`, `graphdb_instance`, `graphdb_language`, `graphdb_query`,
-and `graphdb_rules` (F4 A+B1+B2+B3+B4) are implemented. Outstanding work
-(rules engine Phase B5 + Phases C–F, etc.) is in `TASKS.md` at the project root.
+and `graphdb_rules` (F4 A+B1+B2+B3+B4+B5) are implemented. Outstanding work
+(rules engine Phases C–F, etc.) is in `TASKS.md` at the project root.

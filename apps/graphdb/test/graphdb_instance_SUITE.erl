@@ -172,7 +172,14 @@
 	firing_conn_subclass_target_accepted/1,
 	firing_conn_missing_target_fails/1,
 	firing_conn_non_instance_target_fails/1,
-	firing_conn_resolver_avps_stamped/1
+	firing_conn_resolver_avps_stamped/1,
+	%% B5 plumbing
+	b5_create_instance_5_accepts_resolvers/1,
+	b5_default_resolver_single_rule_unchanged/1,
+	%% B5 end-to-end firing
+	b5_firing_same_level_mode_priority/1,
+	b5_firing_cross_level_shadow/1,
+	b5_custom_resolver_pure_additive/1
 ]).
 
 
@@ -303,7 +310,12 @@ groups() ->
 			firing_conn_subclass_target_accepted,
 			firing_conn_missing_target_fails,
 			firing_conn_non_instance_target_fails,
-			firing_conn_resolver_avps_stamped
+			firing_conn_resolver_avps_stamped,
+			b5_create_instance_5_accepts_resolvers,
+			b5_default_resolver_single_rule_unchanged,
+			b5_firing_same_level_mode_priority,
+			b5_firing_cross_level_shadow,
+			b5_custom_resolver_pure_additive
 		]}
 	].
 
@@ -2140,3 +2152,89 @@ b4_conn_targets(Source, Char) ->
 	[A#relationship.target_nref || A <- Arcs,
 	 A#relationship.kind =:= connection,
 	 A#relationship.characterization =:= Char].
+
+
+%%-----------------------------------------------------------------------------
+%% B5 plumbing: create_instance/5 is accepted and, with the default resolver,
+%% a single inherited mandatory rule still fires exactly as /3 (no regression).
+%%-----------------------------------------------------------------------------
+b5_create_instance_5_accepts_resolvers(_Config) ->
+	{ok, Vehicle} = graphdb_class:create_class("Vehicle", 3),
+	{ok, Engine}  = graphdb_class:create_class("Engine", 3),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "VE", Vehicle, Engine, mandatory, {1, 1}),
+	Conn     = fun(_Ctx) -> defer end,
+	Conflict = graphdb_rules:default_conflict_resolver(),
+	{ok, Root, Report} =
+		graphdb_instance:create_instance("car", Vehicle, 5, Conn, Conflict),
+	{ok, Kids} = graphdb_instance:children(Root),
+	?assertEqual(1, length(Kids)),
+	?assertEqual(#{fired => 1, failed => 0, not_attempted => 0, proposed => 0,
+				   connected => 0, required => 0, not_connected => 0},
+				 graphdb_instance:summarize(Report)).
+
+%%-----------------------------------------------------------------------------
+%% B5 plumbing: /3 (built-in default conflict resolver) is unchanged for a
+%% plain single-rule fire.
+%%-----------------------------------------------------------------------------
+b5_default_resolver_single_rule_unchanged(_Config) ->
+	{ok, Vehicle} = graphdb_class:create_class("Vehicle", 3),
+	{ok, Engine}  = graphdb_class:create_class("Engine", 3),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "VE", Vehicle, Engine, mandatory, {1, 1}),
+	{ok, Root, Report} = graphdb_instance:create_instance("car", Vehicle, 5),
+	{ok, Kids} = graphdb_instance:children(Root),
+	?assertEqual(1, length(Kids)),
+	?assertEqual(1, length(Report)).
+
+%%-----------------------------------------------------------------------------
+%% Firing flip (B5-D2 at firing time): Cell mandates Nucleus (mandatory) and
+%% proposes Nucleus.  Under B5 only ONE Nucleus is minted (mandatory wins).
+%%-----------------------------------------------------------------------------
+b5_firing_same_level_mode_priority(_Config) ->
+	{ok, Cell}    = graphdb_class:create_class("Cell", 3),
+	{ok, Nucleus} = graphdb_class:create_class("Nucleus", 3),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "CN-prop", Cell, Nucleus, propose, {1, 1}),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "CN-mand", Cell, Nucleus, mandatory, {1, 1}),
+	{ok, Root, Report} = graphdb_instance:create_instance("c1", Cell, 5),
+	{ok, Kids} = graphdb_instance:children(Root),
+	?assertEqual(1, length(Kids)),                 %% exactly one Nucleus minted
+	#{fired := 1, proposed := 0} =
+		maps:with([fired, proposed], graphdb_instance:summarize(Report)).
+
+%%-----------------------------------------------------------------------------
+%% Cross-level shadow at firing time: Car + Vehicle both mandate Engine -> one
+%% Engine minted (not two).
+%%-----------------------------------------------------------------------------
+b5_firing_cross_level_shadow(_Config) ->
+	{ok, Vehicle} = graphdb_class:create_class("Vehicle", 3),
+	{ok, Car}     = graphdb_class:create_class("Car", Vehicle),
+	{ok, Engine}  = graphdb_class:create_class("Engine", 3),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "CE", Car, Engine, mandatory, {1, 1}),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "VE", Vehicle, Engine, mandatory, {1, 1}),
+	{ok, Root, _Report} = graphdb_instance:create_instance("car", Car, 5),
+	{ok, Kids} = graphdb_instance:children(Root),
+	?assertEqual(1, length(Kids)).
+
+%%-----------------------------------------------------------------------------
+%% Custom resolver overrides the seam: a pure-additive resolver makes Car +
+%% Vehicle both fire (two Engines), proving the policy is caller-overridable.
+%%-----------------------------------------------------------------------------
+b5_custom_resolver_pure_additive(_Config) ->
+	{ok, Vehicle} = graphdb_class:create_class("Vehicle", 3),
+	{ok, Car}     = graphdb_class:create_class("Car", Vehicle),
+	{ok, Engine}  = graphdb_class:create_class("Engine", 3),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "CE", Car, Engine, mandatory, {1, 1}),
+	{ok, _} = graphdb_rules:create_composition_rule(
+		environment, "VE", Vehicle, Engine, mandatory, {1, 1}),
+	Additive = fun(#{rules := R}) -> R end,
+	Conn     = fun(_Ctx) -> defer end,
+	{ok, Root, _Report} =
+		graphdb_instance:create_instance("car", Car, 5, Conn, Additive),
+	{ok, Kids} = graphdb_instance:children(Root),
+	?assertEqual(2, length(Kids)).                 %% additive: both fire
