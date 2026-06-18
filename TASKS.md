@@ -100,7 +100,7 @@ independent and broken into slices A–E below. `graphdb_mgr` owns the
 generic low-level node/relationship CRUD; type-specific behaviour
 delegates to the owning worker.
 
-### Transaction-layering seam (slice A prerequisite) — IN DESIGN
+### Transaction-layering seam (slice A prerequisite) — IMPLEMENTED
 
 The decided convention for all write-path mutation: separate the Mnesia
 transaction boundary from the CRUD logic, so operations compose into one
