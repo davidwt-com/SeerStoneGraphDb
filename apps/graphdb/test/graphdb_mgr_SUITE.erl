@@ -95,7 +95,13 @@
 	transaction_commit_returns_ok/1,
 	transaction_abort_rolls_back/1,
 	transaction_composition_rolls_back/1,
-	transaction_crash_passes_through/1
+	transaction_crash_passes_through/1,
+	%% Soft-retire
+	retire_node_sets_and_clears_marker/1,
+	retire_node_is_idempotent/1,
+	retire_node_refuses_permanent_tier/1,
+	retire_node_not_found/1,
+	get_node_hides_retired/1
 ]).
 
 
@@ -109,7 +115,8 @@ suite() ->
 all() ->
 	[{group, init_tests}, {group, read_ops},
 	 {group, category_guard}, {group, write_delegation},
-	 {group, cache_audit}, {group, transaction_seam}].
+	 {group, cache_audit}, {group, transaction_seam},
+	 {group, soft_retire}].
 
 groups() ->
 	[
@@ -156,6 +163,13 @@ groups() ->
 			transaction_abort_rolls_back,
 			transaction_composition_rolls_back,
 			transaction_crash_passes_through
+		]},
+		{soft_retire, [], [
+			retire_node_sets_and_clears_marker,
+			retire_node_is_idempotent,
+			retire_node_refuses_permanent_tier,
+			retire_node_not_found,
+			get_node_hides_retired
 		]}
 	].
 
@@ -209,7 +223,12 @@ init_per_testcase(TC, Config) when
 		TC =:= create_attribute_unknown_parent;
 		TC =:= create_class_delegates;
 		TC =:= create_instance_delegates;
-		TC =:= add_relationship_delegates ->
+		TC =:= add_relationship_delegates;
+		TC =:= retire_node_sets_and_clears_marker;
+		TC =:= retire_node_is_idempotent;
+		TC =:= retire_node_refuses_permanent_tier;
+		TC =:= retire_node_not_found;
+		TC =:= get_node_hides_retired ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
@@ -223,6 +242,9 @@ init_per_testcase(TC, Config) when
 	{ok, _} = graphdb_class:start_link(),
 	{ok, _} = graphdb_instance:start_link(),
 	{ok, _} = graphdb_rules:start_link(),
+	%% Mirror production graphdb:start/2: flip to runtime tier after all
+	%% workers have seeded so that user-level create_* calls allocate runtime nrefs.
+	ok = graphdb_nref:set_runtime_phase(),
 	Config1;
 init_per_testcase(_TC, Config) ->
 	Config1 = setup_isolated_env(Config),
@@ -811,3 +833,77 @@ transaction_crash_passes_through(_Config) ->
 	?assertMatch({error, {crash_in_txn, _Stack}},
 		graphdb_mgr:transaction(Fun)),
 	?assertEqual([], mnesia:dirty_read(nodes, NrefC)).
+
+
+%%=============================================================================
+%% Soft-Retire Tests
+%%
+%% Workers (graphdb_attr, graphdb_class, graphdb_instance, graphdb_rules) are
+%% pre-started by init_per_testcase (full-stack clause).  The `retired` nref
+%% is resolved lazily on first use from graphdb_attr:seeded_nrefs/0.
+%%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% retire_node stamps the `retired` boolean AVP; unretire_node removes it.
+%%-----------------------------------------------------------------------------
+retire_node_sets_and_clears_marker(_Config) ->
+	{ok, ClassNref} = graphdb_mgr:create_class("RetireMe", 3),
+	?assert(ClassNref >= ?NREF_START),
+	ok = graphdb_mgr:retire_node(ClassNref),
+	[#node{attribute_value_pairs = AVPs1}] =
+		mnesia:dirty_read(nodes, ClassNref),
+	%% Consideration (future hardening): this predicate matches ANY
+	%% value=>true AVP, not the `retired` attribute specifically. A fresh
+	%% class carries no other boolean-true AVP today, so it is not a false
+	%% positive — but a stricter, attribute-specific check would be:
+	%%   {ok, #{retired := RetiredNref}} = graphdb_attr:seeded_nrefs(),
+	%%   ?assert(lists:any(
+	%%       fun(#{attribute := A, value := true}) when A =:= RetiredNref -> true;
+	%%          (_) -> false end, AVPs1)),
+	?assert(lists:any(fun(#{value := true}) -> true; (_) -> false end, AVPs1)),
+	ok = graphdb_mgr:unretire_node(ClassNref),
+	[#node{attribute_value_pairs = AVPs2}] =
+		mnesia:dirty_read(nodes, ClassNref),
+	?assertEqual(false,
+		lists:any(fun(#{value := true}) -> true; (_) -> false end, AVPs2)).
+
+%%-----------------------------------------------------------------------------
+%% retire_node and unretire_node are both idempotent.
+%%-----------------------------------------------------------------------------
+retire_node_is_idempotent(_Config) ->
+	{ok, ClassNref} = graphdb_mgr:create_class("RetireIdem", 3),
+	ok = graphdb_mgr:retire_node(ClassNref),
+	ok = graphdb_mgr:retire_node(ClassNref),
+	ok = graphdb_mgr:unretire_node(ClassNref),
+	ok = graphdb_mgr:unretire_node(ClassNref).
+
+%%-----------------------------------------------------------------------------
+%% Both operations refuse permanent-tier nrefs (Nref < ?NREF_START).
+%%-----------------------------------------------------------------------------
+retire_node_refuses_permanent_tier(_Config) ->
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_mgr:retire_node(1)),
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_mgr:retire_node(27)),
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_mgr:unretire_node(27)).
+
+%%-----------------------------------------------------------------------------
+%% Both operations return {error, not_found} for a nonexistent runtime nref.
+%%-----------------------------------------------------------------------------
+retire_node_not_found(_Config) ->
+	BadNref = ?NREF_START + 999999,
+	?assertEqual({error, not_found}, graphdb_mgr:retire_node(BadNref)),
+	?assertEqual({error, not_found}, graphdb_mgr:unretire_node(BadNref)).
+
+%%-----------------------------------------------------------------------------
+%% get_node/1 returns {error, retired} for a retired node; unretiring
+%% restores the {ok, #node{}} response.
+%%-----------------------------------------------------------------------------
+get_node_hides_retired(_Config) ->
+	{ok, ClassNref} = graphdb_mgr:create_class("HideMe", 3),
+	{ok, _} = graphdb_mgr:get_node(ClassNref),
+	ok = graphdb_mgr:retire_node(ClassNref),
+	?assertEqual({error, retired}, graphdb_mgr:get_node(ClassNref)),
+	ok = graphdb_mgr:unretire_node(ClassNref),
+	{ok, #node{nref = ClassNref}} = graphdb_mgr:get_node(ClassNref).

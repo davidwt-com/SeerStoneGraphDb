@@ -68,6 +68,8 @@
 	create_instance_writes_compositional_arcs/1,
 	create_instance_refused_for_abstract_class/1,
 	create_instance_allowed_for_unmarked_class/1,
+	create_instance_refuses_retired_class/1,
+	create_instance_refuses_retired_parent/1,
 	%% Relationships
 	add_relationship_basic/1,
 	add_relationship_both_directions/1,
@@ -84,6 +86,7 @@
 	add_relationship_stamps_user_avps/1,
 	add_relationship_avps_are_per_direction/1,
 	add_relationship_default_avps_empty/1,
+	add_relationship_refuses_retired_endpoint/1,
 	class_of_returns_class/1,
 	%% Lookups
 	get_instance_returns_node/1,
@@ -119,6 +122,7 @@
 	add_class_membership_rejects_missing_class/1,
 	add_class_membership_rejects_non_class_target/1,
 	add_class_membership_refuses_abstract_class/1,
+	add_class_membership_refuses_retired_class/1,
 	class_memberships_initial/1,
 	%% Multi-membership resolver
 	resolve_value_unique_across_two_classes/1,
@@ -205,7 +209,9 @@ groups() ->
 			create_instance_writes_membership_arcs,
 			create_instance_writes_compositional_arcs,
 			create_instance_refused_for_abstract_class,
-			create_instance_allowed_for_unmarked_class
+			create_instance_allowed_for_unmarked_class,
+			create_instance_refuses_retired_class,
+			create_instance_refuses_retired_parent
 		]},
 		{relationships, [], [
 			add_relationship_basic,
@@ -223,6 +229,7 @@ groups() ->
 			add_relationship_stamps_user_avps,
 			add_relationship_avps_are_per_direction,
 			add_relationship_default_avps_empty,
+			add_relationship_refuses_retired_endpoint,
 			class_of_returns_class
 		]},
 		{lookups, [], [
@@ -262,6 +269,7 @@ groups() ->
 			add_class_membership_rejects_missing_class,
 			add_class_membership_rejects_non_class_target,
 			add_class_membership_refuses_abstract_class,
+			add_class_membership_refuses_retired_class,
 			class_memberships_initial,
 			resolve_value_unique_across_two_classes,
 			resolve_value_same_value_two_classes,
@@ -365,7 +373,25 @@ init_per_testcase(TC, Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, _} = graphdb_instance:start_link(),
 	{ok, _} = graphdb_rules:start_link(),
+	%% Retire-guard tests need runtime nrefs so retire_node/1 accepts them.
+	%% Mirror production graphdb:start/2: flip to runtime tier after all workers
+	%% have seeded so that user-level create_* calls allocate runtime nrefs.
+	maybe_set_runtime_phase(TC),
 	setup_firing_fixtures(TC, Config1).
+
+%% Test cases that call graphdb_mgr:retire_node/1 require runtime nrefs.
+%% Flip to the runtime tier (nref >= ?NREF_START) after seeding is complete.
+%% NOTE: add any future retire-guard test case to this guard list — without
+%% it the test runs in permanent phase and retire_node/1 rejects its
+%% runtime-tier target with {error, permanent_node_immutable}.
+maybe_set_runtime_phase(TC) when
+		TC =:= create_instance_refuses_retired_class;
+		TC =:= create_instance_refuses_retired_parent;
+		TC =:= add_class_membership_refuses_retired_class;
+		TC =:= add_relationship_refuses_retired_endpoint ->
+	ok = graphdb_nref:set_runtime_phase();
+maybe_set_runtime_phase(_TC) ->
+	ok.
 
 %% For firing-group test cases, create the shared class fixtures and add
 %% them to Config.  Other test cases pass through unchanged.
@@ -585,6 +611,25 @@ create_instance_allowed_for_unmarked_class(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Plain", 3),
 	?assertMatch({ok, _, _},
 		graphdb_instance:create_instance("Inst1", ClassNref, 5)).
+
+%%-----------------------------------------------------------------------------
+%% create_instance rejects a retired class node.
+%%-----------------------------------------------------------------------------
+create_instance_refuses_retired_class(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("RetClass", 3),
+	ok = graphdb_mgr:retire_node(ClassNref),
+	?assertEqual({error, {class_retired, ClassNref}},
+		graphdb_instance:create_instance("i", ClassNref, 3)).
+
+%%-----------------------------------------------------------------------------
+%% create_instance rejects a retired compositional parent.
+%%-----------------------------------------------------------------------------
+create_instance_refuses_retired_parent(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("PClass", 3),
+	{ok, Parent, _} = graphdb_instance:create_instance("p", ClassNref, 3),
+	ok = graphdb_mgr:retire_node(Parent),
+	?assertEqual({error, {parent_retired, Parent}},
+		graphdb_instance:create_instance("child", ClassNref, Parent)).
 
 
 %%=============================================================================
@@ -874,6 +919,22 @@ add_relationship_default_avps_empty(_Config) ->
 		R#relationship.target_nref =:= B],
 	?assertEqual([#{attribute => ?ARC_TEMPLATE, value => DefaultTmpl}],
 		Fwd#relationship.avps).
+
+%%-----------------------------------------------------------------------------
+%% add_relationship rejects a retired endpoint.
+%%-----------------------------------------------------------------------------
+add_relationship_refuses_retired_endpoint(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("ArcClass", 3),
+	{ok, Src, _}  = graphdb_instance:create_instance("s", ClassNref, 3),
+	{ok, Tgt, _}  = graphdb_instance:create_instance("t", ClassNref, 3),
+	{ok, {Fwd, Rec}} =
+		graphdb_attr:create_relationship_attribute_pair("Likes", "LikedBy", instance),
+	ok = graphdb_instance:add_relationship(Src, Fwd, Tgt, Rec),
+	ok = graphdb_mgr:retire_node(Tgt),
+	{ok, Tgt2, _} = graphdb_instance:create_instance("t2", ClassNref, 3),
+	ok = graphdb_mgr:retire_node(Tgt2),
+	?assertEqual({error, {endpoint_retired, Tgt2}},
+		graphdb_instance:add_relationship(Src, Fwd, Tgt2, Rec)).
 
 
 %%-----------------------------------------------------------------------------
@@ -1296,6 +1357,17 @@ add_class_membership_refuses_abstract_class(_Config) ->
 	?assertEqual({error, {class_not_instantiable, Abstract}},
 		graphdb_instance:add_class_membership(Instance, Abstract)),
 	?assertEqual(RelsBefore, mnesia:table_info(relationships, size)).
+
+%%-----------------------------------------------------------------------------
+%% add_class_membership rejects a retired class node.
+%%-----------------------------------------------------------------------------
+add_class_membership_refuses_retired_class(_Config) ->
+	{ok, ClassA} = graphdb_class:create_class("MemA", 3),
+	{ok, ClassB} = graphdb_class:create_class("MemB", 3),
+	{ok, Inst, _} = graphdb_instance:create_instance("m", ClassA, 3),
+	ok = graphdb_mgr:retire_node(ClassB),
+	?assertEqual({error, {class_retired, ClassB}},
+		graphdb_instance:add_class_membership(Inst, ClassB)).
 
 %%-----------------------------------------------------------------------------
 %% After create_instance/3, class_memberships/1 returns the single class.

@@ -66,6 +66,7 @@
 	seeds_attribute_literals_subgroup/1,
 	attr_literal_seeds_parented_under_subgroup/1,
 	seeds_instantiable_marker/1,
+	seeds_retired_marker/1,
 	%% Creators
 	create_name_attribute_basic/1,
 	create_literal_attribute_stores_type/1,
@@ -122,7 +123,8 @@ groups() ->
 			template_avp_marker_idempotent,
 			seeds_attribute_literals_subgroup,
 			attr_literal_seeds_parented_under_subgroup,
-			seeds_instantiable_marker
+			seeds_instantiable_marker,
+			seeds_retired_marker
 		]},
 		{creators, [], [
 			create_name_attribute_basic,
@@ -394,6 +396,22 @@ seeds_instantiable_marker(_Config) ->
 	?assertEqual([AttrLitNref], Node#node.parents),
 	?assert(lists:member(#{attribute => ?NAME_ATTR_ATTRIBUTE,
 		value => "instantiable"}, Node#node.attribute_value_pairs)),
+	?assert(lists:member(#{attribute => AtNref, value => literal},
+		Node#node.attribute_value_pairs)).
+
+seeds_retired_marker(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	{ok, #{retired := RetNref,
+		   attribute_literals_group := AttrLitNref,
+		   attribute_type := AtNref}} =
+		graphdb_attr:seeded_nrefs(),
+	?assert(is_integer(RetNref)),
+	?assert(RetNref > ?NREF_ENGLISH andalso RetNref < ?NREF_START),
+	{ok, Node} = graphdb_attr:get_attribute(RetNref),
+	?assertEqual(attribute, Node#node.kind),
+	?assertEqual([AttrLitNref], Node#node.parents),
+	?assert(lists:member(#{attribute => ?NAME_ATTR_ATTRIBUTE,
+		value => "retired"}, Node#node.attribute_value_pairs)),
 	?assert(lists:member(#{attribute => AtNref, value => literal},
 		Node#node.attribute_value_pairs)).
 
@@ -699,8 +717,8 @@ list_attributes_includes_bootstrap_and_runtime(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, Before} = graphdb_attr:list_attributes(),
 	%% Bootstrap has 27 attribute nodes (nrefs 6-31 = 26, plus lang_code);
-	%% seeding adds the Attribute Literals sub-group + 5 literal attrs = 6
-	?assertEqual(27 + 6, length(Before)),
+	%% seeding adds the Attribute Literals sub-group + 6 literal attrs = 7
+	?assertEqual(27 + 7, length(Before)),
 
 	{ok, _} = graphdb_attr:create_name_attribute("One"),
 	{ok, _} = graphdb_attr:create_name_attribute("Two"),
