@@ -496,10 +496,10 @@ do_create_class(Name, ParentClassNref, AVPs, InstAttr) ->
 				ok = mnesia:write(relationships, TaxC2P, write),
 				[ ok = mnesia:write(T, R, write) || {T, R} <- TemplateRows ]
 			end,
-			case mnesia:transaction(Txn) of
+			case graphdb_mgr:transaction(Txn) of
 				%% Txn value is [] (abstract) or [ok,ok,ok] (template rows)
-				{atomic, _Writes} -> {ok, ClassNref};
-				{aborted, Reason} -> {error, Reason}
+				{ok, _Writes}    -> {ok, ClassNref};
+				{error, _} = Err -> Err
 			end;
 		{error, _} = Err ->
 			Err
@@ -621,10 +621,10 @@ do_write_superclass(ClassNref, AdditionalParentNref) ->
 				ok
 		end
 	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}             -> ok;
-		{atomic, already_exists} -> ok;
-		{aborted, Reason}        -> {error, Reason}
+	case graphdb_mgr:transaction(Txn) of
+		{ok, ok}             -> ok;
+		{ok, already_exists} -> ok;
+		{error, _} = Err     -> Err
 	end.
 
 
@@ -679,9 +679,9 @@ do_write_template(ClassNref, Name) ->
 		ok = mnesia:write(relationships, P2C, write),
 		ok = mnesia:write(relationships, C2P, write)
 	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}      -> {ok, TemplateNref};
-		{aborted, Reason} -> {error, Reason}
+	case graphdb_mgr:transaction(Txn) of
+		{ok, ok}         -> {ok, TemplateNref};
+		{error, _} = Err -> Err
 	end.
 
 
@@ -701,10 +701,10 @@ do_find_template_by_name(ClassNref, Name) ->
 			(_)                           -> false
 		end, Children)
 	end,
-	case mnesia:transaction(F) of
-		{atomic, {value, #node{nref = Nref}}} -> {ok, Nref};
-		{atomic, false}                       -> not_found;
-		{aborted, _}                          -> not_found
+	case graphdb_mgr:transaction(F) of
+		{ok, {value, #node{nref = Nref}}} -> {ok, Nref};
+		{ok, false}                       -> not_found;
+		{error, _}                        -> not_found
 	end.
 
 template_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
@@ -735,10 +735,7 @@ do_templates_for_class(ClassNref) ->
 			composition),
 		[N || N <- Children, N#node.kind =:= template]
 	end,
-	case mnesia:transaction(F) of
-		{atomic, Nodes}   -> {ok, Nodes};
-		{aborted, Reason} -> {error, Reason}
-	end.
+	graphdb_mgr:transaction(F).
 
 
 %%-----------------------------------------------------------------------------
@@ -829,11 +826,11 @@ do_add_qc(ClassNref, AttrNref) ->
 				{error, not_found}
 		end
 	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}             -> ok;
-		{atomic, already_exists} -> ok;
-		{atomic, {error, _} = E} -> E;
-		{aborted, Reason}        -> {error, Reason}
+	case graphdb_mgr:transaction(Txn) of
+		{ok, ok}             -> ok;
+		{ok, already_exists} -> ok;
+		{ok, {error, _} = E} -> E;
+		{error, Reason}      -> {error, Reason}
 	end.
 
 
@@ -866,9 +863,9 @@ do_bind_qc_value(ClassNref, AttrNref, Value) ->
 			[]  -> mnesia:abort(not_found)
 		end
 	end,
-	case mnesia:transaction(F) of
-		{atomic, ok}      -> ok;
-		{aborted, Reason} -> {error, Reason}
+	case graphdb_mgr:transaction(F) of
+		{ok, ok}         -> ok;
+		{error, _} = Err -> Err
 	end.
 
 %%-----------------------------------------------------------------------------
@@ -908,10 +905,7 @@ do_subclasses(ClassNref) ->
 			taxonomy),
 		[N || N <- Children, N#node.kind =:= class]
 	end,
-	case mnesia:transaction(F) of
-		{atomic, Nodes}   -> {ok, Nodes};
-		{aborted, Reason} -> {error, Reason}
-	end.
+	graphdb_mgr:transaction(F).
 
 
 %%-----------------------------------------------------------------------------
