@@ -576,12 +576,12 @@ execute(RootName, _RootClass, RootParent, Ctx, PlanTree) ->
 					fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
 					Writes ++ MandRows)
 			end,
-			case mnesia:transaction(Txn) of
-				{atomic, ok} ->
+			case graphdb_mgr:transaction(Txn) of
+				{ok, ok} ->
 					{ok, RootNref,
 					 merge_reports(CompOutcomes, ConnReport),
 					 InstPlan, AutoConnPlan};
-				{aborted, R} ->
+				{error, R} ->
 					{error, R,
 					 report_not_attempted(R,
 						#{plan_so_far => PlanTree, culprit => undefined})}
@@ -1233,40 +1233,44 @@ validate_arc_endpoints(SourceNref, CharNref, TargetNref, ReciprocalNref,
 		Target = mnesia:read(nodes, TargetNref),
 		Char   = mnesia:read(nodes, CharNref),
 		Recip  = mnesia:read(nodes, ReciprocalNref),
-		{Source, Target, Char, Recip}
+		case {Source, Target, Char, Recip} of
+			{[], _, _, _} ->
+				mnesia:abort({source_not_found, SourceNref});
+			{_, [], _, _} ->
+				mnesia:abort({target_not_found, TargetNref});
+			{_, _, [], _} ->
+				mnesia:abort({characterization_not_found, CharNref});
+			{_, _, _, []} ->
+				mnesia:abort({reciprocal_not_found, ReciprocalNref});
+			{[#node{attribute_value_pairs = SAVPs}],
+			 [#node{kind = TKind, attribute_value_pairs = TAVPs}],
+			 [#node{kind = CKind, attribute_value_pairs = CAVPs} = CharNode],
+			 [#node{kind = RKind, attribute_value_pairs = RAVPs}]} ->
+				case first_retired([{SourceNref, SAVPs}, {TargetNref, TAVPs},
+									 {CharNref, CAVPs}, {ReciprocalNref, RAVPs}],
+								   RetAttr) of
+					{retired, RNref} ->
+						mnesia:abort({endpoint_retired, RNref});
+					none ->
+						case {CKind, RKind} of
+							{attribute, attribute} ->
+								case check_target_kind(CharNode, TKind, TkAttr) of
+									ok              -> ok;
+									{error, Reason} -> mnesia:abort(Reason)
+								end;
+							{attribute, _} ->
+								mnesia:abort({reciprocal_not_an_attribute,
+									ReciprocalNref, RKind});
+							{_, _} ->
+								mnesia:abort({characterization_not_an_attribute,
+									CharNref, CKind})
+						end
+				end
+		end
 	end,
-	case mnesia:transaction(F) of
-		{atomic, {[], _, _, _}} ->
-			{error, {source_not_found, SourceNref}};
-		{atomic, {_, [], _, _}} ->
-			{error, {target_not_found, TargetNref}};
-		{atomic, {_, _, [], _}} ->
-			{error, {characterization_not_found, CharNref}};
-		{atomic, {_, _, _, []}} ->
-			{error, {reciprocal_not_found, ReciprocalNref}};
-		{atomic, {[#node{attribute_value_pairs = SAVPs}],
-				  [#node{kind = TKind, attribute_value_pairs = TAVPs}],
-				  [#node{kind = CKind, attribute_value_pairs = CAVPs} = CharNode],
-				  [#node{kind = RKind, attribute_value_pairs = RAVPs}]}} ->
-			case first_retired([{SourceNref, SAVPs}, {TargetNref, TAVPs},
-								 {CharNref, CAVPs}, {ReciprocalNref, RAVPs}],
-							   RetAttr) of
-				{retired, RNref} ->
-					{error, {endpoint_retired, RNref}};
-				none ->
-					case {CKind, RKind} of
-						{attribute, attribute} ->
-							check_target_kind(CharNode, TKind, TkAttr);
-						{attribute, _} ->
-							{error, {reciprocal_not_an_attribute, ReciprocalNref,
-								RKind}};
-						{_, _} ->
-							{error, {characterization_not_an_attribute, CharNref,
-								CKind}}
-					end
-			end;
-		{aborted, Reason} ->
-			{error, Reason}
+	case graphdb_mgr:transaction(F) of
+		{ok, ok}         -> ok;
+		{error, _} = Err -> Err
 	end.
 
 %% first_retired([{Nref, AVPs}], RetAttr) -> {retired, Nref} | none
@@ -1391,9 +1395,9 @@ write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
 		lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
 					  Rows)
 	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}      -> ok;
-		{aborted, Reason} -> {error, Reason}
+	case graphdb_mgr:transaction(Txn) of
+		{ok, ok}         -> ok;
+		{error, _} = Err -> Err
 	end.
 
 
@@ -1450,10 +1454,10 @@ do_write_class_membership(InstanceNref, ClassNref) ->
 				ok
 		end
 	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}             -> ok;
-		{atomic, already_exists} -> ok;
-		{aborted, Reason}        -> {error, Reason}
+	case graphdb_mgr:transaction(Txn) of
+		{ok, ok}             -> ok;
+		{ok, already_exists} -> ok;
+		{error, _} = Err     -> Err
 	end.
 
 
@@ -1484,11 +1488,11 @@ do_class_of(InstanceNref) ->
 				R#relationship.characterization =:= ?ARC_INST_TO_CLASS
 			end, Rels)
 	end,
-	case mnesia:transaction(F) of
-		{atomic, {value, #relationship{target_nref = ClassNref}}} ->
+	case graphdb_mgr:transaction(F) of
+		{ok, {value, #relationship{target_nref = ClassNref}}} ->
 			{ok, ClassNref};
-		{atomic, false}   -> not_found;
-		{aborted, Reason} -> {error, Reason}
+		{ok, false}     -> not_found;
+		{error, Reason} -> {error, Reason}
 	end.
 
 
@@ -1515,10 +1519,7 @@ do_children(Nref) ->
 			composition),
 		[N || N <- Children, N#node.kind =:= instance]
 	end,
-	case mnesia:transaction(F) of
-		{atomic, Nodes}   -> {ok, Nodes};
-		{aborted, Reason} -> {error, Reason}
-	end.
+	graphdb_mgr:transaction(F).
 
 
 %%-----------------------------------------------------------------------------
@@ -1757,13 +1758,13 @@ resolve_from_connected(InstNref, AttrNref) ->
 		mnesia:index_read(relationships, InstNref,
 			#relationship.source_nref)
 	end,
-	case mnesia:transaction(F) of
-		{atomic, Rels} ->
+	case graphdb_mgr:transaction(F) of
+		{ok, Rels} ->
 			TargetNrefs = lists:usort(
 				[R#relationship.target_nref
 					|| R <- Rels, R#relationship.kind =:= connection]),
 			search_targets(TargetNrefs, AttrNref);
-		{aborted, _} ->
+		{error, _} ->
 			not_found
 	end.
 
