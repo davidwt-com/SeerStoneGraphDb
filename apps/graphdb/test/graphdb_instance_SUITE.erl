@@ -80,6 +80,8 @@
 	add_relationship_no_default_after_delete/1,
 	add_relationship_rejects_missing_source/1,
 	add_relationship_rejects_missing_target/1,
+	add_relationship_rejects_missing_characterization/1,
+	add_relationship_rejects_missing_reciprocal/1,
 	add_relationship_rejects_non_attribute_char/1,
 	add_relationship_rejects_non_attribute_reciprocal/1,
 	add_relationship_rejects_target_kind_mismatch/1,
@@ -223,6 +225,8 @@ groups() ->
 			add_relationship_no_default_after_delete,
 			add_relationship_rejects_missing_source,
 			add_relationship_rejects_missing_target,
+			add_relationship_rejects_missing_characterization,
+			add_relationship_rejects_missing_reciprocal,
 			add_relationship_rejects_non_attribute_char,
 			add_relationship_rejects_non_attribute_reciprocal,
 			add_relationship_rejects_target_kind_mismatch,
@@ -792,6 +796,30 @@ add_relationship_rejects_missing_target(_Config) ->
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertEqual({error, {target_not_found, 99999}},
 		graphdb_instance:add_relationship(A, Char, 99999, Recip)).
+
+%%-----------------------------------------------------------------------------
+%% missing characterization nref is rejected.
+%%-----------------------------------------------------------------------------
+add_relationship_rejects_missing_characterization(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, {_Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
+	?assertEqual({error, {characterization_not_found, 99999}},
+		graphdb_instance:add_relationship(A, 99999, B, Recip)).
+
+%%-----------------------------------------------------------------------------
+%% missing reciprocal nref is rejected.
+%%-----------------------------------------------------------------------------
+add_relationship_rejects_missing_reciprocal(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, {Char, _Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
+	?assertEqual({error, {reciprocal_not_found, 99999}},
+		graphdb_instance:add_relationship(A, Char, B, 99999)).
 
 %%-----------------------------------------------------------------------------
 %% characterization that is not kind=attribute is rejected.  Uses
