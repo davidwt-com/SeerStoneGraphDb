@@ -605,9 +605,9 @@ ensure_seed(Name, ParentNref) ->
 				ok = mnesia:write(relationships, P2C, write),
 				ok = mnesia:write(relationships, C2P, write)
 			end,
-			case mnesia:transaction(F) of
-				{atomic, ok}      -> Nref;
-				{aborted, Reason} -> throw({error, Reason})
+			case graphdb_mgr:transaction(F) of
+				{ok, ok}        -> Nref;
+				{error, Reason} -> throw({error, Reason})
 			end
 	end.
 
@@ -651,10 +651,10 @@ find_subclass_by_name(ParentNref, Name) ->
 		Nodes = lists:flatmap(fun(N) -> mnesia:read(nodes, N) end, Nrefs),
 		lists:search(fun(N) -> class_has_name(N, Name) end, Nodes)
 	end,
-	case mnesia:transaction(F) of
-		{atomic, {value, #node{nref = Nref}}} -> {ok, Nref};
-		{atomic, false}                       -> not_found;
-		{aborted, Reason}                     -> throw({error, Reason})
+	case graphdb_mgr:transaction(F) of
+		{ok, {value, #node{nref = Nref}}} -> {ok, Nref};
+		{ok, false}                       -> not_found;
+		{error, Reason}                   -> throw({error, Reason})
 	end.
 
 class_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
@@ -854,9 +854,9 @@ do_create_rule(MetaClassNref, Name, OwningClass, ContentAVPs, Mode, Mult,
 				ok = mnesia:write(relationships, AppliesTo, write),
 				ok = mnesia:write(relationships, AppliedBy, write)
 			end,
-			case mnesia:transaction(Txn) of
-				{atomic, ok}      -> {ok, RuleNref};
-				{aborted, Reason} -> {error, Reason}
+			case graphdb_mgr:transaction(Txn) of
+				{ok, ok}        -> {ok, RuleNref};
+				{error, Reason} -> {error, Reason}
 			end
 	end.
 
