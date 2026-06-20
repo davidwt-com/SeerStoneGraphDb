@@ -128,7 +128,16 @@ Tracked follow-ups (not in the seam spec):
 
 - **Retrofit existing write ops** (`create_instance`, `add_relationship`,
   the membership `do_*` ops) onto the primitive/wrapper layering — uniform
-  convention, no behaviour change.
+  convention, no behaviour change. Design (full sweep of all 40
+  `mnesia:transaction` sites across the six workers + bootstrap):
+  `docs/designs/transaction-seam-retrofit-design.md`.
+- **Atomic `add_relationship`** — collapse its four separate transactions
+  (validate → resolve classes → resolve template → write) into one.
+  Blocked on `graphdb_class` exposing tier-1 in-transaction read
+  primitives: its reads (`default_template`, `get_template`,
+  `class_in_ancestry`) are `gen_server:call` today, which cannot run inside
+  an Mnesia transaction. Sequence with / before `mutate/1`, which wants
+  those primitives too.
 - **Batch `mutate([Mutation])`** — the tier-3 entry point.
 
 ### Node deletion (slice A) — IMPLEMENTED
