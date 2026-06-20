@@ -506,7 +506,7 @@ validate_no_unresolved_labels(Nodes, Rels) ->
 write_nodes(Nodes) ->
 	lists:foreach(fun(NodeTerm) ->
 		Record = term_to_node(NodeTerm),
-		{atomic, ok} = mnesia:transaction(fun() ->
+		{ok, ok} = graphdb_mgr:transaction(fun() ->
 			ok = mnesia:write(nodes, Record, write)
 		end)
 	end, Nodes),
@@ -543,7 +543,7 @@ term_to_node({node, Nref, Kind, {NameAttrNref, NameValue}, ExtraAVPs}) ->
 write_relationships(Rels) ->
 	lists:foreach(fun(RelTerm) ->
 		{Row1, Row2} = expand_relationship(RelTerm),
-		{atomic, ok} = mnesia:transaction(fun() ->
+		{ok, ok} = graphdb_mgr:transaction(fun() ->
 			ok = mnesia:write(relationships, Row1, write),
 			ok = mnesia:write(relationships, Row2, write)
 		end)

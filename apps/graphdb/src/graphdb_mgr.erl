@@ -314,10 +314,10 @@ verify_caches() ->
 		Nrefs = mnesia:all_keys(nodes),
 		lists:flatmap(fun verify_one/1, Nrefs)
 	end,
-	case mnesia:transaction(Txn) of
-		{atomic, []}          -> ok;
-		{atomic, Mismatches}  -> {error, Mismatches};
-		{aborted, Reason}     -> {error, Reason}
+	case graphdb_mgr:transaction(Txn) of
+		{ok, []}            -> ok;
+		{ok, Mismatches}    -> {error, Mismatches};
+		{error, _} = Err    -> Err
 	end.
 
 
@@ -335,9 +335,9 @@ rebuild_caches() ->
 		lists:foreach(fun rebuild_one/1, Nrefs),
 		ok
 	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}      -> ok;
-		{aborted, Reason} -> {error, Reason}
+	case graphdb_mgr:transaction(Txn) of
+		{ok, ok}         -> ok;
+		{error, _} = Err -> Err
 	end.
 
 
@@ -499,19 +499,13 @@ do_get_node(Nref) ->
 %%   both     -- union of outgoing and incoming
 %%-----------------------------------------------------------------------------
 do_get_relationships(Nref, outgoing) ->
-	case mnesia:transaction(fun() ->
+	graphdb_mgr:transaction(fun() ->
 		mnesia:index_read(relationships, Nref, #relationship.source_nref)
-	end) of
-		{atomic, Rels}     -> {ok, Rels};
-		{aborted, Reason}  -> {error, Reason}
-	end;
+	end);
 do_get_relationships(Nref, incoming) ->
-	case mnesia:transaction(fun() ->
+	graphdb_mgr:transaction(fun() ->
 		mnesia:index_read(relationships, Nref, #relationship.target_nref)
-	end) of
-		{atomic, Rels}     -> {ok, Rels};
-		{aborted, Reason}  -> {error, Reason}
-	end;
+	end);
 do_get_relationships(Nref, both) ->
 	case {do_get_relationships(Nref, outgoing),
 		  do_get_relationships(Nref, incoming)} of
