@@ -494,12 +494,14 @@ find_attribute_by_name(ParentNref, Name) ->
 	F = fun() ->
 		Children = downward_children_by_arc(ParentNref, ?ARC_ATTR_CHILD,
 			taxonomy),
-		lists:search(fun(N) -> node_has_name(N, Name) end, Children)
+		case lists:search(fun(N) -> node_has_name(N, Name) end, Children) of
+			{value, #node{nref = Nref}} -> {ok, Nref};
+			false                       -> not_found
+		end
 	end,
-	case mnesia:transaction(F) of
-		{atomic, {value, #node{nref = Nref}}} -> {ok, Nref};
-		{atomic, false}                       -> not_found;
-		{aborted, Reason}                     -> throw({error, Reason})
+	case graphdb_mgr:transaction(F) of
+		{ok, Result}    -> Result;
+		{error, Reason} -> throw({error, Reason})
 	end.
 
 
@@ -559,9 +561,9 @@ do_create_attribute(Name, ParentNref, ExtraAVPs) ->
 		ok = mnesia:write(relationships, P2C, write),
 		ok = mnesia:write(relationships, C2P, write)
 	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}      -> {ok, Nref};
-		{aborted, Reason} -> {error, Reason}
+	case graphdb_mgr:transaction(Txn) of
+		{ok, ok}         -> {ok, Nref};
+		{error, _} = Err -> Err
 	end.
 
 
@@ -654,9 +656,9 @@ do_create_relationship_attribute_pair(FwdName, RevName, ExtraAVPs, ParentNref) -
 		ok = mnesia:write(relationships, RevP2C, write),
 		ok = mnesia:write(relationships, RevC2P, write)
 	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}      -> {ok, {FwdNref, RevNref}};
-		{aborted, Reason} -> {error, Reason}
+	case graphdb_mgr:transaction(Txn) of
+		{ok, ok}         -> {ok, {FwdNref, RevNref}};
+		{error, _} = Err -> Err
 	end.
 
 
@@ -682,11 +684,11 @@ validate_parent(ParentNref) ->
 %%     {ok, #node{}} | {error, not_found | not_an_attribute | term()}
 %%-----------------------------------------------------------------------------
 do_get_attribute(Nref) ->
-	case mnesia:transaction(fun() -> mnesia:read(nodes, Nref) end) of
-		{atomic, [#node{kind = attribute} = Node]} -> {ok, Node};
-		{atomic, [_Other]}                         -> {error, not_an_attribute};
-		{atomic, []}                               -> {error, not_found};
-		{aborted, Reason}                          -> {error, Reason}
+	case graphdb_mgr:transaction(fun() -> mnesia:read(nodes, Nref) end) of
+		{ok, [#node{kind = attribute} = Node]} -> {ok, Node};
+		{ok, [_Other]}                         -> {error, not_an_attribute};
+		{ok, []}                               -> {error, not_found};
+		{error, Reason}                        -> {error, Reason}
 	end.
 
 
@@ -697,10 +699,7 @@ do_list_attributes() ->
 	F = fun() ->
 		mnesia:match_object(nodes, #node{_ = '_', kind = attribute}, read)
 	end,
-	case mnesia:transaction(F) of
-		{atomic, Nodes}   -> {ok, Nodes};
-		{aborted, Reason} -> {error, Reason}
-	end.
+	graphdb_mgr:transaction(F).
 
 
 %%-----------------------------------------------------------------------------
@@ -710,10 +709,7 @@ do_list_children(ParentNref) ->
 	F = fun() ->
 		downward_children_by_arc(ParentNref, ?ARC_ATTR_CHILD, taxonomy)
 	end,
-	case mnesia:transaction(F) of
-		{atomic, Nodes}   -> {ok, Nodes};
-		{aborted, Reason} -> {error, Reason}
-	end.
+	graphdb_mgr:transaction(F).
 
 
 %%-----------------------------------------------------------------------------
@@ -752,15 +748,15 @@ attr_type_avp(Kind, #state{attribute_type_nref = AtAttr})
 %%-----------------------------------------------------------------------------
 do_attribute_type_of(Nref, AtAttrNref) ->
 	F = fun() -> mnesia:read(nodes, Nref) end,
-	case mnesia:transaction(F) of
-		{atomic, [#node{kind = attribute, attribute_value_pairs = AVPs}]} ->
+	case graphdb_mgr:transaction(F) of
+		{ok, [#node{kind = attribute, attribute_value_pairs = AVPs}]} ->
 			case find_attribute_type_value(AtAttrNref, AVPs) of
 				{ok, Kind}  -> {ok, Kind};
 				not_found   -> {error, no_attribute_type}
 			end;
-		{atomic, [_Other]} -> {error, not_an_attribute};
-		{atomic, []}       -> {error, not_found};
-		{aborted, Reason}  -> {error, Reason}
+		{ok, [_Other]}  -> {error, not_an_attribute};
+		{ok, []}        -> {error, not_found};
+		{error, Reason} -> {error, Reason}
 	end.
 
 find_attribute_type_value(_AtAttrNref, []) ->
@@ -796,10 +792,9 @@ retro_stamp_bootstrap_attribute_types(AtAttrNref) ->
 			fun(N) -> stamp_attribute_type_if_missing(N, AtAttrNref) end,
 			Attrs)
 	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}      -> ok;
-		{atomic, _Other}  -> ok;
-		{aborted, Reason} -> throw({error, Reason})
+	case graphdb_mgr:transaction(Txn) of
+		{ok, _}         -> ok;
+		{error, Reason} -> throw({error, Reason})
 	end.
 
 stamp_attribute_type_if_missing(#node{nref = Nref,
@@ -880,7 +875,7 @@ ensure_template_avp_marker(RelAvpAttrNref) ->
 				throw({error, {template_avp_node_missing, ?ARC_TEMPLATE}})
 		end
 	end,
-	case mnesia:transaction(Txn) of
-		{atomic, ok}      -> ok;
-		{aborted, Reason} -> throw({error, Reason})
+	case graphdb_mgr:transaction(Txn) of
+		{ok, ok}        -> ok;
+		{error, Reason} -> throw({error, Reason})
 	end.
