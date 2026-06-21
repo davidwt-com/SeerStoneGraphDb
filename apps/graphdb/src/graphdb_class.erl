@@ -130,7 +130,8 @@
 		class_in_ancestry_in_txn/2,
 		validate_template_scope_in_txn/3,
 		%% Inheritance
-		inherited_qcs/1
+		inherited_qcs/1,
+		search_class_taxonomy/2
 		]).
 
 %%---------------------------------------------------------------------
@@ -885,6 +886,60 @@ validate_template_scope_in_txn(TemplateNref, SourceClass, TargetClass) ->
 %% First element of a node's parents cache, or undefined when empty.
 head_parent([])      -> undefined;
 head_parent([P | _]) -> P.
+
+
+%%-----------------------------------------------------------------------------
+%% search_class_taxonomy(ClassNref, AttrNref) ->
+%%     {ok, FoundClassNref, Value} | not_found
+%%
+%% Walks ClassNref and its taxonomy ancestors (nearest-first), returning the
+%% first bound-AVP match together with the class nref where it was found.  Used
+%% by graphdb_instance's attribute-inheritance resolution (Priority 2: class-
+%% level bound values).  Runs in the caller's process and reads via the public
+%% get_class/1 + ancestors/1 reads (behaviour-identical to its prior home in
+%% graphdb_instance).
+%%-----------------------------------------------------------------------------
+search_class_taxonomy(ClassNref, AttrNref) ->
+	case get_class(ClassNref) of
+		{ok, #node{attribute_value_pairs = AVPs}} ->
+			case find_avp_value(AVPs, AttrNref) of
+				{ok, V} ->
+					{ok, ClassNref, V};
+				not_found ->
+					case ancestors(ClassNref) of
+						{ok, Ancestors} ->
+							search_first_in_ancestors(Ancestors, AttrNref);
+						_ ->
+							not_found
+					end
+			end;
+		_ ->
+			not_found
+	end.
+
+search_first_in_ancestors([], _AttrNref) ->
+	not_found;
+search_first_in_ancestors(
+		[#node{nref = N, attribute_value_pairs = AVPs} | Rest], AttrNref) ->
+	case find_avp_value(AVPs, AttrNref) of
+		{ok, V}   -> {ok, N, V};
+		not_found -> search_first_in_ancestors(Rest, AttrNref)
+	end.
+
+%% find_avp_value(AVPs, AttrNref) -> {ok, Value} | not_found
+%%
+%% First AVP entry matching AttrNref with a bound (non-undefined) value.  An
+%% entry with value => undefined is a QC declaration, not a resolved value, and
+%% reads as not_found.  (Duplicated from graphdb_instance per the codebase's
+%% deliberate per-worker micro-helper convention — no shared util module.)
+find_avp_value([], _AttrNref) ->
+	not_found;
+find_avp_value([#{attribute := A, value := V} | _], A) when V =/= undefined ->
+	{ok, V};
+find_avp_value([#{attribute := A} | _], A) ->
+	not_found;
+find_avp_value([_ | Rest], AttrNref) ->
+	find_avp_value(Rest, AttrNref).
 
 
 %%-----------------------------------------------------------------------------

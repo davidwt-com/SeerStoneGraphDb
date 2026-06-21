@@ -1641,7 +1641,7 @@ resolve_from_class(InstNref, AttrNref) ->
 collect_class_hits(Classes, AttrNref) ->
 	lists:foldr(
 		fun(ClassNref, Acc) ->
-			case search_class_taxonomy(ClassNref, AttrNref) of
+			case graphdb_class:search_class_taxonomy(ClassNref, AttrNref) of
 				{ok, FoundClass, Value} -> [{FoundClass, Value} | Acc];
 				not_found               -> Acc
 			end
@@ -1656,36 +1656,6 @@ classify_class_hits([{ClassNref, _} | _] = Hits, AttrNref) ->
 		[Value] -> {ok, Value, ClassNref};
 		_       -> {error, {ambiguous_class_value, AttrNref, Hits}}
 	end.
-
-%% Walks ClassNref and its taxonomy ancestors (nearest-first), returning
-%% the first AVP match together with the class nref where it was found.
-search_class_taxonomy(ClassNref, AttrNref) ->
-	case graphdb_class:get_class(ClassNref) of
-		{ok, #node{attribute_value_pairs = AVPs}} ->
-			case find_avp_value(AVPs, AttrNref) of
-				{ok, V} ->
-					{ok, ClassNref, V};
-				not_found ->
-					case graphdb_class:ancestors(ClassNref) of
-						{ok, Ancestors} ->
-							search_first_in_ancestors(Ancestors, AttrNref);
-						_ ->
-							not_found
-					end
-			end;
-		_ ->
-			not_found
-	end.
-
-search_first_in_ancestors([], _AttrNref) ->
-	not_found;
-search_first_in_ancestors(
-		[#node{nref = N, attribute_value_pairs = AVPs} | Rest], AttrNref) ->
-	case find_avp_value(AVPs, AttrNref) of
-		{ok, V}   -> {ok, N, V};
-		not_found -> search_first_in_ancestors(Rest, AttrNref)
-	end.
-
 
 %%-----------------------------------------------------------------------------
 %% resolve_from_ancestors(ParentNref, AttrNref) ->

@@ -94,6 +94,9 @@
 	validate_template_scope_in_txn_in_scope/1,
 	validate_template_scope_in_txn_rejects_non_template/1,
 	validate_template_scope_in_txn_rejects_out_of_ancestry/1,
+	search_class_taxonomy_on_class/1,
+	search_class_taxonomy_on_ancestor/1,
+	search_class_taxonomy_not_found/1,
 	%% Qualifying characteristics
 	add_qc_basic/1,
 	add_qc_idempotent/1,
@@ -180,7 +183,10 @@ groups() ->
 			class_in_ancestry_in_txn_diamond,
 			validate_template_scope_in_txn_in_scope,
 			validate_template_scope_in_txn_rejects_non_template,
-			validate_template_scope_in_txn_rejects_out_of_ancestry
+			validate_template_scope_in_txn_rejects_out_of_ancestry,
+			search_class_taxonomy_on_class,
+			search_class_taxonomy_on_ancestor,
+			search_class_taxonomy_not_found
 		]},
 		{qualifying, [], [
 			add_qc_basic,
@@ -747,6 +753,42 @@ validate_template_scope_in_txn_rejects_out_of_ancestry(_Config) ->
 			graphdb_class:validate_template_scope_in_txn(VehTmpl, AnimalCls,
 				AnimalCls)
 		end)).
+
+%%-----------------------------------------------------------------------------
+%% search_class_taxonomy finds a value bound directly on the class node.
+%%-----------------------------------------------------------------------------
+search_class_taxonomy_on_class(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Color", 3),
+	ok = graphdb_class:add_qualifying_characteristic(ClassNref,
+		?NAME_ATTR_ATTRIBUTE),
+	ok = graphdb_class:bind_qc_value(ClassNref, ?NAME_ATTR_ATTRIBUTE, "blue"),
+	?assertEqual({ok, ClassNref, "blue"},
+		graphdb_class:search_class_taxonomy(ClassNref, ?NAME_ATTR_ATTRIBUTE)).
+
+%%-----------------------------------------------------------------------------
+%% search_class_taxonomy finds a value bound on a taxonomy ancestor when the
+%% class itself does not carry it; reports the ancestor where it was found.
+%%-----------------------------------------------------------------------------
+search_class_taxonomy_on_ancestor(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, Parent} = graphdb_class:create_class("Animal", 3),
+	{ok, Child}  = graphdb_class:create_class("Mammal", Parent),
+	ok = graphdb_class:add_qualifying_characteristic(Parent,
+		?NAME_ATTR_ATTRIBUTE),
+	ok = graphdb_class:bind_qc_value(Parent, ?NAME_ATTR_ATTRIBUTE, "warm"),
+	?assertEqual({ok, Parent, "warm"},
+		graphdb_class:search_class_taxonomy(Child, ?NAME_ATTR_ATTRIBUTE)).
+
+%%-----------------------------------------------------------------------------
+%% search_class_taxonomy returns not_found when neither the class nor any
+%% ancestor binds the attribute.
+%%-----------------------------------------------------------------------------
+search_class_taxonomy_not_found(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Color", 3),
+	?assertEqual(not_found,
+		graphdb_class:search_class_taxonomy(ClassNref, ?NAME_ATTR_ATTRIBUTE)).
 
 
 %%=============================================================================
