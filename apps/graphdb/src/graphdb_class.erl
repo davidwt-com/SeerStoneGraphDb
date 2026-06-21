@@ -122,6 +122,7 @@
 		get_template_in_txn/1,
 		templates_for_class/1,
 		default_template/1,
+		default_template_in_txn/1,
 		is_instantiable/1,
 		%% Class-of resolution helper (used by graphdb_instance to validate
 		%% Template AVP class scope on Connection arcs)
@@ -714,6 +715,26 @@ template_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 		(#{attribute := ?NAME_ATTR_CLASS, value := V}) -> V =:= Name;
 		(_) -> false
 	end, AVPs).
+
+%%-----------------------------------------------------------------------------
+%% default_template_in_txn(ClassNref) -> {ok, Nref} | not_found
+%%
+%% Tier-1 in-transaction twin of default_template/1.  Assumes it runs inside an
+%% active mnesia activity; reuses the bare-mnesia downward_children_by_arc/3 and
+%% template_has_name/2.  Returns not_found when ClassNref has no template named
+%% ?DEFAULT_TEMPLATE_NAME (e.g. an abstract class).
+%%-----------------------------------------------------------------------------
+default_template_in_txn(ClassNref) ->
+	Children = downward_children_by_arc(ClassNref, ?ARC_CLS_CHILD, composition),
+	case lists:search(fun
+			(#node{kind = template} = N) ->
+				template_has_name(N, ?DEFAULT_TEMPLATE_NAME);
+			(_) ->
+				false
+		end, Children) of
+		{value, #node{nref = Nref}} -> {ok, Nref};
+		false                       -> not_found
+	end.
 
 
 %%-----------------------------------------------------------------------------

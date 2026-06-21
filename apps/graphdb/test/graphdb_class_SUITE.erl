@@ -81,6 +81,9 @@
 	templates_for_class_lists_all/1,
 	default_template_returns_default/1,
 	default_template_not_found_after_delete/1,
+	default_template_in_txn_returns_default/1,
+	default_template_in_txn_abstract_not_found/1,
+	default_template_in_txn_not_found_after_delete/1,
 	class_in_ancestry_self/1,
 	class_in_ancestry_ancestor/1,
 	class_in_ancestry_unrelated/1,
@@ -162,6 +165,9 @@ groups() ->
 			templates_for_class_lists_all,
 			default_template_returns_default,
 			default_template_not_found_after_delete,
+			default_template_in_txn_returns_default,
+			default_template_in_txn_abstract_not_found,
+			default_template_in_txn_not_found_after_delete,
 			class_in_ancestry_self,
 			class_in_ancestry_ancestor,
 			class_in_ancestry_unrelated,
@@ -577,6 +583,45 @@ default_template_not_found_after_delete(_Config) ->
 		mnesia:delete({nodes, TmplNref})
 	end),
 	?assertEqual(not_found, graphdb_class:default_template(ClassNref)).
+
+%%-----------------------------------------------------------------------------
+%% default_template_in_txn returns the default template nref (in-tx twin).
+%%-----------------------------------------------------------------------------
+default_template_in_txn_returns_default(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, Expected}  = graphdb_class:default_template(ClassNref),
+	?assertEqual({ok, {ok, Expected}}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:default_template_in_txn(ClassNref)
+	end)).
+
+%%-----------------------------------------------------------------------------
+%% default_template_in_txn returns not_found for an abstract class (born
+%% without a default template).
+%%-----------------------------------------------------------------------------
+default_template_in_txn_abstract_not_found(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, #{instantiable := Inst}} = graphdb_attr:seeded_nrefs(),
+	Marker = #{attribute => Inst, value => false},
+	{ok, ClassNref} = graphdb_class:create_class("Abstract", 3, [Marker]),
+	?assertEqual({ok, not_found}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:default_template_in_txn(ClassNref)
+	end)).
+
+%%-----------------------------------------------------------------------------
+%% default_template_in_txn returns not_found after the default template node
+%% is deleted.
+%%-----------------------------------------------------------------------------
+default_template_in_txn_not_found_after_delete(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, TmplNref}  = graphdb_class:default_template(ClassNref),
+	{atomic, ok} = mnesia:transaction(fun() ->
+		mnesia:delete({nodes, TmplNref})
+	end),
+	?assertEqual({ok, not_found}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:default_template_in_txn(ClassNref)
+	end)).
 
 %%-----------------------------------------------------------------------------
 %% class_in_ancestry returns true when the candidate equals the class.
