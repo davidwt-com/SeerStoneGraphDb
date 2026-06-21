@@ -119,6 +119,7 @@
 		subclasses/1,
 		ancestors/1,
 		get_template/1,
+		get_template_in_txn/1,
 		templates_for_class/1,
 		default_template/1,
 		is_instantiable/1,
@@ -720,6 +721,21 @@ template_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 %%-----------------------------------------------------------------------------
 do_get_template(Nref) ->
 	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = template} = Node] -> {ok, Node};
+		[_Other]                        -> {error, not_a_template};
+		[]                              -> {error, not_found}
+	end.
+
+%%-----------------------------------------------------------------------------
+%% get_template_in_txn(Nref) ->
+%%     {ok, #node{}} | {error, not_a_template | not_found}
+%%
+%% Tier-1 in-transaction twin of do_get_template/1.  Assumes it runs inside an
+%% active mnesia activity; uses a bare mnesia:read.  See
+%% docs/designs/atomic-add-relationship-primitives-design.md.
+%%-----------------------------------------------------------------------------
+get_template_in_txn(Nref) ->
+	case mnesia:read(nodes, Nref) of
 		[#node{kind = template} = Node] -> {ok, Node};
 		[_Other]                        -> {error, not_a_template};
 		[]                              -> {error, not_found}

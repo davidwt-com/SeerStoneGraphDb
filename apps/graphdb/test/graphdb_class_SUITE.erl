@@ -75,6 +75,9 @@
 	add_template_rejects_non_class/1,
 	get_template_returns_node/1,
 	get_template_rejects_non_template/1,
+	get_template_in_txn_returns_node/1,
+	get_template_in_txn_rejects_non_template/1,
+	get_template_in_txn_not_found/1,
 	templates_for_class_lists_all/1,
 	default_template_returns_default/1,
 	default_template_not_found_after_delete/1,
@@ -149,6 +152,9 @@ groups() ->
 			add_template_rejects_non_class,
 			get_template_returns_node,
 			get_template_rejects_non_template,
+			get_template_in_txn_returns_node,
+			get_template_in_txn_rejects_non_template,
+			get_template_in_txn_not_found,
 			templates_for_class_lists_all,
 			default_template_returns_default,
 			default_template_not_found_after_delete,
@@ -492,6 +498,38 @@ get_template_rejects_non_template(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
 	?assertEqual({error, not_a_template},
 		graphdb_class:get_template(ClassNref)).
+
+%%-----------------------------------------------------------------------------
+%% get_template_in_txn returns the template node (in-transaction twin).
+%%-----------------------------------------------------------------------------
+get_template_in_txn_returns_node(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, TmplNref} = graphdb_class:default_template(ClassNref),
+	{ok, {ok, Node}} = graphdb_mgr:transaction(fun() ->
+		graphdb_class:get_template_in_txn(TmplNref)
+	end),
+	?assertEqual(TmplNref, Node#node.nref),
+	?assertEqual(template, Node#node.kind).
+
+%%-----------------------------------------------------------------------------
+%% get_template_in_txn rejects a class nref (kind mismatch).
+%%-----------------------------------------------------------------------------
+get_template_in_txn_rejects_non_template(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	?assertEqual({ok, {error, not_a_template}}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:get_template_in_txn(ClassNref)
+	end)).
+
+%%-----------------------------------------------------------------------------
+%% get_template_in_txn returns not_found for an unused nref.
+%%-----------------------------------------------------------------------------
+get_template_in_txn_not_found(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	?assertEqual({ok, {error, not_found}}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:get_template_in_txn(999999)
+	end)).
 
 %%-----------------------------------------------------------------------------
 %% templates_for_class returns all templates (default plus any added).
