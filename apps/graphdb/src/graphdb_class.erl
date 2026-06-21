@@ -126,6 +126,7 @@
 		%% Class-of resolution helper (used by graphdb_instance to validate
 		%% Template AVP class scope on Connection arcs)
 		class_in_ancestry/2,
+		class_in_ancestry_in_txn/2,
 		%% Inheritance
 		inherited_qcs/1
 		]).
@@ -779,6 +780,56 @@ do_class_in_ancestry(CandidateNref, ClassNref) ->
 			lists:any(fun(#node{nref = N}) -> N =:= CandidateNref end, Ancestors);
 		_ ->
 			false
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% class_in_ancestry_in_txn(CandidateNref, ClassNref) -> boolean()
+%%
+%% Tier-1 in-transaction twin of do_class_in_ancestry/2.  Assumes it runs
+%% inside an active mnesia activity; walks the taxonomic ancestry with bare
+%% mnesia:read.  Returns false on any lookup error.
+%%-----------------------------------------------------------------------------
+class_in_ancestry_in_txn(CandidateNref, CandidateNref) ->
+	true;
+class_in_ancestry_in_txn(CandidateNref, ClassNref) ->
+	case ancestors_in_txn(ClassNref) of
+		{ok, Ancestors} ->
+			lists:any(fun(#node{nref = N}) -> N =:= CandidateNref end, Ancestors);
+		_ ->
+			false
+	end.
+
+%%-----------------------------------------------------------------------------
+%% ancestors_in_txn(ClassNref) -> {ok, [#node{}]} | {error, term()}
+%%
+%% Tier-1 in-transaction twin of do_ancestors/1: BFS over the multi-parent
+%% taxonomic DAG with bare mnesia:read, nearest-first, each ancestor once,
+%% the Classes category (nref 3) filtered out.
+%%-----------------------------------------------------------------------------
+ancestors_in_txn(ClassNref) ->
+	case mnesia:read(nodes, ClassNref) of
+		[#node{kind = class, parents = Parents}] ->
+			Initial = [P || P <- Parents, P =/= ?NREF_CLASSES],
+			walk_ancestors_in_txn(Initial, sets:from_list(Initial), []);
+		[_] ->
+			{error, not_a_class};
+		[] ->
+			{error, not_found}
+	end.
+
+walk_ancestors_in_txn([], _Visited, Acc) ->
+	{ok, lists:reverse(Acc)};
+walk_ancestors_in_txn([Nref | Rest], Visited, Acc) ->
+	case mnesia:read(nodes, Nref) of
+		[#node{kind = class, parents = Parents} = Node] ->
+			New = [P || P <- Parents,
+				P =/= ?NREF_CLASSES,
+				not sets:is_element(P, Visited)],
+			NewVisited = lists:foldl(fun sets:add_element/2, Visited, New),
+			walk_ancestors_in_txn(Rest ++ New, NewVisited, [Node | Acc]);
+		_ ->
+			walk_ancestors_in_txn(Rest, Visited, Acc)
 	end.
 
 
