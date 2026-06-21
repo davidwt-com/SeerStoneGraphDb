@@ -247,6 +247,13 @@ Manages the "is a" hierarchy of class nodes in the ontology.
 - `add_qualifying_characteristic/2` (class_nref, attribute_nref)
 - `is_instantiable/1` (class_nref) — `false` iff the class carries the `instantiable => false` marker
 - `get_class/1`, `subclasses/1`, `ancestors/1`, `inherited_qcs/1`
+- `get_template_in_txn/1`, `class_in_ancestry_in_txn/2`,
+  `default_template_in_txn/1` — tier-1 **in-transaction** read primitives
+  (bare-mnesia twins of `get_template`/`class_in_ancestry`/`default_template`);
+  must be called inside an Mnesia activity. They compose into a caller's single
+  transaction (the seam's tier-1 contract) and are the prerequisite for atomic
+  `add_relationship` / `mutate/1`. See
+  `docs/designs/atomic-add-relationship-primitives-design.md`.
 
 ### `graphdb_instance` — Instance & Compositional Hierarchy
 

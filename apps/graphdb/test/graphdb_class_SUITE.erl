@@ -75,12 +75,22 @@
 	add_template_rejects_non_class/1,
 	get_template_returns_node/1,
 	get_template_rejects_non_template/1,
+	get_template_in_txn_returns_node/1,
+	get_template_in_txn_rejects_non_template/1,
+	get_template_in_txn_not_found/1,
 	templates_for_class_lists_all/1,
 	default_template_returns_default/1,
 	default_template_not_found_after_delete/1,
+	default_template_in_txn_returns_default/1,
+	default_template_in_txn_abstract_not_found/1,
+	default_template_in_txn_not_found_after_delete/1,
 	class_in_ancestry_self/1,
 	class_in_ancestry_ancestor/1,
 	class_in_ancestry_unrelated/1,
+	class_in_ancestry_in_txn_self/1,
+	class_in_ancestry_in_txn_ancestor/1,
+	class_in_ancestry_in_txn_unrelated/1,
+	class_in_ancestry_in_txn_diamond/1,
 	%% Qualifying characteristics
 	add_qc_basic/1,
 	add_qc_idempotent/1,
@@ -149,12 +159,22 @@ groups() ->
 			add_template_rejects_non_class,
 			get_template_returns_node,
 			get_template_rejects_non_template,
+			get_template_in_txn_returns_node,
+			get_template_in_txn_rejects_non_template,
+			get_template_in_txn_not_found,
 			templates_for_class_lists_all,
 			default_template_returns_default,
 			default_template_not_found_after_delete,
+			default_template_in_txn_returns_default,
+			default_template_in_txn_abstract_not_found,
+			default_template_in_txn_not_found_after_delete,
 			class_in_ancestry_self,
 			class_in_ancestry_ancestor,
-			class_in_ancestry_unrelated
+			class_in_ancestry_unrelated,
+			class_in_ancestry_in_txn_self,
+			class_in_ancestry_in_txn_ancestor,
+			class_in_ancestry_in_txn_unrelated,
+			class_in_ancestry_in_txn_diamond
 		]},
 		{qualifying, [], [
 			add_qc_basic,
@@ -494,6 +514,38 @@ get_template_rejects_non_template(_Config) ->
 		graphdb_class:get_template(ClassNref)).
 
 %%-----------------------------------------------------------------------------
+%% get_template_in_txn returns the template node (in-transaction twin).
+%%-----------------------------------------------------------------------------
+get_template_in_txn_returns_node(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, TmplNref} = graphdb_class:default_template(ClassNref),
+	{ok, {ok, Node}} = graphdb_mgr:transaction(fun() ->
+		graphdb_class:get_template_in_txn(TmplNref)
+	end),
+	?assertEqual(TmplNref, Node#node.nref),
+	?assertEqual(template, Node#node.kind).
+
+%%-----------------------------------------------------------------------------
+%% get_template_in_txn rejects a class nref (kind mismatch).
+%%-----------------------------------------------------------------------------
+get_template_in_txn_rejects_non_template(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	?assertEqual({ok, {error, not_a_template}}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:get_template_in_txn(ClassNref)
+	end)).
+
+%%-----------------------------------------------------------------------------
+%% get_template_in_txn returns not_found for an unused nref.
+%%-----------------------------------------------------------------------------
+get_template_in_txn_not_found(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	?assertEqual({ok, {error, not_found}}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:get_template_in_txn(999999)
+	end)).
+
+%%-----------------------------------------------------------------------------
 %% templates_for_class returns all templates (default plus any added).
 %%-----------------------------------------------------------------------------
 templates_for_class_lists_all(_Config) ->
@@ -533,6 +585,45 @@ default_template_not_found_after_delete(_Config) ->
 	?assertEqual(not_found, graphdb_class:default_template(ClassNref)).
 
 %%-----------------------------------------------------------------------------
+%% default_template_in_txn returns the default template nref (in-tx twin).
+%%-----------------------------------------------------------------------------
+default_template_in_txn_returns_default(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, Expected}  = graphdb_class:default_template(ClassNref),
+	?assertEqual({ok, {ok, Expected}}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:default_template_in_txn(ClassNref)
+	end)).
+
+%%-----------------------------------------------------------------------------
+%% default_template_in_txn returns not_found for an abstract class (born
+%% without a default template).
+%%-----------------------------------------------------------------------------
+default_template_in_txn_abstract_not_found(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, #{instantiable := Inst}} = graphdb_attr:seeded_nrefs(),
+	Marker = #{attribute => Inst, value => false},
+	{ok, ClassNref} = graphdb_class:create_class("Abstract", 3, [Marker]),
+	?assertEqual({ok, not_found}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:default_template_in_txn(ClassNref)
+	end)).
+
+%%-----------------------------------------------------------------------------
+%% default_template_in_txn returns not_found after the default template node
+%% is deleted.
+%%-----------------------------------------------------------------------------
+default_template_in_txn_not_found_after_delete(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, TmplNref}  = graphdb_class:default_template(ClassNref),
+	{atomic, ok} = mnesia:transaction(fun() ->
+		mnesia:delete({nodes, TmplNref})
+	end),
+	?assertEqual({ok, not_found}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:default_template_in_txn(ClassNref)
+	end)).
+
+%%-----------------------------------------------------------------------------
 %% class_in_ancestry returns true when the candidate equals the class.
 %%-----------------------------------------------------------------------------
 class_in_ancestry_self(_Config) ->
@@ -559,6 +650,56 @@ class_in_ancestry_unrelated(_Config) ->
 	{ok, AnimalNref}  = graphdb_class:create_class("Animal", 3),
 	{ok, VehicleNref} = graphdb_class:create_class("Vehicle", 3),
 	?assertNot(graphdb_class:class_in_ancestry(VehicleNref, AnimalNref)).
+
+%%-----------------------------------------------------------------------------
+%% class_in_ancestry_in_txn: self is in its own ancestry (in-transaction twin).
+%%-----------------------------------------------------------------------------
+class_in_ancestry_in_txn_self(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	?assertEqual({ok, true}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:class_in_ancestry_in_txn(ClassNref, ClassNref)
+	end)).
+
+%%-----------------------------------------------------------------------------
+%% class_in_ancestry_in_txn: true for direct and transitive ancestors.
+%%-----------------------------------------------------------------------------
+class_in_ancestry_in_txn_ancestor(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, AnimalNref} = graphdb_class:create_class("Animal", 3),
+	{ok, MammalNref} = graphdb_class:create_class("Mammal", AnimalNref),
+	{ok, WhaleNref}  = graphdb_class:create_class("Whale", MammalNref),
+	?assertEqual({ok, true}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:class_in_ancestry_in_txn(AnimalNref, WhaleNref)
+	end)),
+	?assertEqual({ok, true}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:class_in_ancestry_in_txn(MammalNref, WhaleNref)
+	end)).
+
+%%-----------------------------------------------------------------------------
+%% class_in_ancestry_in_txn: false for unrelated classes.
+%%-----------------------------------------------------------------------------
+class_in_ancestry_in_txn_unrelated(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, AnimalNref}  = graphdb_class:create_class("Animal", 3),
+	{ok, VehicleNref} = graphdb_class:create_class("Vehicle", 3),
+	?assertEqual({ok, false}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:class_in_ancestry_in_txn(VehicleNref, AnimalNref)
+	end)).
+
+%%-----------------------------------------------------------------------------
+%% class_in_ancestry_in_txn: true for a diamond ancestor reached via two paths.
+%%-----------------------------------------------------------------------------
+class_in_ancestry_in_txn_diamond(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_class:create_class("A", 3),
+	{ok, B} = graphdb_class:create_class("B", A),
+	{ok, C} = graphdb_class:create_class("C", A),
+	{ok, D} = graphdb_class:create_class("D", B),
+	ok = graphdb_class:add_superclass(D, C),
+	?assertEqual({ok, true}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:class_in_ancestry_in_txn(A, D)
+	end)).
 
 
 %%=============================================================================

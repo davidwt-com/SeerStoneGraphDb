@@ -119,12 +119,15 @@
 		subclasses/1,
 		ancestors/1,
 		get_template/1,
+		get_template_in_txn/1,
 		templates_for_class/1,
 		default_template/1,
+		default_template_in_txn/1,
 		is_instantiable/1,
 		%% Class-of resolution helper (used by graphdb_instance to validate
 		%% Template AVP class scope on Connection arcs)
 		class_in_ancestry/2,
+		class_in_ancestry_in_txn/2,
 		%% Inheritance
 		inherited_qcs/1
 		]).
@@ -713,6 +716,26 @@ template_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 		(_) -> false
 	end, AVPs).
 
+%%-----------------------------------------------------------------------------
+%% default_template_in_txn(ClassNref) -> {ok, Nref} | not_found
+%%
+%% Tier-1 in-transaction twin of default_template/1.  Assumes it runs inside an
+%% active mnesia activity; reuses the bare-mnesia downward_children_by_arc/3 and
+%% template_has_name/2.  Returns not_found when ClassNref has no template named
+%% ?DEFAULT_TEMPLATE_NAME (e.g. an abstract class).
+%%-----------------------------------------------------------------------------
+default_template_in_txn(ClassNref) ->
+	Children = downward_children_by_arc(ClassNref, ?ARC_CLS_CHILD, composition),
+	case lists:search(fun
+			(#node{kind = template} = N) ->
+				template_has_name(N, ?DEFAULT_TEMPLATE_NAME);
+			(_) ->
+				false
+		end, Children) of
+		{value, #node{nref = Nref}} -> {ok, Nref};
+		false                       -> not_found
+	end.
+
 
 %%-----------------------------------------------------------------------------
 %% do_get_template(Nref) ->
@@ -720,6 +743,21 @@ template_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 %%-----------------------------------------------------------------------------
 do_get_template(Nref) ->
 	case mnesia:dirty_read(nodes, Nref) of
+		[#node{kind = template} = Node] -> {ok, Node};
+		[_Other]                        -> {error, not_a_template};
+		[]                              -> {error, not_found}
+	end.
+
+%%-----------------------------------------------------------------------------
+%% get_template_in_txn(Nref) ->
+%%     {ok, #node{}} | {error, not_a_template | not_found}
+%%
+%% Tier-1 in-transaction twin of do_get_template/1.  Assumes it runs inside an
+%% active mnesia activity; uses a bare mnesia:read.  See
+%% docs/designs/atomic-add-relationship-primitives-design.md.
+%%-----------------------------------------------------------------------------
+get_template_in_txn(Nref) ->
+	case mnesia:read(nodes, Nref) of
 		[#node{kind = template} = Node] -> {ok, Node};
 		[_Other]                        -> {error, not_a_template};
 		[]                              -> {error, not_found}
@@ -763,6 +801,56 @@ do_class_in_ancestry(CandidateNref, ClassNref) ->
 			lists:any(fun(#node{nref = N}) -> N =:= CandidateNref end, Ancestors);
 		_ ->
 			false
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% class_in_ancestry_in_txn(CandidateNref, ClassNref) -> boolean()
+%%
+%% Tier-1 in-transaction twin of do_class_in_ancestry/2.  Assumes it runs
+%% inside an active mnesia activity; walks the taxonomic ancestry with bare
+%% mnesia:read.  Returns false on any lookup error.
+%%-----------------------------------------------------------------------------
+class_in_ancestry_in_txn(CandidateNref, CandidateNref) ->
+	true;
+class_in_ancestry_in_txn(CandidateNref, ClassNref) ->
+	case ancestors_in_txn(ClassNref) of
+		{ok, Ancestors} ->
+			lists:any(fun(#node{nref = N}) -> N =:= CandidateNref end, Ancestors);
+		_ ->
+			false
+	end.
+
+%%-----------------------------------------------------------------------------
+%% ancestors_in_txn(ClassNref) -> {ok, [#node{}]} | {error, term()}
+%%
+%% Tier-1 in-transaction twin of do_ancestors/1: BFS over the multi-parent
+%% taxonomic DAG with bare mnesia:read, nearest-first, each ancestor once,
+%% the Classes category (nref 3) filtered out.
+%%-----------------------------------------------------------------------------
+ancestors_in_txn(ClassNref) ->
+	case mnesia:read(nodes, ClassNref) of
+		[#node{kind = class, parents = Parents}] ->
+			Initial = [P || P <- Parents, P =/= ?NREF_CLASSES],
+			walk_ancestors_in_txn(Initial, sets:from_list(Initial), []);
+		[_] ->
+			{error, not_a_class};
+		[] ->
+			{error, not_found}
+	end.
+
+walk_ancestors_in_txn([], _Visited, Acc) ->
+	{ok, lists:reverse(Acc)};
+walk_ancestors_in_txn([Nref | Rest], Visited, Acc) ->
+	case mnesia:read(nodes, Nref) of
+		[#node{kind = class, parents = Parents} = Node] ->
+			New = [P || P <- Parents,
+				P =/= ?NREF_CLASSES,
+				not sets:is_element(P, Visited)],
+			NewVisited = lists:foldl(fun sets:add_element/2, Visited, New),
+			walk_ancestors_in_txn(Rest ++ New, NewVisited, [Node | Acc]);
+		_ ->
+			walk_ancestors_in_txn(Rest, Visited, Acc)
 	end.
 
 
