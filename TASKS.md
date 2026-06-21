@@ -134,12 +134,14 @@ Tracked follow-ups (not in the seam spec):
   arms). Design `docs/designs/transaction-seam-retrofit-design.md`; plan
   `docs/superpowers/plans/2026-06-20-transaction-seam-retrofit.md`.
 - **Atomic `add_relationship`** — collapse its four separate transactions
-  (validate → resolve classes → resolve template → write) into one.
-  Blocked on `graphdb_class` exposing tier-1 in-transaction read
-  primitives: its reads (`default_template`, `get_template`,
-  `class_in_ancestry`) are `gen_server:call` today, which cannot run inside
-  an Mnesia transaction. Sequence with / before `mutate/1`, which wants
-  those primitives too.
+  (validate → resolve classes → resolve template → write) into one. The
+  prerequisite tier-1 `graphdb_class` read primitives
+  (`get_template_in_txn/1`, `class_in_ancestry_in_txn/2`,
+  `default_template_in_txn/1`) have landed (PR 1,
+  `docs/designs/atomic-add-relationship-primitives-design.md`). PR 2 swaps
+  `add_relationship` onto them, converts the `source_has_no_class` /
+  `target_has_no_class` arms to `mnesia:abort/1`, and allocates the rel-id pair
+  up-front. Sequence with / before `mutate/1`, which wants those primitives too.
 - **Batch `mutate([Mutation])`** — the tier-3 entry point.
 
 ### Node deletion (slice A) — IMPLEMENTED
