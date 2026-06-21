@@ -85,6 +85,8 @@
 	add_relationship_rejects_non_attribute_char/1,
 	add_relationship_rejects_non_attribute_reciprocal/1,
 	add_relationship_rejects_target_kind_mismatch/1,
+	add_relationship_rejects_source_has_no_class/1,
+	add_relationship_rejects_target_has_no_class/1,
 	add_relationship_stamps_user_avps/1,
 	add_relationship_avps_are_per_direction/1,
 	add_relationship_default_avps_empty/1,
@@ -230,6 +232,8 @@ groups() ->
 			add_relationship_rejects_non_attribute_char,
 			add_relationship_rejects_non_attribute_reciprocal,
 			add_relationship_rejects_target_kind_mismatch,
+			add_relationship_rejects_source_has_no_class,
+			add_relationship_rejects_target_has_no_class,
 			add_relationship_stamps_user_avps,
 			add_relationship_avps_are_per_direction,
 			add_relationship_default_avps_empty,
@@ -860,6 +864,32 @@ add_relationship_rejects_target_kind_mismatch(_Config) ->
 		graphdb_attr:create_relationship_attribute_pair("Has", "HeldBy", class),
 	?assertEqual({error, {target_kind_mismatch, class, instance}},
 		graphdb_instance:add_relationship(A, Char, B, Recip)).
+
+%%-----------------------------------------------------------------------------
+%% source that exists and passes endpoint validation but has no instance->class
+%% membership arc is rejected.  A class node is such a node: validate_arc_endpoints
+%% does not constrain the source's kind, and a class has no ?ARC_INST_TO_CLASS arc.
+%%-----------------------------------------------------------------------------
+add_relationship_rejects_source_has_no_class(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
+	?assertEqual({error, {source_has_no_class, ClassNref}},
+		graphdb_instance:add_relationship(ClassNref, Char, B, Recip)).
+
+%%-----------------------------------------------------------------------------
+%% target that exists and passes endpoint validation but has no instance->class
+%% membership arc is rejected.  Char's target_kind=class lets a class node pass
+%% endpoint validation as the target; the class has no ?ARC_INST_TO_CLASS arc.
+%%-----------------------------------------------------------------------------
+add_relationship_rejects_target_has_no_class(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("Thing", 3),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("Has", "HeldBy", class),
+	?assertEqual({error, {target_has_no_class, ClassNref}},
+		graphdb_instance:add_relationship(A, Char, ClassNref, Recip)).
 
 
 %%-----------------------------------------------------------------------------

@@ -133,16 +133,28 @@ Tracked follow-ups (not in the seam spec):
   instance CT cases (`characterization_not_found`/`reciprocal_not_found`
   arms). Design `docs/designs/transaction-seam-retrofit-design.md`; plan
   `docs/superpowers/plans/2026-06-20-transaction-seam-retrofit.md`.
-- **Atomic `add_relationship`** — collapse its four separate transactions
-  (validate → resolve classes → resolve template → write) into one. The
-  prerequisite tier-1 `graphdb_class` read primitives
-  (`get_template_in_txn/1`, `class_in_ancestry_in_txn/2`,
-  `default_template_in_txn/1`) have landed (PR 1,
-  `docs/designs/atomic-add-relationship-primitives-design.md`). PR 2 swaps
-  `add_relationship` onto them, converts the `source_has_no_class` /
-  `target_has_no_class` arms to `mnesia:abort/1`, and allocates the rel-id pair
-  up-front. Sequence with / before `mutate/1`, which wants those primitives too.
+- **Atomic `add_relationship`** — IMPLEMENTED. `do_add_relationship/7`'s five
+  separate transactions (validate endpoints → resolve classes → resolve
+  template → validate scope → write) are collapsed into one
+  `graphdb_mgr:transaction/1` (TOCTOU isolation). The four single-use phase
+  helpers were converted in place to in-txn (abort-based) form; a private
+  `class_of_in_txn/1` was added (`do_class_of/1` keeps its own txn for its
+  public caller); `build_connection_rows` was split into `/6` (allocates) +
+  `/7` (pure) so the rel-id pair is allocated up-front outside the
+  transaction. Behaviour-preserving; existing `add_relationship` suite
+  unchanged, +2 new instance CT cases (`source_has_no_class` /
+  `target_has_no_class`). Design
+  `docs/designs/atomic-add-relationship-design.md`; plan
+  `docs/superpowers/plans/2026-06-21-atomic-add-relationship.md`.
 - **Batch `mutate([Mutation])`** — the tier-3 entry point.
+- **Converge default-template name search** — `graphdb_class` carries two
+  copies of the default-template name-search walk: the gen-server
+  `do_find_template_by_name/2` (own txn) and the tier-1
+  `default_template_in_txn/1` (PR 1). `do_default_template/1` already wraps its
+  own transaction, so it could be rewritten to call `default_template_in_txn/1`
+  inside that txn, removing the duplication.
+  Deliberately deferred (the duplication is sanctioned project precedent);
+  a future cleanup, not blocking anything.
 
 ### Node deletion (slice A) — IMPLEMENTED
 

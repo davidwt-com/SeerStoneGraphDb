@@ -1176,101 +1176,91 @@ do_validate_parent(ParentNref, RetAttr) ->
 
 %%-----------------------------------------------------------------------------
 %% do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
-%%                     TemplateSpec, State) -> ok | {error, term()}
+%%                     TemplateSpec, AVPSpec, State) -> ok | {error, term()}
 %%
-%% TemplateSpec is either the atom `default` (look up source's class
-%% default template) or an integer template nref.  Arc validation
-%% (existence + arc-label kind + target_kind agreement) runs first,
-%% then class lookup, template resolution, scope check, and the
-%% two-row write of the connection arcs with the Template AVP stamped
-%% on each.
+%% Validates endpoints, resolves class membership and template scope, then
+%% writes the two directed connection rows -- all in one graphdb_mgr:transaction/1
+%% (TOCTOU-isolated).  The rel-id pair is allocated up-front, outside the
+%% transaction: get_id_pair is a gen_server call and must never run inside an
+%% mnesia fun.  A validation abort orphans that pair -- harmless (allocate-
+%% outside-transaction doctrine).  Phase order: validate endpoints ->
+%% resolve classes -> resolve template -> validate scope -> write.
 %%-----------------------------------------------------------------------------
 do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateSpec, AVPSpec, State) ->
-	TkAttr = State#state.target_kind_avp_nref,
-	case validate_arc_endpoints(SourceNref, CharNref, TargetNref,
-			ReciprocalNref, TkAttr, State#state.retired_nref) of
-		ok ->
-			case resolve_arc_classes(SourceNref, TargetNref) of
-				{ok, SourceClass, TargetClass} ->
-					case resolve_template(TemplateSpec, SourceClass) of
-						{ok, TemplateNref} ->
-							case validate_template_scope(TemplateNref,
-									SourceClass, TargetClass) of
-								ok ->
-									write_connection_arcs(SourceNref,
-										CharNref, TargetNref,
-										ReciprocalNref, TemplateNref,
-										AVPSpec);
-								{error, _} = Err -> Err
-							end;
-						{error, _} = Err -> Err
-					end;
-				{error, _} = Err -> Err
-			end;
-		{error, _} = Err ->
-			Err
+	TkAttr  = State#state.target_kind_avp_nref,
+	RetAttr = State#state.retired_nref,
+	%% Allocate the rel-id pair up-front, OUTSIDE the transaction: get_id_pair
+	%% is a gen_server call and must never run inside an mnesia fun.  A
+	%% validation abort below orphans this pair -- harmless (allocate-outside-
+	%% transaction doctrine).
+	IdPair = rel_id_server:get_id_pair(),
+	Txn = fun() ->
+		ok = validate_arc_endpoints_in_txn(SourceNref, CharNref, TargetNref,
+			ReciprocalNref, TkAttr, RetAttr),
+		{SourceClass, TargetClass} =
+			resolve_arc_classes_in_txn(SourceNref, TargetNref),
+		TemplateNref = resolve_template_in_txn(TemplateSpec, SourceClass),
+		ok = validate_template_scope_in_txn(TemplateNref, SourceClass,
+			TargetClass),
+		Rows = build_connection_rows(IdPair, SourceNref, CharNref, TargetNref,
+			ReciprocalNref, TemplateNref, AVPSpec),
+		lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
+			Rows)
+	end,
+	case graphdb_mgr:transaction(Txn) of
+		{ok, ok}         -> ok;
+		{error, _} = Err -> Err
 	end.
 
 
 %%-----------------------------------------------------------------------------
-%% validate_arc_endpoints(Source, Char, Target, Reciprocal, TkAttr, RetAttr) ->
-%%     ok | {error, term()}
+%% validate_arc_endpoints_in_txn(Source, Char, Target, Reciprocal, TkAttr,
+%%     RetAttr) -> ok    (aborts the enclosing transaction on any violation)
 %%
-%% Arc validation.  Reads all four nodes inside one mnesia transaction
-%% and rejects:
-%%   - missing source / target / characterization / reciprocal
-%%   - any endpoint that is retired (retired => true AVP under RetAttr);
-%%     reports the first retired nref as {endpoint_retired, Nref}
-%%   - characterization or reciprocal that is not kind=attribute
-%%   - target whose kind disagrees with the characterization's
-%%     `target_kind` AVP (the value stored under attribute=TkAttr)
+%% In-transaction endpoint validation.  Assumes it runs inside an active mnesia
+%% activity; reads the four nodes with bare mnesia:read and signals every
+%% violation via mnesia:abort/1 (same Reason terms as the prior own-txn form).
 %%-----------------------------------------------------------------------------
-validate_arc_endpoints(SourceNref, CharNref, TargetNref, ReciprocalNref,
+validate_arc_endpoints_in_txn(SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TkAttr, RetAttr) ->
-	F = fun() ->
-		Source = mnesia:read(nodes, SourceNref),
-		Target = mnesia:read(nodes, TargetNref),
-		Char   = mnesia:read(nodes, CharNref),
-		Recip  = mnesia:read(nodes, ReciprocalNref),
-		case {Source, Target, Char, Recip} of
-			{[], _, _, _} ->
-				mnesia:abort({source_not_found, SourceNref});
-			{_, [], _, _} ->
-				mnesia:abort({target_not_found, TargetNref});
-			{_, _, [], _} ->
-				mnesia:abort({characterization_not_found, CharNref});
-			{_, _, _, []} ->
-				mnesia:abort({reciprocal_not_found, ReciprocalNref});
-			{[#node{attribute_value_pairs = SAVPs}],
-			 [#node{kind = TKind, attribute_value_pairs = TAVPs}],
-			 [#node{kind = CKind, attribute_value_pairs = CAVPs} = CharNode],
-			 [#node{kind = RKind, attribute_value_pairs = RAVPs}]} ->
-				case first_retired([{SourceNref, SAVPs}, {TargetNref, TAVPs},
-									 {CharNref, CAVPs}, {ReciprocalNref, RAVPs}],
-								   RetAttr) of
-					{retired, RNref} ->
-						mnesia:abort({endpoint_retired, RNref});
-					none ->
-						case {CKind, RKind} of
-							{attribute, attribute} ->
-								case check_target_kind(CharNode, TKind, TkAttr) of
-									ok              -> ok;
-									{error, Reason} -> mnesia:abort(Reason)
-								end;
-							{attribute, _} ->
-								mnesia:abort({reciprocal_not_an_attribute,
-									ReciprocalNref, RKind});
-							{_, _} ->
-								mnesia:abort({characterization_not_an_attribute,
-									CharNref, CKind})
-						end
-				end
-		end
-	end,
-	case graphdb_mgr:transaction(F) of
-		{ok, ok}         -> ok;
-		{error, _} = Err -> Err
+	Source = mnesia:read(nodes, SourceNref),
+	Target = mnesia:read(nodes, TargetNref),
+	Char   = mnesia:read(nodes, CharNref),
+	Recip  = mnesia:read(nodes, ReciprocalNref),
+	case {Source, Target, Char, Recip} of
+		{[], _, _, _} ->
+			mnesia:abort({source_not_found, SourceNref});
+		{_, [], _, _} ->
+			mnesia:abort({target_not_found, TargetNref});
+		{_, _, [], _} ->
+			mnesia:abort({characterization_not_found, CharNref});
+		{_, _, _, []} ->
+			mnesia:abort({reciprocal_not_found, ReciprocalNref});
+		{[#node{attribute_value_pairs = SAVPs}],
+		 [#node{kind = TKind, attribute_value_pairs = TAVPs}],
+		 [#node{kind = CKind, attribute_value_pairs = CAVPs} = CharNode],
+		 [#node{kind = RKind, attribute_value_pairs = RAVPs}]} ->
+			case first_retired([{SourceNref, SAVPs}, {TargetNref, TAVPs},
+								 {CharNref, CAVPs}, {ReciprocalNref, RAVPs}],
+							   RetAttr) of
+				{retired, RNref} ->
+					mnesia:abort({endpoint_retired, RNref});
+				none ->
+					case {CKind, RKind} of
+						{attribute, attribute} ->
+							case check_target_kind(CharNode, TKind, TkAttr) of
+								ok              -> ok;
+								{error, Reason} -> mnesia:abort(Reason)
+							end;
+						{attribute, _} ->
+							mnesia:abort({reciprocal_not_an_attribute,
+								ReciprocalNref, RKind});
+						{_, _} ->
+							mnesia:abort({characterization_not_an_attribute,
+								CharNref, CKind})
+					end
+			end
 	end.
 
 %% first_retired([{Nref, AVPs}], RetAttr) -> {retired, Nref} | none
@@ -1297,56 +1287,63 @@ check_target_kind(#node{attribute_value_pairs = AVPs}, ActualKind, TkAttr) ->
 
 
 %%-----------------------------------------------------------------------------
-%% resolve_arc_classes(SourceNref, TargetNref) ->
-%%     {ok, SourceClass, TargetClass} | {error, term()}
-%%-----------------------------------------------------------------------------
-resolve_arc_classes(SourceNref, TargetNref) ->
-	case do_class_of(SourceNref) of
-		{ok, SourceClass} ->
-			case do_class_of(TargetNref) of
-				{ok, TargetClass}  -> {ok, SourceClass, TargetClass};
-				not_found          -> {error, {target_has_no_class, TargetNref}};
-				{error, _} = Err   -> Err
-			end;
-		not_found            -> {error, {source_has_no_class, SourceNref}};
-		{error, _} = Err     -> Err
-	end.
-
-
-%%-----------------------------------------------------------------------------
-%% resolve_template(TemplateSpec, SourceClass) ->
-%%     {ok, TemplateNref} | {error, term()}
-%%-----------------------------------------------------------------------------
-resolve_template(default, SourceClass) ->
-	case graphdb_class:default_template(SourceClass) of
-		{ok, Nref}        -> {ok, Nref};
-		not_found         -> {error, no_default_template};
-		{error, _} = Err  -> Err
-	end;
-resolve_template(TemplateNref, _SourceClass) when is_integer(TemplateNref) ->
-	{ok, TemplateNref}.
-
-
-%%-----------------------------------------------------------------------------
-%% validate_template_scope(TemplateNref, SourceClass, TargetClass) ->
-%%     ok | {error, term()}
+%% resolve_arc_classes_in_txn(SourceNref, TargetNref) ->
+%%     {SourceClass, TargetClass}    (aborts on a missing class)
 %%
-%% Confirms TemplateNref resolves to a kind=template node whose parent
-%% class is in SourceClass's or TargetClass's taxonomic ancestry.
+%% In-transaction class resolution.  class_of_in_txn returns only {ok,_} |
+%% not_found inside a txn (a read error aborts the txn directly), so the
+%% no-class arms abort with the same Reason terms the prior form returned.
 %%-----------------------------------------------------------------------------
-validate_template_scope(TemplateNref, SourceClass, TargetClass) ->
-	case graphdb_class:get_template(TemplateNref) of
+resolve_arc_classes_in_txn(SourceNref, TargetNref) ->
+	SourceClass = case class_of_in_txn(SourceNref) of
+		{ok, SC}  -> SC;
+		not_found -> mnesia:abort({source_has_no_class, SourceNref})
+	end,
+	TargetClass = case class_of_in_txn(TargetNref) of
+		{ok, TC}  -> TC;
+		not_found -> mnesia:abort({target_has_no_class, TargetNref})
+	end,
+	{SourceClass, TargetClass}.
+
+
+%%-----------------------------------------------------------------------------
+%% resolve_template_in_txn(TemplateSpec, SourceClass) -> TemplateNref
+%%     (aborts no_default_template when `default' is requested but absent)
+%%-----------------------------------------------------------------------------
+resolve_template_in_txn(default, SourceClass) ->
+	case graphdb_class:default_template_in_txn(SourceClass) of
+		{ok, Nref} -> Nref;
+		not_found  -> mnesia:abort(no_default_template)
+	end;
+resolve_template_in_txn(TemplateNref, _SourceClass)
+		when is_integer(TemplateNref) ->
+	TemplateNref.
+
+
+%%-----------------------------------------------------------------------------
+%% validate_template_scope_in_txn(TemplateNref, SourceClass, TargetClass) -> ok
+%%     (aborts invalid_template / template_class_not_in_ancestry)
+%%
+%% Confirms TemplateNref resolves to a kind=template node whose parent class is
+%% in SourceClass's or TargetClass's taxonomic ancestry.  The nested Reason in
+%% {invalid_template, _, Reason} is byte-identical to the gen-server get_template
+%% form: get_template_in_txn returns the same {error, not_a_template|not_found}.
+%%-----------------------------------------------------------------------------
+validate_template_scope_in_txn(TemplateNref, SourceClass, TargetClass) ->
+	case graphdb_class:get_template_in_txn(TemplateNref) of
 		{ok, #node{parents = TmplParents}} ->
 			TmplClass = head_parent(TmplParents),
-			InSource = graphdb_class:class_in_ancestry(TmplClass, SourceClass),
-			InTarget = graphdb_class:class_in_ancestry(TmplClass, TargetClass),
+			InSource = graphdb_class:class_in_ancestry_in_txn(TmplClass,
+				SourceClass),
+			InTarget = graphdb_class:class_in_ancestry_in_txn(TmplClass,
+				TargetClass),
 			case InSource orelse InTarget of
 				true  -> ok;
-				false -> {error, {template_class_not_in_ancestry,
-					TemplateNref, TmplClass, SourceClass, TargetClass}}
+				false -> mnesia:abort({template_class_not_in_ancestry,
+					TemplateNref, TmplClass, SourceClass, TargetClass})
 			end;
 		{error, Reason} ->
-			{error, {invalid_template, TemplateNref, Reason}}
+			mnesia:abort({invalid_template, TemplateNref, Reason})
 	end.
 
 
@@ -1360,8 +1357,19 @@ validate_template_scope(TemplateNref, SourceClass, TargetClass) ->
 %% composition root txn; auto connections are written post-commit).
 %%-----------------------------------------------------------------------------
 build_connection_rows(SourceNref, CharNref, TargetNref, ReciprocalNref,
-		TemplateNref, {FwdAVPs, RevAVPs}) ->
-	{Id1, Id2} = rel_id_server:get_id_pair(),
+		TemplateNref, AVPSpec) ->
+	IdPair = rel_id_server:get_id_pair(),
+	build_connection_rows(IdPair, SourceNref, CharNref, TargetNref,
+		ReciprocalNref, TemplateNref, AVPSpec).
+
+%% build_connection_rows({Id1, Id2}, S, C, T, R, TemplateNref, {FwdAVPs,RevAVPs})
+%%   -> [{relationships, #relationship{}}]
+%%
+%% Pure builder: no allocation.  The caller supplies the rel-id pair (allocated
+%% up-front, outside any transaction) so the rows can be built inside a caller's
+%% transaction.  Template AVP rides index 0 of each direction.
+build_connection_rows({Id1, Id2}, SourceNref, CharNref, TargetNref,
+		ReciprocalNref, TemplateNref, {FwdAVPs, RevAVPs}) ->
 	TemplateAVP = #{attribute => ?ARC_TEMPLATE, value => TemplateNref},
 	Fwd = #relationship{
 		id = Id1, kind = connection,
@@ -1493,6 +1501,25 @@ do_class_of(InstanceNref) ->
 			{ok, ClassNref};
 		{ok, false}     -> not_found;
 		{error, Reason} -> {error, Reason}
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% class_of_in_txn(InstanceNref) -> {ok, ClassNref} | not_found
+%%
+%% Tier-1 in-transaction twin of do_class_of/1.  Assumes it runs inside an
+%% active mnesia activity; uses a bare index_read.  do_class_of/1 keeps its
+%% own transaction for its public class_of caller.
+%%-----------------------------------------------------------------------------
+class_of_in_txn(InstanceNref) ->
+	Rels = mnesia:index_read(relationships, InstanceNref,
+		#relationship.source_nref),
+	case lists:search(
+			fun(R) ->
+				R#relationship.characterization =:= ?ARC_INST_TO_CLASS
+			end, Rels) of
+		{value, #relationship{target_nref = ClassNref}} -> {ok, ClassNref};
+		false                                           -> not_found
 	end.
 
 
