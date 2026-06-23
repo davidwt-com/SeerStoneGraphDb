@@ -123,6 +123,7 @@
 		templates_for_class/1,
 		default_template/1,
 		default_template_in_txn/1,
+		find_template_by_name_in_txn/2,
 		is_instantiable/1,
 		%% Class-ancestry + template-scope helpers (used by graphdb_instance
 		%% to validate Template AVP class scope on Connection arcs)
@@ -699,18 +700,12 @@ do_write_template(ClassNref, Name) ->
 %% filter ensures we only return templates.
 %%-----------------------------------------------------------------------------
 do_find_template_by_name(ClassNref, Name) ->
-	F = fun() ->
-		Children = downward_children_by_arc(ClassNref, ?ARC_CLS_CHILD,
-			composition),
-		lists:search(fun
-			(#node{kind = template} = N) -> template_has_name(N, Name);
-			(_)                           -> false
-		end, Children)
-	end,
-	case graphdb_mgr:transaction(F) of
-		{ok, {value, #node{nref = Nref}}} -> {ok, Nref};
-		{ok, false}                       -> not_found;
-		{error, _}                        -> not_found
+	case graphdb_mgr:transaction(fun() ->
+			find_template_by_name_in_txn(ClassNref, Name)
+		end) of
+		{ok, {ok, Nref}} -> {ok, Nref};
+		{ok, not_found}  -> not_found;
+		{error, _}       -> not_found
 	end.
 
 template_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
@@ -720,24 +715,32 @@ template_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 	end, AVPs).
 
 %%-----------------------------------------------------------------------------
-%% default_template_in_txn(ClassNref) -> {ok, Nref} | not_found
+%% find_template_by_name_in_txn(ClassNref, Name) -> {ok, Nref} | not_found
 %%
-%% Tier-1 in-transaction twin of default_template/1.  Assumes it runs inside an
-%% active mnesia activity; reuses the bare-mnesia downward_children_by_arc/3 and
-%% template_has_name/2.  Returns not_found when ClassNref has no template named
-%% ?DEFAULT_TEMPLATE_NAME (e.g. an abstract class).
+%% Tier-1 in-transaction primitive.  Assumes it runs inside an active mnesia
+%% activity; reuses the bare-mnesia downward_children_by_arc/3 and
+%% template_has_name/2.  Returns the kind=template child of ClassNref whose
+%% class NameAttrNref (19) value equals Name, or not_found.
 %%-----------------------------------------------------------------------------
-default_template_in_txn(ClassNref) ->
+find_template_by_name_in_txn(ClassNref, Name) ->
 	Children = downward_children_by_arc(ClassNref, ?ARC_CLS_CHILD, composition),
 	case lists:search(fun
-			(#node{kind = template} = N) ->
-				template_has_name(N, ?DEFAULT_TEMPLATE_NAME);
-			(_) ->
-				false
+			(#node{kind = template} = N) -> template_has_name(N, Name);
+			(_)                           -> false
 		end, Children) of
 		{value, #node{nref = Nref}} -> {ok, Nref};
 		false                       -> not_found
 	end.
+
+%%-----------------------------------------------------------------------------
+%% default_template_in_txn(ClassNref) -> {ok, Nref} | not_found
+%%
+%% Tier-1 in-transaction twin of default_template/1.  Delegates to
+%% find_template_by_name_in_txn/2 with ?DEFAULT_TEMPLATE_NAME.  Returns
+%% not_found when ClassNref has no default template (e.g. an abstract class).
+%%-----------------------------------------------------------------------------
+default_template_in_txn(ClassNref) ->
+	find_template_by_name_in_txn(ClassNref, ?DEFAULT_TEMPLATE_NAME).
 
 
 %%-----------------------------------------------------------------------------

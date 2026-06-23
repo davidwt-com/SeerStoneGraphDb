@@ -84,6 +84,9 @@
 	default_template_in_txn_returns_default/1,
 	default_template_in_txn_abstract_not_found/1,
 	default_template_in_txn_not_found_after_delete/1,
+	find_template_by_name_in_txn_found/1,
+	find_template_by_name_in_txn_discriminates/1,
+	find_template_by_name_in_txn_not_found/1,
 	class_in_ancestry_self/1,
 	class_in_ancestry_ancestor/1,
 	class_in_ancestry_unrelated/1,
@@ -174,6 +177,9 @@ groups() ->
 			default_template_in_txn_returns_default,
 			default_template_in_txn_abstract_not_found,
 			default_template_in_txn_not_found_after_delete,
+			find_template_by_name_in_txn_found,
+			find_template_by_name_in_txn_discriminates,
+			find_template_by_name_in_txn_not_found,
 			class_in_ancestry_self,
 			class_in_ancestry_ancestor,
 			class_in_ancestry_unrelated,
@@ -633,6 +639,46 @@ default_template_in_txn_not_found_after_delete(_Config) ->
 	end),
 	?assertEqual({ok, not_found}, graphdb_mgr:transaction(fun() ->
 		graphdb_class:default_template_in_txn(ClassNref)
+	end)).
+
+%%-----------------------------------------------------------------------------
+%% find_template_by_name_in_txn resolves a named (non-default) template child
+%% and returns it distinct from the auto-created default template.
+%%-----------------------------------------------------------------------------
+find_template_by_name_in_txn_found(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, Default}   = graphdb_class:default_template(ClassNref),
+	{ok, Bio}       = graphdb_class:add_template(ClassNref, "biological"),
+	?assertNotEqual(Default, Bio),
+	?assertEqual({ok, {ok, Bio}}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:find_template_by_name_in_txn(ClassNref, "biological")
+	end)).
+
+%%-----------------------------------------------------------------------------
+%% find_template_by_name_in_txn selects by name: searching the same class for
+%% "default" returns the default template, not the named one (proves the name
+%% selects rather than first-match).
+%%-----------------------------------------------------------------------------
+find_template_by_name_in_txn_discriminates(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	{ok, Default}   = graphdb_class:default_template(ClassNref),
+	{ok, Bio}       = graphdb_class:add_template(ClassNref, "biological"),
+	?assertNotEqual(Default, Bio),
+	?assertEqual({ok, {ok, Default}}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:find_template_by_name_in_txn(ClassNref, "default")
+	end)).
+
+%%-----------------------------------------------------------------------------
+%% find_template_by_name_in_txn returns not_found for a name no template
+%% carries.
+%%-----------------------------------------------------------------------------
+find_template_by_name_in_txn_not_found(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, ClassNref} = graphdb_class:create_class("Animal", 3),
+	?assertEqual({ok, not_found}, graphdb_mgr:transaction(fun() ->
+		graphdb_class:find_template_by_name_in_txn(ClassNref, "nonexistent")
 	end)).
 
 %%-----------------------------------------------------------------------------
