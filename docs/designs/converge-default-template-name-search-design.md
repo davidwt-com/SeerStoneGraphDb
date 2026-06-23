@@ -127,9 +127,21 @@ caller's txn); `do_find_template_by_name/2` opens exactly one txn around it.
 - **Three new CT cases** in `graphdb_class_SUITE` for the newly exported
   primitive, invoked via `graphdb_mgr:transaction/1` (so results read as
   `{ok, {ok, Nref}}` / `{ok, not_found}`):
-  1. found-by-name — a named template child resolves to its nref;
-  2. name-not-found — an absent name resolves to `not_found`;
-  3. non-template-child-with-matching-name is ignored (the kind filter holds).
+  1. found-by-name — a named template child (e.g. `"biological"`) resolves to
+     its nref, distinct from the auto-created default template;
+  2. discriminates-by-name — searching the same class for `"default"` resolves
+     to the default template nref, proving the name selects the right template
+     rather than returning first-match;
+  3. name-not-found — an absent name resolves to `not_found`.
+
+  The `kind = template` guard's reject branch is unreachable through the
+  public API (composition children of a class with arc 26 are templates by
+  construction; subclasses attach via a taxonomy arc and are filtered out by
+  `downward_children_by_arc/3`'s `composition` kind filter before the guard
+  runs). The guard stays in the code for behaviour preservation but is not
+  exercised by an artificial injected-state test; a reject-branch test would
+  be added if a future caller (e.g. `mutate/1`) ever makes non-template
+  composition children reachable.
 
 ## Docs
 
