@@ -147,14 +147,14 @@ Tracked follow-ups (not in the seam spec):
   `docs/designs/atomic-add-relationship-design.md`; plan
   `docs/superpowers/plans/2026-06-21-atomic-add-relationship.md`.
 - **Batch `mutate([Mutation])`** — the tier-3 entry point.
-- **Converge default-template name search** — `graphdb_class` carries two
-  copies of the default-template name-search walk: the gen-server
-  `do_find_template_by_name/2` (own txn) and the tier-1
-  `default_template_in_txn/1` (PR 1). `do_default_template/1` already wraps its
-  own transaction, so it could be rewritten to call `default_template_in_txn/1`
-  inside that txn, removing the duplication.
-  Deliberately deferred (the duplication is sanctioned project precedent);
-  a future cleanup, not blocking anything.
+- **Converge default-template name search** — IMPLEMENTED. The shared walk is
+  now `graphdb_class:find_template_by_name_in_txn/2` (exported tier-1
+  in-transaction primitive). `default_template_in_txn/1` delegates to it with
+  `?DEFAULT_TEMPLATE_NAME`; `do_find_template_by_name/2` wraps one
+  `graphdb_mgr:transaction/1` around it (preserving the `{error,_}->not_found`
+  swallow). Behaviour-preserving; +3 CT cases. Design
+  `docs/designs/converge-default-template-name-search-design.md`; plan
+  `docs/superpowers/plans/2026-06-22-converge-default-template-name-search.md`.
 
 ### Node deletion (slice A) — IMPLEMENTED
 

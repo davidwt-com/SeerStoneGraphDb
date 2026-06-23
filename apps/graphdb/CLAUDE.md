@@ -248,11 +248,14 @@ Manages the "is a" hierarchy of class nodes in the ontology.
 - `is_instantiable/1` (class_nref) — `false` iff the class carries the `instantiable => false` marker
 - `get_class/1`, `subclasses/1`, `ancestors/1`, `inherited_qcs/1`
 - `get_template_in_txn/1`, `class_in_ancestry_in_txn/2`,
-  `default_template_in_txn/1` — tier-1 **in-transaction** read primitives
-  (bare-mnesia twins of `get_template`/`class_in_ancestry`/`default_template`);
+  `default_template_in_txn/1`, `find_template_by_name_in_txn/2` — tier-1
+  **in-transaction** read primitives (bare-mnesia twins of
+  `get_template`/`class_in_ancestry`/`default_template`/`do_find_template_by_name`);
   must be called inside an Mnesia activity. They compose into a caller's single
   transaction (the seam's tier-1 contract) and are the prerequisite for atomic
-  `add_relationship` / `mutate/1`. See
+  `add_relationship` / `mutate/1`. `find_template_by_name_in_txn/2` is the
+  generic by-name template search that `default_template_in_txn/1` delegates
+  to (with `?DEFAULT_TEMPLATE_NAME`). See
   `docs/designs/atomic-add-relationship-primitives-design.md`.
 - `validate_template_scope_in_txn/3` (template_nref, source_class,
   target_class) — in-transaction helper (aborts on failure): confirms the
