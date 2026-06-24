@@ -146,7 +146,18 @@ Tracked follow-ups (not in the seam spec):
   `target_has_no_class`). Design
   `docs/designs/atomic-add-relationship-design.md`; plan
   `docs/superpowers/plans/2026-06-21-atomic-add-relationship.md`.
-- **Batch `mutate([Mutation])`** — the tier-3 entry point.
+- **Batch `mutate([Mutation])`** — IMPLEMENTED. Tier-3 batch entry point
+  `graphdb_mgr:mutate/1`: applies an ordered list of `add_relationship` /
+  `retire_node` / `unretire_node` mutations atomically in one
+  `graphdb_mgr:transaction/1`, composing tier-1 primitives directly. Opaque
+  bare-reason contract (`{ok, [ok, ...]}` | `{error, Reason}`, whole-batch
+  rollback, `mutate([]) -> {ok, []}`). Phase 2 resolves the seeded attr
+  nrefs once and allocates one rel-id pair per `add_relationship` outside
+  the transaction; phase 3 folds the prepared list in order. Required one
+  behaviour-preserving extraction —
+  `graphdb_instance:add_relationship_in_txn/9`. Design
+  `docs/designs/batch-mutate-design.md`; plan
+  `docs/superpowers/plans/2026-06-24-batch-mutate.md`.
 - **Converge default-template name search** — IMPLEMENTED. The shared walk is
   now `graphdb_class:find_template_by_name_in_txn/2` (exported tier-1
   in-transaction primitive). `default_template_in_txn/1` delegates to it with

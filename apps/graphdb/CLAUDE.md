@@ -278,6 +278,12 @@ Creates and manages instance nodes in the project (instance space).
 
 - `create_instance/3,4,5` (name, class_nref, compositional_parent_nref [, connection_resolver [, conflict_resolver]]) — atomically writes the node record AND the instance→class membership relationship pair (arc labels nref=29 and nref=30), then fires composition rules (F4 B2). Returns `{ok, Nref, Report}` on success or `{error, Reason, Report}` on rule-firing failure; pre-plan validation errors (unknown class, non-instantiable class, etc.) return `{error, Reason}` (2-tuple). Rejects a class marked non-instantiable with `{error, {class_not_instantiable, ClassNref}}` (L9). Propose-mode composition rules surface as `proposed` outcomes in the report (B3); nothing is materialised for them. `/4` threads a connection **resolver** (`fun((ConnContext) -> {connect, [Target]} | defer end`): the RESOLVE step fires effective ConnectionRules (F4 B4) — `mandatory` connections to existing targets land in the root transaction, `auto` post-commit, `defer`/`propose` are reported only; targets are validated (exists, instance, instance-of target_class-or-subclass). `/3` uses the built-in `report_only` (defer-all) connection resolver, so connection rules surface as `required`/`not_connected`/`proposed` outcomes and nothing is connected. `/5` threads a B5 **conflict resolver** (`fun((#{kind, rules, class_nref}) -> [Pair])`); `/3` and `/4` inject the built-in `graphdb_rules:default_conflict_resolver/0`, which shadows conflicting inherited rules (nearest-level winner by mode priority), merges multiplicity (nearest Min, greatest Max), and demotes both-real-template losers to `propose` (F4 B5).
 - `add_relationship/4,5,6` (source_nref, characterization_nref, target_nref, reciprocal_nref [, template_nref [, {FwdAVPs, RevAVPs}]]) — validates endpoints, resolves source/target class and template scope, and writes the two directed `kind=connection` rows in a **single** `graphdb_mgr:transaction/1` (TOCTOU-isolated). The rel-id pair is allocated up-front (outside the transaction) via `rel_id_server:get_id_pair/0`. `/4` uses the source class's default template; `/5` takes an explicit template nref; `/6` adds per-direction AVPs.
+- `add_relationship_in_txn/9` (IdPair, S, C, T, R, TemplateSpec, AVPSpec,
+  TkAttr, RetAttr) — tier-1 **in-transaction** primitive (bare-mnesia twin
+  of `add_relationship`'s transaction body; aborts on failure, never opens
+  its own txn). The caller allocates the rel-id pair up-front.
+  `do_add_relationship/7` (tier-2) and `graphdb_mgr:mutate/1` (tier-3) both
+  compose it into their single transaction.
 - `add_class_membership/2` (instance_nref, class_nref) — adds a membership arc pair; also rejects a non-instantiable class target with `{error, {class_not_instantiable, ClassNref}}` (L9)
 - `get_instance/1`, `children/1`, `compositional_ancestors/1`, `resolve_value/2`
 
@@ -371,6 +377,13 @@ Single public entry point; delegates to the five specialized workers.
 - In `init/1`: checks if `nodes` table is empty; if so, calls `graphdb_bootstrap:load/0`
 - Rejects any runtime request to create, modify, or delete a `category` node with `{error, category_nodes_are_immutable}`
 - Sequences Nref allocation → record write → Nref confirmation
+- `mutate/1` — tier-3 batch entry point. Applies an ordered list of
+  `add_relationship` / `retire_node` / `unretire_node` mutations atomically
+  in one `transaction/1` (all commit or none). Tagged-tuple grammar; opaque
+  bare-reason contract `{ok, [ok, ...]}` | `{error, Reason}` with whole-batch
+  rollback; `mutate([]) -> {ok, []}`. A **plain function**, not a
+  `gen_server:call` — it owns the transaction in the caller's process. See
+  `docs/designs/batch-mutate-design.md`.
 
 ---
 
