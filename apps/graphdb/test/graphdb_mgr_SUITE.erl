@@ -110,7 +110,9 @@
 	mutate_atomic_rollback/1,
 	mutate_read_your_writes_rollback/1,
 	mutate_malformed_term/1,
-	mutate_permanent_tier_guard/1
+	mutate_permanent_tier_guard/1,
+	mutate_add_relationship_explicit_template/1,
+	mutate_add_relationship_with_avps/1
 ]).
 
 
@@ -188,7 +190,9 @@ groups() ->
 			mutate_atomic_rollback,
 			mutate_read_your_writes_rollback,
 			mutate_malformed_term,
-			mutate_permanent_tier_guard
+			mutate_permanent_tier_guard,
+			mutate_add_relationship_explicit_template,
+			mutate_add_relationship_with_avps
 		]}
 	].
 
@@ -255,7 +259,9 @@ init_per_testcase(TC, Config) when
 		TC =:= mutate_atomic_rollback;
 		TC =:= mutate_read_your_writes_rollback;
 		TC =:= mutate_malformed_term;
-		TC =:= mutate_permanent_tier_guard ->
+		TC =:= mutate_permanent_tier_guard;
+		TC =:= mutate_add_relationship_explicit_template;
+		TC =:= mutate_add_relationship_with_avps ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
@@ -1086,3 +1092,65 @@ mutate_permanent_tier_guard(_Config) ->
 	?assertEqual(false, lists:any(
 		fun(#{attribute := A, value := true}) when A =:= RetAttr -> true;
 		   (_) -> false end, AVPs)).
+
+%%-----------------------------------------------------------------------------
+%% mutate accepts the 6-element add_relationship form with an explicit
+%% template nref; the Template AVP on the written arc is that template.
+%%-----------------------------------------------------------------------------
+mutate_add_relationship_explicit_template(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MTmplClass", 3),
+	{ok, AltTmpl} = graphdb_class:add_template(ClassNref, "msocial"),
+	{ok, A, _} = graphdb_instance:create_instance("MTA", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("MTB", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("MTKnows", "MTKnownBy",
+			instance),
+	?assertEqual({ok, [ok]},
+		graphdb_mgr:mutate(
+			[{add_relationship, A, Char, B, Recip, AltTmpl}])),
+	{atomic, ARels} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, A, #relationship.source_nref)
+	end),
+	[Fwd] = [R || R <- ARels,
+		R#relationship.characterization =:= Char,
+		R#relationship.target_nref =:= B],
+	?assert(lists:member(#{attribute => ?ARC_TEMPLATE, value => AltTmpl},
+		Fwd#relationship.avps)).
+
+%%-----------------------------------------------------------------------------
+%% mutate accepts the 7-element add_relationship form with per-direction
+%% AVPs; the forward AVP lands on the forward arc only and the reverse AVP
+%% on the reverse arc only.
+%%-----------------------------------------------------------------------------
+mutate_add_relationship_with_avps(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MAvpClass", 3),
+	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
+	{ok, A, _} = graphdb_instance:create_instance("MAvA", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("MAvB", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("MAvKnows", "MAvKnownBy",
+			instance),
+	{ok, Source}     = graphdb_attr:create_literal_attribute("msource", string),
+	{ok, Confidence} = graphdb_attr:create_literal_attribute("mconf",   float),
+	FwdOnly = #{attribute => Source,     value => "research-paper"},
+	RevOnly = #{attribute => Confidence, value => 0.42},
+	?assertEqual({ok, [ok]},
+		graphdb_mgr:mutate(
+			[{add_relationship, A, Char, B, Recip, DefaultTmpl,
+				{[FwdOnly], [RevOnly]}}])),
+	{atomic, ARels} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, A, #relationship.source_nref)
+	end),
+	[Fwd] = [R || R <- ARels,
+		R#relationship.characterization =:= Char,
+		R#relationship.target_nref =:= B],
+	?assert(lists:member(FwdOnly,    Fwd#relationship.avps)),
+	?assertNot(lists:member(RevOnly, Fwd#relationship.avps)),
+	{atomic, BRels} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, B, #relationship.source_nref)
+	end),
+	[Rev] = [R || R <- BRels,
+		R#relationship.characterization =:= Recip,
+		R#relationship.target_nref =:= A],
+	?assert(lists:member(RevOnly,    Rev#relationship.avps)),
+	?assertNot(lists:member(FwdOnly, Rev#relationship.avps)).
