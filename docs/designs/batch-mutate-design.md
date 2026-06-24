@@ -92,7 +92,8 @@ do:
   id pair), so a successful batch is `{ok, [ok, ok, …]}`. The list length
   confirms every mutation applied.
 - **Failure:** `{error, Reason}` — the **bare** domain reason of the first
-  mutation that aborts (`not_found`, `retired`, `permanent_node_immutable`,
+  mutation that aborts (`not_found`, `{endpoint_retired, X}`,
+  `permanent_node_immutable`,
   …). The **whole batch is rolled back** (atomicity); no partial effects
   survive.
 - **Empty batch:** `mutate([]) -> {ok, []}` (vacuous, no transaction
@@ -142,9 +143,11 @@ Callers who need to localise a failure keep batches short or bisect.
 
 Mutations apply in **list order** inside one transaction, so each sees the
 *uncommitted* writes of those before it. Concretely,
-`[{retire_node, X}, {add_relationship, X, C, T, R}]` aborts with `retired`
-(the relationship's endpoint validation sees `X` already retired) and rolls
-back **both** mutations — `X` is not retired after the call. This is the
+`[{retire_node, X}, {add_relationship, X, C, T, R}]` aborts with
+`{endpoint_retired, X}` (the relationship's endpoint validation —
+`validate_arc_endpoints_in_txn` at `graphdb_instance.erl:1248` — sees `X`
+already carrying the uncommitted `retired` marker) and rolls back **both**
+mutations — `X` is not retired after the call. This is the
 correct, predictable semantics and is covered by a test (§7).
 
 ---
@@ -300,11 +303,17 @@ tables, per the suite's per-case isolation):
    relationship rows the first mutation wrote are **absent** (the batch
    rolled back). This is the core atomicity guarantee.
 6. **Read-your-writes rollback** —
-   `[{retire_node, X}, {add_relationship, X, C, T, R}]` → `{error, retired}`,
-   and `X` is **not** retired afterward (§3.4).
-7. **Malformed term** — `{error, {bad_mutation, M}}`; nothing written and
-   no rel-id allocated — phase 1 rejects the whole batch before phase 2
-   runs.
+   `[{retire_node, X}, {add_relationship, X, C, T, R}]` →
+   `{error, {endpoint_retired, X}}`, and `X` is **not** retired afterward
+   (§3.4).
+7. **Malformed term** — a batch containing a malformed tuple →
+   `{error, {bad_mutation, M}}`, and the well-formed mutation that preceded
+   it in the same batch left **no rows written** (phase 1 rejects the whole
+   batch before phase 2/3 run). The "no rel-id allocated" property is real
+   but not asserted: `rel_id_server` exposes no non-consuming peek, and
+   orphaned rel-ids are harmless by design (allocate-outside-transaction
+   doctrine), so the test asserts the *contract* — error reason + no rows —
+   not the internal allocation count.
 8. **Permanent-tier guard** — `{retire_node, NrefBelowStart}` →
    `{error, permanent_node_immutable}`; nothing written.
 
