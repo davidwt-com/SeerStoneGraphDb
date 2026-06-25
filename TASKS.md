@@ -158,6 +158,20 @@ Tracked follow-ups (not in the seam spec):
   `graphdb_instance:add_relationship_in_txn/9`. Design
   `docs/designs/batch-mutate-design.md`; plan
   `docs/superpowers/plans/2026-06-24-batch-mutate.md`.
+
+  Deferred extensions (design §1.3): the mutation grammar covers only
+  `add_relationship` / `retire_node` / `unretire_node` because those are the
+  only ops with tier-1 in-txn primitives today. Extend the grammar to the
+  other mutation kinds — `create_instance` / `create_class` /
+  `create_attribute`, `update_node_avps` (slice B), `delete_node` (real hard
+  delete), `remove_relationship` / `update_relationship` (slice E) — as each
+  grows a tier-1 primitive (creates also need a txn-safe nref-allocation path,
+  since today they allocate through a gen_server). **Symbolic back-references
+  between mutations** (`create A; relate A→B`) are a further extension on top
+  of those: they need the create primitives plus a bootstrap-style symbol
+  table, and are out of scope until creates land. Per-mutation indexed error
+  reporting was rejected on principle (design §3.3), not deferred — no entry
+  needed.
 - **Converge default-template name search** — IMPLEMENTED. The shared walk is
   now `graphdb_class:find_template_by_name_in_txn/2` (exported tier-1
   in-transaction primitive). `default_template_in_txn/1` delegates to it with
