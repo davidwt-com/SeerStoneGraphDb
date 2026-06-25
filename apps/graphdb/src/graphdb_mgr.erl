@@ -119,6 +119,8 @@
 		retire_node/1,
 		unretire_node/1,
 		update_node_avps/2,
+		%% Batch write (tier-3 entry point)
+		mutate/1,
 		%% Transaction helper (write-path seam)
 		transaction/1,
 		%% Cache invariant audit / repair
@@ -294,6 +296,119 @@ transaction(Fun) ->
 		{atomic,  Result} -> {ok, Result};
 		{aborted, Reason} -> {error, Reason}
 	end.
+
+
+%%-----------------------------------------------------------------------------
+%% mutate([Mutation]) -> {ok, [Result]} | {error, Reason}
+%%
+%% Tier-3 batch write entry point: applies an ordered list of mutations
+%% ATOMICALLY in one graphdb_mgr:transaction/1, composing the write-path
+%% seam's tier-1 primitives directly. All commit or none do.
+%%
+%% Mutation grammar (tagged tuples mirroring the public arities):
+%%   {add_relationship, S, C, T, R}                       default template, no AVPs
+%%   {add_relationship, S, C, T, R, Template}             explicit template nref
+%%   {add_relationship, S, C, T, R, Template, {Fwd, Rev}} + per-direction AVPs
+%%   {retire_node,   Nref}
+%%   {unretire_node, Nref}
+%%
+%% Returns {ok, [Result]} -- one native success value per mutation in list
+%% order (every op returns `ok` today, so {ok, [ok, ok, ...]}) -- or the bare
+%% {error, Reason} of the first aborting mutation with the whole batch rolled
+%% back. mutate([]) -> {ok, []} (no transaction opened).
+%%
+%% Three phases: (1) static validation -- tuple shape + the permanent-tier
+%% guard, no DB, no allocation; (2) a resource pre-pass OUTSIDE the
+%% transaction -- resolve the seeded attr nrefs once and allocate one rel-id
+%% pair per add_relationship (gen_server calls); (3) one transaction folding
+%% the prepared list in order, dispatching each to a tier-1 in-txn primitive.
+%%
+%% Plain function, not a gen_server:call -- mnesia:transaction/1 runs in the
+%% calling process and phase 2 calls OTHER gen_servers, so routing mutate
+%% through graphdb_mgr would needlessly serialise batches.
+%% See docs/designs/batch-mutate-design.md.
+%%-----------------------------------------------------------------------------
+-spec mutate([tuple()]) -> {ok, [term()]} | {error, term()}.
+mutate(Mutations) ->
+	case validate_mutations(Mutations) of
+		ok               -> run_mutations(Mutations);
+		{error, _} = Err -> Err
+	end.
+
+%% Phase 1: static validation. No DB access, no allocation. A malformed term
+%% -> {error, {bad_mutation, M}}; a permanent-tier retire/unretire ->
+%% {error, permanent_node_immutable} (the same static guard set_retired/3
+%% applies in the solo path).
+validate_mutations([]) ->
+	ok;
+validate_mutations([M | Rest]) ->
+	case validate_mutation(M) of
+		ok               -> validate_mutations(Rest);
+		{error, _} = Err -> Err
+	end.
+
+validate_mutation({add_relationship, _S, _C, _T, _R}) ->
+	ok;
+validate_mutation({add_relationship, _S, _C, _T, _R, _Template}) ->
+	ok;
+validate_mutation({add_relationship, _S, _C, _T, _R, _Template, {_Fwd, _Rev}}) ->
+	ok;
+validate_mutation({retire_node, Nref}) when is_integer(Nref) ->
+	tier_guard(Nref);
+validate_mutation({unretire_node, Nref}) when is_integer(Nref) ->
+	tier_guard(Nref);
+validate_mutation(M) ->
+	{error, {bad_mutation, M}}.
+
+tier_guard(Nref) when Nref >= ?NREF_START -> ok;
+tier_guard(_Nref)                         -> {error, permanent_node_immutable}.
+
+%% Phases 2 + 3. Precondition: Mutations already passed validate_mutations/1.
+%% Empty batch short-circuits with no transaction.
+run_mutations([]) ->
+	{ok, []};
+run_mutations(Mutations) ->
+	%% Phase 2 (outside the transaction): resolve the seeded attr nrefs once,
+	%% and allocate one rel-id pair per add_relationship.
+	{ok, #{target_kind := TkAttr, retired := RetAttr}} =
+		graphdb_attr:seeded_nrefs(),
+	Prepared = [prepare(M) || M <- Mutations],
+	%% Phase 3: one transaction folding the prepared list in order.
+	graphdb_mgr:transaction(fun() ->
+		[dispatch(P, TkAttr, RetAttr) || P <- Prepared]
+	end).
+
+%% Phase 2 per-mutation prep. Allocates one rel-id pair per add_relationship
+%% via rel_id_server (a gen_server call -- MUST stay outside the transaction)
+%% and normalises each add_relationship to the explicit
+%% (TemplateSpec, AVPSpec) form. retire/unretire need no resources.
+%% Prepared add_relationship shape:
+%%   {add_relationship, IdPair, S, C, T, R, TemplateSpec, AVPSpec}
+prepare({add_relationship, S, C, T, R}) ->
+	{add_relationship, rel_id_server:get_id_pair(), S, C, T, R,
+		default, {[], []}};
+prepare({add_relationship, S, C, T, R, Template}) ->
+	{add_relationship, rel_id_server:get_id_pair(), S, C, T, R,
+		Template, {[], []}};
+prepare({add_relationship, S, C, T, R, Template, AVPSpec}) ->
+	{add_relationship, rel_id_server:get_id_pair(), S, C, T, R,
+		Template, AVPSpec};
+prepare({retire_node, _Nref} = M) ->
+	M;
+prepare({unretire_node, _Nref} = M) ->
+	M.
+
+%% Phase 3 dispatch. Runs INSIDE the transaction: no gen_server calls, no
+%% transaction/1, no rel-id allocation here (all done in phase 2). Each
+%% tier-1 primitive returns ok or calls mnesia:abort/1.
+dispatch({add_relationship, IdPair, S, C, T, R, TemplateSpec, AVPSpec},
+		TkAttr, RetAttr) ->
+	graphdb_instance:add_relationship_in_txn(IdPair, S, C, T, R, TemplateSpec,
+		AVPSpec, TkAttr, RetAttr);
+dispatch({retire_node, Nref}, _TkAttr, RetAttr) ->
+	set_retired_(Nref, true, RetAttr);
+dispatch({unretire_node, Nref}, _TkAttr, RetAttr) ->
+	set_retired_(Nref, false, RetAttr).
 
 
 %%-----------------------------------------------------------------------------

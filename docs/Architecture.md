@@ -263,6 +263,10 @@ maintains. `graphdb_mgr` is the public entry point and routes to the
 workers — read path and soft-retire implemented; remaining write-side
 routing is pending (see [`../TASKS.md`](../TASKS.md)).
 
+The tier-3 batch entry point `graphdb_mgr:mutate/1` applies an ordered list
+of `add_relationship` / `retire_node` / `unretire_node` mutations atomically
+in one transaction, composing the tier-1 primitives directly.
+
 ---
 
 ## 6. Ontology and Project (Instance Space)

@@ -101,7 +101,18 @@
 	retire_node_is_idempotent/1,
 	retire_node_refuses_permanent_tier/1,
 	retire_node_not_found/1,
-	get_node_hides_retired/1
+	get_node_hides_retired/1,
+	%% Batch mutate
+	mutate_empty_batch/1,
+	mutate_single_add_relationship/1,
+	mutate_single_retire_and_unretire/1,
+	mutate_mixed_all_succeed/1,
+	mutate_atomic_rollback/1,
+	mutate_read_your_writes_rollback/1,
+	mutate_malformed_term/1,
+	mutate_permanent_tier_guard/1,
+	mutate_add_relationship_explicit_template/1,
+	mutate_add_relationship_with_avps/1
 ]).
 
 
@@ -116,7 +127,7 @@ all() ->
 	[{group, init_tests}, {group, read_ops},
 	 {group, category_guard}, {group, write_delegation},
 	 {group, cache_audit}, {group, transaction_seam},
-	 {group, soft_retire}].
+	 {group, soft_retire}, {group, mutate}].
 
 groups() ->
 	[
@@ -170,6 +181,18 @@ groups() ->
 			retire_node_refuses_permanent_tier,
 			retire_node_not_found,
 			get_node_hides_retired
+		]},
+		{mutate, [], [
+			mutate_empty_batch,
+			mutate_single_add_relationship,
+			mutate_single_retire_and_unretire,
+			mutate_mixed_all_succeed,
+			mutate_atomic_rollback,
+			mutate_read_your_writes_rollback,
+			mutate_malformed_term,
+			mutate_permanent_tier_guard,
+			mutate_add_relationship_explicit_template,
+			mutate_add_relationship_with_avps
 		]}
 	].
 
@@ -228,7 +251,17 @@ init_per_testcase(TC, Config) when
 		TC =:= retire_node_is_idempotent;
 		TC =:= retire_node_refuses_permanent_tier;
 		TC =:= retire_node_not_found;
-		TC =:= get_node_hides_retired ->
+		TC =:= get_node_hides_retired;
+		TC =:= mutate_empty_batch;
+		TC =:= mutate_single_add_relationship;
+		TC =:= mutate_single_retire_and_unretire;
+		TC =:= mutate_mixed_all_succeed;
+		TC =:= mutate_atomic_rollback;
+		TC =:= mutate_read_your_writes_rollback;
+		TC =:= mutate_malformed_term;
+		TC =:= mutate_permanent_tier_guard;
+		TC =:= mutate_add_relationship_explicit_template;
+		TC =:= mutate_add_relationship_with_avps ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
@@ -907,3 +940,217 @@ get_node_hides_retired(_Config) ->
 	?assertEqual({error, retired}, graphdb_mgr:get_node(ClassNref)),
 	ok = graphdb_mgr:unretire_node(ClassNref),
 	{ok, #node{nref = ClassNref}} = graphdb_mgr:get_node(ClassNref).
+
+
+%%=============================================================================
+%% Batch mutate Tests
+%%
+%% mutate/1 applies an ordered list of mutations atomically in one
+%% transaction. Workers are pre-started in init_per_testcase for this group.
+%%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% Empty batch is a no-op: {ok, []}, no transaction opened.
+%%-----------------------------------------------------------------------------
+mutate_empty_batch(_Config) ->
+	?assertEqual({ok, []}, graphdb_mgr:mutate([])).
+
+%%-----------------------------------------------------------------------------
+%% A single add_relationship returns {ok, [ok]} and writes the arc.
+%%-----------------------------------------------------------------------------
+mutate_single_add_relationship(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MClassAR", 3),
+	{ok, InstA, _} = graphdb_instance:create_instance("MA", ClassNref, 5),
+	{ok, InstB, _} = graphdb_instance:create_instance("MB", ClassNref, 5),
+	{ok, {CharNref, RecipNref}} =
+		graphdb_attr:create_relationship_attribute_pair("MKnows", "MKnownBy",
+			instance),
+	?assertEqual({ok, [ok]},
+		graphdb_mgr:mutate(
+			[{add_relationship, InstA, CharNref, InstB, RecipNref}])),
+	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
+	Targets = [R#relationship.target_nref || R <- Rels,
+		R#relationship.characterization =:= CharNref],
+	?assertEqual([InstB], Targets).
+
+%%-----------------------------------------------------------------------------
+%% A single retire_node sets the marker; a single unretire_node clears it.
+%%-----------------------------------------------------------------------------
+mutate_single_retire_and_unretire(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MRetire", 3),
+	?assert(ClassNref >= ?NREF_START),
+	?assertEqual({ok, [ok]},
+		graphdb_mgr:mutate([{retire_node, ClassNref}])),
+	[#node{attribute_value_pairs = AVPs1}] =
+		mnesia:dirty_read(nodes, ClassNref),
+	?assert(lists:any(fun(#{value := true}) -> true; (_) -> false end, AVPs1)),
+	?assertEqual({ok, [ok]},
+		graphdb_mgr:mutate([{unretire_node, ClassNref}])),
+	[#node{attribute_value_pairs = AVPs2}] =
+		mnesia:dirty_read(nodes, ClassNref),
+	?assertEqual(false,
+		lists:any(fun(#{value := true}) -> true; (_) -> false end, AVPs2)).
+
+%%-----------------------------------------------------------------------------
+%% A mixed batch (two add_relationship + one retire) all succeeds: every
+%% effect is present after commit.
+%%-----------------------------------------------------------------------------
+mutate_mixed_all_succeed(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MMixed", 3),
+	{ok, InstA, _} = graphdb_instance:create_instance("MMA", ClassNref, 5),
+	{ok, InstB, _} = graphdb_instance:create_instance("MMB", ClassNref, 5),
+	{ok, InstC, _} = graphdb_instance:create_instance("MMC", ClassNref, 5),
+	{ok, {Ch1, Re1}} =
+		graphdb_attr:create_relationship_attribute_pair("MM1", "MM1r", instance),
+	{ok, {Ch2, Re2}} =
+		graphdb_attr:create_relationship_attribute_pair("MM2", "MM2r", instance),
+	Batch = [{add_relationship, InstA, Ch1, InstB, Re1},
+			 {add_relationship, InstA, Ch2, InstC, Re2},
+			 {retire_node, InstB}],
+	?assertEqual({ok, [ok, ok, ok]}, graphdb_mgr:mutate(Batch)),
+	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
+	Chars = lists:sort([R#relationship.characterization || R <- Rels,
+		R#relationship.characterization =:= Ch1 orelse
+		R#relationship.characterization =:= Ch2]),
+	?assertEqual(lists:sort([Ch1, Ch2]), Chars),
+	[#node{attribute_value_pairs = BAVPs}] = mnesia:dirty_read(nodes, InstB),
+	?assert(lists:any(fun(#{value := true}) -> true; (_) -> false end, BAVPs)).
+
+%%-----------------------------------------------------------------------------
+%% Atomic rollback: a valid add_relationship followed by a retire of a
+%% nonexistent node aborts with {error, not_found}, and the relationship the
+%% first mutation wrote is absent (the whole batch rolled back).
+%%-----------------------------------------------------------------------------
+mutate_atomic_rollback(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MRollback", 3),
+	{ok, InstA, _} = graphdb_instance:create_instance("MRA", ClassNref, 5),
+	{ok, InstB, _} = graphdb_instance:create_instance("MRB", ClassNref, 5),
+	{ok, {CharNref, RecipNref}} =
+		graphdb_attr:create_relationship_attribute_pair("MRKnows", "MRKnownBy",
+			instance),
+	BadNref = ?NREF_START + 999999,
+	Batch = [{add_relationship, InstA, CharNref, InstB, RecipNref},
+			 {retire_node, BadNref}],
+	?assertEqual({error, not_found}, graphdb_mgr:mutate(Batch)),
+	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
+	Targets = [R#relationship.target_nref || R <- Rels,
+		R#relationship.characterization =:= CharNref],
+	?assertEqual([], Targets).
+
+%%-----------------------------------------------------------------------------
+%% Read-your-writes rollback: retire X, then relate from X in the same batch.
+%% The relationship's endpoint validation sees X's uncommitted retired marker
+%% and aborts {endpoint_retired, X}; both mutations roll back, so X is NOT
+%% retired afterward.
+%%-----------------------------------------------------------------------------
+mutate_read_your_writes_rollback(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MRYW", 3),
+	{ok, InstA, _} = graphdb_instance:create_instance("MRYWA", ClassNref, 5),
+	{ok, InstB, _} = graphdb_instance:create_instance("MRYWB", ClassNref, 5),
+	{ok, {CharNref, RecipNref}} =
+		graphdb_attr:create_relationship_attribute_pair("MRYWK", "MRYWKr",
+			instance),
+	Batch = [{retire_node, InstA},
+			 {add_relationship, InstA, CharNref, InstB, RecipNref}],
+	?assertEqual({error, {endpoint_retired, InstA}},
+		graphdb_mgr:mutate(Batch)),
+	[#node{attribute_value_pairs = AVPs}] = mnesia:dirty_read(nodes, InstA),
+	?assertEqual(false,
+		lists:any(fun(#{value := true}) -> true; (_) -> false end, AVPs)).
+
+%%-----------------------------------------------------------------------------
+%% A malformed mutation term is rejected in phase 1 with
+%% {error, {bad_mutation, M}}; the well-formed mutation preceding it in the
+%% batch writes nothing (phase 1 rejects the whole batch before phase 2/3).
+%%-----------------------------------------------------------------------------
+mutate_malformed_term(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MBad", 3),
+	{ok, InstA, _} = graphdb_instance:create_instance("MBadA", ClassNref, 5),
+	{ok, InstB, _} = graphdb_instance:create_instance("MBadB", ClassNref, 5),
+	{ok, {CharNref, RecipNref}} =
+		graphdb_attr:create_relationship_attribute_pair("MBadK", "MBadKr",
+			instance),
+	Bad = {frobnicate, 1, 2},
+	Batch = [{add_relationship, InstA, CharNref, InstB, RecipNref}, Bad],
+	?assertEqual({error, {bad_mutation, Bad}}, graphdb_mgr:mutate(Batch)),
+	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
+	Targets = [R#relationship.target_nref || R <- Rels,
+		R#relationship.characterization =:= CharNref],
+	?assertEqual([], Targets).
+
+%%-----------------------------------------------------------------------------
+%% The permanent-tier guard rejects retire/unretire of a node below
+%% ?NREF_START with {error, permanent_node_immutable}, before any write.
+%% Asserts the bootstrap node carries no retired marker afterward
+%% (attribute-specific check -- node 27 may carry other AVPs).
+%%-----------------------------------------------------------------------------
+mutate_permanent_tier_guard(_Config) ->
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_mgr:mutate([{retire_node, 27}])),
+	{ok, #{retired := RetAttr}} = graphdb_attr:seeded_nrefs(),
+	[#node{attribute_value_pairs = AVPs}] = mnesia:dirty_read(nodes, 27),
+	?assertEqual(false, lists:any(
+		fun(#{attribute := A, value := true}) when A =:= RetAttr -> true;
+		   (_) -> false end, AVPs)).
+
+%%-----------------------------------------------------------------------------
+%% mutate accepts the 6-element add_relationship form with an explicit
+%% template nref; the Template AVP on the written arc is that template.
+%%-----------------------------------------------------------------------------
+mutate_add_relationship_explicit_template(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MTmplClass", 3),
+	{ok, AltTmpl} = graphdb_class:add_template(ClassNref, "msocial"),
+	{ok, A, _} = graphdb_instance:create_instance("MTA", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("MTB", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("MTKnows", "MTKnownBy",
+			instance),
+	?assertEqual({ok, [ok]},
+		graphdb_mgr:mutate(
+			[{add_relationship, A, Char, B, Recip, AltTmpl}])),
+	{atomic, ARels} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, A, #relationship.source_nref)
+	end),
+	[Fwd] = [R || R <- ARels,
+		R#relationship.characterization =:= Char,
+		R#relationship.target_nref =:= B],
+	?assert(lists:member(#{attribute => ?ARC_TEMPLATE, value => AltTmpl},
+		Fwd#relationship.avps)).
+
+%%-----------------------------------------------------------------------------
+%% mutate accepts the 7-element add_relationship form with per-direction
+%% AVPs; the forward AVP lands on the forward arc only and the reverse AVP
+%% on the reverse arc only.
+%%-----------------------------------------------------------------------------
+mutate_add_relationship_with_avps(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MAvpClass", 3),
+	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
+	{ok, A, _} = graphdb_instance:create_instance("MAvA", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("MAvB", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("MAvKnows", "MAvKnownBy",
+			instance),
+	{ok, Source}     = graphdb_attr:create_literal_attribute("msource", string),
+	{ok, Confidence} = graphdb_attr:create_literal_attribute("mconf",   float),
+	FwdOnly = #{attribute => Source,     value => "research-paper"},
+	RevOnly = #{attribute => Confidence, value => 0.42},
+	?assertEqual({ok, [ok]},
+		graphdb_mgr:mutate(
+			[{add_relationship, A, Char, B, Recip, DefaultTmpl,
+				{[FwdOnly], [RevOnly]}}])),
+	{atomic, ARels} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, A, #relationship.source_nref)
+	end),
+	[Fwd] = [R || R <- ARels,
+		R#relationship.characterization =:= Char,
+		R#relationship.target_nref =:= B],
+	?assert(lists:member(FwdOnly,    Fwd#relationship.avps)),
+	?assertNot(lists:member(RevOnly, Fwd#relationship.avps)),
+	{atomic, BRels} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, B, #relationship.source_nref)
+	end),
+	[Rev] = [R || R <- BRels,
+		R#relationship.characterization =:= Recip,
+		R#relationship.target_nref =:= A],
+	?assert(lists:member(RevOnly,    Rev#relationship.avps)),
+	?assertNot(lists:member(FwdOnly, Rev#relationship.avps)).

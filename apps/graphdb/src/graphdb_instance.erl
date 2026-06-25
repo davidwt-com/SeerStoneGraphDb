@@ -126,6 +126,8 @@
 		add_relationship/5,
 		add_relationship/6,
 		add_class_membership/2,
+		%% Tier-1 in-transaction primitive (write-path seam)
+		add_relationship_in_txn/9,
 		%% Lookups
 		get_instance/1,
 		children/1,
@@ -1192,26 +1194,46 @@ do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 	RetAttr = State#state.retired_nref,
 	%% Allocate the rel-id pair up-front, OUTSIDE the transaction: get_id_pair
 	%% is a gen_server call and must never run inside an mnesia fun.  A
-	%% validation abort below orphans this pair -- harmless (allocate-outside-
-	%% transaction doctrine).
+	%% validation abort inside the primitive orphans this pair -- harmless
+	%% (allocate-outside-transaction doctrine).
 	IdPair = rel_id_server:get_id_pair(),
-	Txn = fun() ->
-		ok = validate_arc_endpoints_in_txn(SourceNref, CharNref, TargetNref,
-			ReciprocalNref, TkAttr, RetAttr),
-		{SourceClass, TargetClass} =
-			resolve_arc_classes_in_txn(SourceNref, TargetNref),
-		TemplateNref = resolve_template_in_txn(TemplateSpec, SourceClass),
-		ok = graphdb_class:validate_template_scope_in_txn(TemplateNref,
-			SourceClass, TargetClass),
-		Rows = build_connection_rows(IdPair, SourceNref, CharNref, TargetNref,
-			ReciprocalNref, TemplateNref, AVPSpec),
-		lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
-			Rows)
-	end,
-	case graphdb_mgr:transaction(Txn) of
+	case graphdb_mgr:transaction(fun() ->
+			add_relationship_in_txn(IdPair, SourceNref, CharNref, TargetNref,
+				ReciprocalNref, TemplateSpec, AVPSpec, TkAttr, RetAttr)
+		end) of
 		{ok, ok}         -> ok;
 		{error, _} = Err -> Err
 	end.
+
+
+%%-----------------------------------------------------------------------------
+%% add_relationship_in_txn(IdPair, Source, Char, Target, Reciprocal,
+%%     TemplateSpec, AVPSpec, TkAttr, RetAttr) -> ok
+%%
+%% Tier-1 write-path primitive.  Must run inside an active mnesia transaction;
+%% never opens its own.  Validates endpoints, resolves source/target class and
+%% template scope, then writes the two directed connection rows -- all with
+%% bare mnesia ops, signalling any domain failure via mnesia:abort/1.  The
+%% rel-id pair must be allocated by the caller (get_id_pair is a gen_server
+%% call and must never run inside an mnesia fun).  Composes into a caller's
+%% single transaction (the write-path seam's tier-1 contract); used by both
+%% do_add_relationship/7 (tier-2) and graphdb_mgr:mutate/1 (tier-3).
+%% Phase order: validate endpoints -> resolve classes -> resolve template ->
+%% validate scope -> write.
+%%-----------------------------------------------------------------------------
+add_relationship_in_txn({_Id1, _Id2} = IdPair, SourceNref, CharNref,
+		TargetNref, ReciprocalNref, TemplateSpec, AVPSpec, TkAttr, RetAttr) ->
+	ok = validate_arc_endpoints_in_txn(SourceNref, CharNref, TargetNref,
+		ReciprocalNref, TkAttr, RetAttr),
+	{SourceClass, TargetClass} =
+		resolve_arc_classes_in_txn(SourceNref, TargetNref),
+	TemplateNref = resolve_template_in_txn(TemplateSpec, SourceClass),
+	ok = graphdb_class:validate_template_scope_in_txn(TemplateNref,
+		SourceClass, TargetClass),
+	Rows = build_connection_rows(IdPair, SourceNref, CharNref, TargetNref,
+		ReciprocalNref, TemplateNref, AVPSpec),
+	lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
+		Rows).
 
 
 %%-----------------------------------------------------------------------------
