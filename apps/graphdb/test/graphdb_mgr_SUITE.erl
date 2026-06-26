@@ -123,7 +123,11 @@
 	update_node_avps_retired_marker_rejected/1,
 	update_node_avps_not_found/1,
 	update_node_avps_permanent_tier/1,
-	update_node_avps_atomic_rollback/1
+	update_node_avps_atomic_rollback/1,
+	mutate_single_update_node_avps/1,
+	mutate_mixed_add_rel_and_update_avps/1,
+	mutate_update_avps_rollback/1,
+	mutate_update_avps_malformed/1
 ]).
 
 
@@ -203,7 +207,11 @@ groups() ->
 			mutate_malformed_term,
 			mutate_permanent_tier_guard,
 			mutate_add_relationship_explicit_template,
-			mutate_add_relationship_with_avps
+			mutate_add_relationship_with_avps,
+			mutate_single_update_node_avps,
+			mutate_mixed_add_rel_and_update_avps,
+			mutate_update_avps_rollback,
+			mutate_update_avps_malformed
 		]},
 		{update_avps, [], [
 			update_node_avps_upsert_roundtrip,
@@ -294,7 +302,11 @@ init_per_testcase(TC, Config) when
 		TC =:= update_node_avps_retired_marker_rejected;
 		TC =:= update_node_avps_not_found;
 		TC =:= update_node_avps_permanent_tier;
-		TC =:= update_node_avps_atomic_rollback ->
+		TC =:= update_node_avps_atomic_rollback;
+		TC =:= mutate_single_update_node_avps;
+		TC =:= mutate_mixed_add_rel_and_update_avps;
+		TC =:= mutate_update_avps_rollback;
+		TC =:= mutate_update_avps_malformed ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
@@ -1190,6 +1202,71 @@ mutate_add_relationship_with_avps(_Config) ->
 		R#relationship.target_nref =:= A],
 	?assert(lists:member(RevOnly,    Rev#relationship.avps)),
 	?assertNot(lists:member(FwdOnly, Rev#relationship.avps)).
+
+
+%%-----------------------------------------------------------------------------
+%% A single update_node_avps mutation returns {ok, [ok]} and writes the AVP.
+%%-----------------------------------------------------------------------------
+mutate_single_update_node_avps(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MUAClass", 3),
+	{ok, Inst, _} = graphdb_instance:create_instance("MUAInst", ClassNref, 5),
+	{ok, Attr} = graphdb_attr:create_literal_attribute("MUAAttr", string),
+	?assertEqual({ok, [ok]},
+		graphdb_mgr:mutate([{update_node_avps, Inst,
+			[#{attribute => Attr, value => "blue"}]}])),
+	[#node{attribute_value_pairs = AVPs}] = mnesia:dirty_read(nodes, Inst),
+	?assert(lists:member(#{attribute => Attr, value => "blue"}, AVPs)).
+
+%%-----------------------------------------------------------------------------
+%% A mixed batch (add_relationship + update_node_avps) all succeeds.
+%%-----------------------------------------------------------------------------
+mutate_mixed_add_rel_and_update_avps(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MMUAClass", 3),
+	{ok, InstA, _} = graphdb_instance:create_instance("MMUAA", ClassNref, 5),
+	{ok, InstB, _} = graphdb_instance:create_instance("MMUAB", ClassNref, 5),
+	{ok, {Ch, Re}} =
+		graphdb_attr:create_relationship_attribute_pair("MMUAk", "MMUAkb",
+			instance),
+	{ok, Attr} = graphdb_attr:create_literal_attribute("MMUAAttr", string),
+	Batch = [{add_relationship, InstA, Ch, InstB, Re},
+			 {update_node_avps, InstA, [#{attribute => Attr, value => "green"}]}],
+	?assertEqual({ok, [ok, ok]}, graphdb_mgr:mutate(Batch)),
+	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
+	?assertEqual([InstB],
+		[R#relationship.target_nref || R <- Rels,
+			R#relationship.characterization =:= Ch]),
+	[#node{attribute_value_pairs = AVPs}] = mnesia:dirty_read(nodes, InstA),
+	?assert(lists:member(#{attribute => Attr, value => "green"}, AVPs)).
+
+%%-----------------------------------------------------------------------------
+%% Atomic rollback: a valid add_relationship followed by an update_node_avps
+%% with an unknown attribute aborts the whole batch -- the relationship the
+%% first mutation wrote is absent.
+%%-----------------------------------------------------------------------------
+mutate_update_avps_rollback(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("MUARbClass", 3),
+	{ok, InstA, _} = graphdb_instance:create_instance("MUARbA", ClassNref, 5),
+	{ok, InstB, _} = graphdb_instance:create_instance("MUARbB", ClassNref, 5),
+	{ok, {Ch, Re}} =
+		graphdb_attr:create_relationship_attribute_pair("MUARbk", "MUARbkb",
+			instance),
+	BadAttr = ?NREF_START + 888888,
+	Batch = [{add_relationship, InstA, Ch, InstB, Re},
+			 {update_node_avps, InstA, [#{attribute => BadAttr, value => 1}]}],
+	?assertEqual({error, {unknown_attribute, BadAttr}},
+		graphdb_mgr:mutate(Batch)),
+	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
+	?assertEqual([],
+		[R#relationship.target_nref || R <- Rels,
+			R#relationship.characterization =:= Ch]).
+
+%%-----------------------------------------------------------------------------
+%% A malformed update_node_avps mutation is rejected in static validation
+%% ({error, {invalid_avp, _}}), before any transaction is opened.
+%%-----------------------------------------------------------------------------
+mutate_update_avps_malformed(_Config) ->
+	?assertEqual({error, {invalid_avp, "bad"}},
+		graphdb_mgr:mutate([{update_node_avps, 123, ["bad"]}])).
 
 
 %%=============================================================================

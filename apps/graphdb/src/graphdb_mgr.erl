@@ -322,8 +322,9 @@ transaction(Fun) ->
 %%   {add_relationship, S, C, T, R}                       default template, no AVPs
 %%   {add_relationship, S, C, T, R, Template}             explicit template nref
 %%   {add_relationship, S, C, T, R, Template, {Fwd, Rev}} + per-direction AVPs
-%%   {retire_node,   Nref}
-%%   {unretire_node, Nref}
+%%   {retire_node,      Nref}
+%%   {unretire_node,    Nref}
+%%   {update_node_avps, Nref, AVPs}                        merge/upsert AVP list
 %%
 %% Returns {ok, [Result]} -- one native success value per mutation in list
 %% order (every op returns `ok` today, so {ok, [ok, ok, ...]}) -- or the bare
@@ -370,6 +371,11 @@ validate_mutation({retire_node, Nref}) when is_integer(Nref) ->
 	tier_guard(Nref);
 validate_mutation({unretire_node, Nref}) when is_integer(Nref) ->
 	tier_guard(Nref);
+validate_mutation({update_node_avps, Nref, AVPs}) when is_integer(Nref) ->
+	case validate_avp_updates(AVPs) of
+		ok               -> tier_guard(Nref);
+		{error, _} = Err -> Err
+	end;
 validate_mutation(M) ->
 	{error, {bad_mutation, M}}.
 
@@ -409,6 +415,8 @@ prepare({add_relationship, S, C, T, R, Template, AVPSpec}) ->
 prepare({retire_node, _Nref} = M) ->
 	M;
 prepare({unretire_node, _Nref} = M) ->
+	M;
+prepare({update_node_avps, _Nref, _AVPs} = M) ->
 	M.
 
 %% Phase 3 dispatch. Runs INSIDE the transaction: no gen_server calls, no
@@ -421,7 +429,9 @@ dispatch({add_relationship, IdPair, S, C, T, R, TemplateSpec, AVPSpec},
 dispatch({retire_node, Nref}, _TkAttr, RetAttr) ->
 	set_retired_(Nref, true, RetAttr);
 dispatch({unretire_node, Nref}, _TkAttr, RetAttr) ->
-	set_retired_(Nref, false, RetAttr).
+	set_retired_(Nref, false, RetAttr);
+dispatch({update_node_avps, Nref, AVPs}, _TkAttr, RetAttr) ->
+	update_node_avps_in_txn(Nref, AVPs, RetAttr).
 
 
 %%-----------------------------------------------------------------------------
