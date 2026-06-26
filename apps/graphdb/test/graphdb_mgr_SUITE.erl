@@ -127,7 +127,8 @@
 	mutate_single_update_node_avps/1,
 	mutate_mixed_add_rel_and_update_avps/1,
 	mutate_update_avps_rollback/1,
-	mutate_update_avps_malformed/1
+	mutate_update_avps_malformed/1,
+	mutate_update_avps_not_found/1
 ]).
 
 
@@ -211,7 +212,8 @@ groups() ->
 			mutate_single_update_node_avps,
 			mutate_mixed_add_rel_and_update_avps,
 			mutate_update_avps_rollback,
-			mutate_update_avps_malformed
+			mutate_update_avps_malformed,
+			mutate_update_avps_not_found
 		]},
 		{update_avps, [], [
 			update_node_avps_upsert_roundtrip,
@@ -306,7 +308,8 @@ init_per_testcase(TC, Config) when
 		TC =:= mutate_single_update_node_avps;
 		TC =:= mutate_mixed_add_rel_and_update_avps;
 		TC =:= mutate_update_avps_rollback;
-		TC =:= mutate_update_avps_malformed ->
+		TC =:= mutate_update_avps_malformed;
+		TC =:= mutate_update_avps_not_found ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
@@ -1267,6 +1270,18 @@ mutate_update_avps_rollback(_Config) ->
 mutate_update_avps_malformed(_Config) ->
 	?assertEqual({error, {invalid_avp, "bad"}},
 		graphdb_mgr:mutate([{update_node_avps, 123, ["bad"]}])).
+
+%%-----------------------------------------------------------------------------
+%% A batch update_node_avps targeting a nonexistent node aborts {error,
+%% not_found} via the tier-1 primitive (mutate has no pre-txn category guard,
+%% so this is the path that exercises the tier-1 mnesia:abort(not_found)).
+%%-----------------------------------------------------------------------------
+mutate_update_avps_not_found(_Config) ->
+	{ok, Attr} = graphdb_attr:create_literal_attribute("MUANFAttr", string),
+	BadNref = ?NREF_START + 999999,
+	?assertEqual({error, not_found},
+		graphdb_mgr:mutate([{update_node_avps, BadNref,
+			[#{attribute => Attr, value => "x"}]}])).
 
 
 %%=============================================================================

@@ -566,7 +566,7 @@ handle_call({delete_node, Nref}, _From, State) ->
 		ok ->
 			%% No worker currently implements node deletion.  The per-template
 			%% attribute category enforcement (instance-only, scoped by template)
-			%% is a known deferred gap for delete_node and update_node_avps.
+			%% is a known deferred gap for delete_node (slice C).
 			{reply, {error, not_implemented}, State}
 	end;
 
