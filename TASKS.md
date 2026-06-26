@@ -269,6 +269,18 @@ atomically. Tier-2 wrapper owns one `transaction/1`; tier-1
 `{update_node_avps, Nref, AVPs}` kind in `mutate/1`. Design
 `docs/designs/slice-b-update-node-avps-design.md`.
 
+**Follow-up (pre-existing, low priority) — category-node error-shape
+divergence.** A category node (nref 1–5) is rejected by the solo path with
+`{error, category_nodes_are_immutable}` (the `handle_call` category guard)
+but through `mutate/1` with `{error, permanent_node_immutable}` (the static
+`tier_guard`, since 1–5 `< ?NREF_START`). Both correctly refuse the write;
+only the reason atom differs. The same divergence already exists for
+`retire_node` / `unretire_node` through `mutate/1`. Normalising it would
+mean teaching `mutate/1`'s static validation to distinguish category nodes
+from the rest of the permanent tier (a DB read in phase 1, which today does
+no DB access) — not worth it unless a caller needs to branch on the
+specific reason. Revisit if that need arises.
+
 ### Template attribute list and instance-only enforcement (slice C, depends on slice B)
 
 A template currently carries only a name and its compositional arc into
