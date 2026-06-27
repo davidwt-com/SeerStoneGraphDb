@@ -154,7 +154,9 @@
 -ifdef(TEST).
 -export([
 		is_valid_parent_kind/1,
-		collect_qc_avps/1
+		collect_qc_avps/1,
+		is_instance_only/1,
+		validate_instance_only_avps/1
 		]).
 -endif.
 
@@ -1191,3 +1193,31 @@ collect_qc_avps(Nodes) ->
 				end
 		end, Acc, AVPs)
 	end, [], Nodes).
+
+
+%%-----------------------------------------------------------------------------
+%% is_instance_only(QcMap) -> boolean()
+%%
+%% True iff a qualifying-characteristic AVP map carries the
+%% `instance_only => true` marker. Pure; consumed by the bind_qc_value
+%% and create_class enforcement gates.
+%%-----------------------------------------------------------------------------
+is_instance_only(#{instance_only := true}) -> true;
+is_instance_only(_)                        -> false.
+
+
+%%-----------------------------------------------------------------------------
+%% validate_instance_only_avps(AVPs) ->
+%%     ok | {error, {instance_only_attribute, integer()}}
+%%
+%% Rejects an initial create_class AVP list in which any entry is both
+%% marked `instance_only => true` AND carries a concrete (non-undefined)
+%% value. An instance-only QC declared unbound (value => undefined) is
+%% accepted. Pure; returns the first offending attribute nref.
+%%-----------------------------------------------------------------------------
+validate_instance_only_avps(AVPs) ->
+	case [A || #{attribute := A, value := V} = E <- AVPs,
+		V =/= undefined, is_instance_only(E)] of
+		[]      -> ok;
+		[A | _] -> {error, {instance_only_attribute, A}}
+	end.
