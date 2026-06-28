@@ -311,6 +311,18 @@ node written. Design `docs/designs/slice-c-instance-only-qc-design.md`.
   each QC to `{AttrNref, Value}`, dropping the marker. Closing it means
   carrying the flag through `collect_qc_avps/1` / `inherited_qcs/1` and
   having all three gates consult the effective (local + ancestor) QC set.
+- **Marker mutability via the general update path** — today `instance_only`
+  is settable only at QC declaration (`add_qualifying_characteristic/3`) or
+  `create_class/3`; it can be neither set nor cleared through
+  `update_node_avps/2` / `mutate/1`. That restriction is a *side effect* of
+  slice B's AVP well-formedness check (which rejects any update map whose
+  key-set is not exactly `[attribute]` or `[attribute, value]`), **not** a
+  deliberate long-term contract decision. Investigate whether toggling a
+  QC's instance-only status — and QC-shape edits generally — should be a
+  first-class mutation: a dedicated mutation kind, or a widened update
+  grammar that admits marker keys, versus remaining declaration-time only.
+  Decide and document the intended contract before any caller comes to
+  depend on the current behaviour.
 
 ### Relationship mutation (slice E)
 
