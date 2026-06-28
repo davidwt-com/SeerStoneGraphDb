@@ -137,6 +137,9 @@
 		update_relationship/5,
 		update_relationship_avps_in_txn/5,
 		has_template_update/1,
+		update_relationship_both/4,
+		update_relationship_both/5,
+		update_relationship_both_in_txn/6,
 		%% Lookups
 		get_instance/1,
 		children/1,
@@ -1403,6 +1406,62 @@ do_update_relationship(SourceNref, CharNref, TargetNref, TemplateSpec,
 			end);
 		{error, _} = Err ->
 			Err
+	end.
+
+%%-----------------------------------------------------------------------------
+%% update_relationship_both_in_txn(S, C, T, TemplateSpec, FwdUpdates,
+%%   RevUpdates) -> ok    (aborts the enclosing transaction on any failure)
+%%
+%% Tier-1 composite: resolves the forward row to discover the reciprocal label
+%% and the concrete template, then edits both directed rows -- FwdUpdates on
+%% (S, C, T), RevUpdates on (T, R, S) -- EACH through the single-edge primitive
+%% (update_relationship_avps_in_txn/5).  Reused by the tier-2 wrappers and by
+%% graphdb_mgr:mutate/1.  The two directions' updates are independent.
+%%-----------------------------------------------------------------------------
+update_relationship_both_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
+		FwdUpdates, RevUpdates) ->
+	case resolve_forward_connection(SourceNref, CharNref, TargetNref,
+			TemplateSpec) of
+		not_found ->
+			mnesia:abort(relationship_not_found);
+		{ambiguous, Templates} ->
+			mnesia:abort({ambiguous_relationship, Templates});
+		{ok, Fwd} ->
+			Recip = Fwd#relationship.reciprocal,
+			Tmpl  = template_of(Fwd),
+			ok = update_relationship_avps_in_txn(SourceNref, CharNref,
+				TargetNref, Tmpl, FwdUpdates),
+			ok = update_relationship_avps_in_txn(TargetNref, Recip,
+				SourceNref, Tmpl, RevUpdates)
+	end.
+
+%%-----------------------------------------------------------------------------
+%% update_relationship_both(S, C, T, {FwdUpdates, RevUpdates})
+%%   -> ok | {error, term()}
+%% update_relationship_both(S, C, T, TemplateNref, {FwdUpdates, RevUpdates})
+%%   -> ok | {error, term()}
+%%
+%% Tier-2 convenience: edits both directions of one logical edge in a single
+%% transaction.  The two update lists are independent (forward need not mirror
+%% reverse).  Both lists are validated client-side (slice B grammar).
+%%-----------------------------------------------------------------------------
+update_relationship_both(SourceNref, CharNref, TargetNref, {Fwd, Rev}) ->
+	do_update_both(SourceNref, CharNref, TargetNref, any, Fwd, Rev).
+
+update_relationship_both(SourceNref, CharNref, TargetNref, TemplateNref,
+		{Fwd, Rev}) when is_integer(TemplateNref) ->
+	do_update_both(SourceNref, CharNref, TargetNref, TemplateNref, Fwd, Rev).
+
+do_update_both(SourceNref, CharNref, TargetNref, TemplateSpec, Fwd, Rev) ->
+	case {graphdb_mgr:validate_avp_updates(Fwd),
+		  graphdb_mgr:validate_avp_updates(Rev)} of
+		{ok, ok} ->
+			txn_ok(fun() ->
+				update_relationship_both_in_txn(SourceNref, CharNref,
+					TargetNref, TemplateSpec, Fwd, Rev)
+			end);
+		{{error, _} = Err, _} -> Err;
+		{_, {error, _} = Err} -> Err
 	end.
 
 

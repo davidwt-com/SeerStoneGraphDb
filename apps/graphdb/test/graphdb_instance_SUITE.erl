@@ -103,6 +103,7 @@
 	update_relationship_reverse_direction/1,
 	update_relationship_protects_template/1,
 	update_relationship_not_found/1,
+	update_relationship_both_directions/1,
 	%% Lookups
 	get_instance_returns_node/1,
 	get_instance_not_found/1,
@@ -258,7 +259,8 @@ groups() ->
 			update_relationship_single_direction,
 			update_relationship_reverse_direction,
 			update_relationship_protects_template,
-			update_relationship_not_found
+			update_relationship_not_found,
+			update_relationship_both_directions
 		]},
 		{lookups, [], [
 			get_instance_returns_node,
@@ -2519,3 +2521,18 @@ update_relationship_not_found(_Config) ->
 	?assertEqual({error, relationship_not_found},
 		graphdb_instance:update_relationship(A, Char, B,
 			[#{attribute => Note, value => "x"}])).
+
+update_relationship_both_directions(_Config) ->
+	#{a := A, b := B, char := Char, recip := Recip} = re_setup(),
+	{ok, FAttr} = graphdb_attr:create_literal_attribute("fwd_meta", string),
+	{ok, RAttr} = graphdb_attr:create_literal_attribute("rev_meta", string),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	ok = graphdb_instance:update_relationship_both(A, Char, B,
+		{[#{attribute => FAttr, value => "F"}],
+		 [#{attribute => RAttr, value => "R"}]}),
+	FwdAVPs = re_avps(A, Char, B),
+	RevAVPs = re_avps(B, Recip, A),
+	?assert(lists:member(#{attribute => FAttr, value => "F"}, FwdAVPs)),
+	?assertNot(lists:member(#{attribute => RAttr, value => "R"}, FwdAVPs)),
+	?assert(lists:member(#{attribute => RAttr, value => "R"}, RevAVPs)),
+	?assertNot(lists:member(#{attribute => FAttr, value => "F"}, RevAVPs)).
