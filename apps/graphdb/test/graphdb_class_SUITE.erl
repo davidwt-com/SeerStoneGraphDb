@@ -66,6 +66,8 @@
 	create_class_auto_creates_default_template/1,
 	create_class_3_default_avps_empty/1,
 	create_class_3_writes_avps/1,
+	create_class_3_rejects_instance_only_with_value/1,
+	create_class_3_accepts_instance_only_unbound/1,
 	create_abstract_class_skips_default_template/1,
 	instantiable_class_keeps_default_template/1,
 	is_instantiable_true_false/1,
@@ -108,6 +110,9 @@
 	bind_qc_value_basic/1,
 	bind_qc_value_undeclared_qc/1,
 	bind_qc_value_updates_existing_binding/1,
+	add_qc_3_stamps_instance_only_marker/1,
+	add_qc_3_idempotent_does_not_upgrade/1,
+	bind_qc_value_rejects_instance_only/1,
 	%% Lookups
 	get_class_returns_node/1,
 	get_class_not_found/1,
@@ -158,6 +163,8 @@ groups() ->
 			create_class_auto_creates_default_template,
 			create_class_3_default_avps_empty,
 			create_class_3_writes_avps,
+			create_class_3_rejects_instance_only_with_value,
+			create_class_3_accepts_instance_only_unbound,
 			create_abstract_class_skips_default_template,
 			instantiable_class_keeps_default_template,
 			is_instantiable_true_false
@@ -201,7 +208,10 @@ groups() ->
 			add_qc_rejects_non_attribute,
 			bind_qc_value_basic,
 			bind_qc_value_undeclared_qc,
-			bind_qc_value_updates_existing_binding
+			bind_qc_value_updates_existing_binding,
+			add_qc_3_stamps_instance_only_marker,
+			add_qc_3_idempotent_does_not_upgrade,
+			bind_qc_value_rejects_instance_only
 		]},
 		{lookups, [], [
 			get_class_returns_node,
@@ -441,6 +451,28 @@ create_class_3_writes_avps(_Config) ->
 	?assert(lists:member(#{attribute => ?NAME_ATTR_CLASS, value => "Tagged"},
 		Node#node.attribute_value_pairs)),
 	?assert(lists:member(Extra, Node#node.attribute_value_pairs)).
+
+
+%%-----------------------------------------------------------------------------
+%% create_class/3 rejects an initial AVP that is instance_only AND bound.
+%%-----------------------------------------------------------------------------
+create_class_3_rejects_instance_only_with_value(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, AttrN} = graphdb_attr:create_literal_attribute("serial", string),
+	Bad = #{attribute => AttrN, value => "SN-1", instance_only => true},
+	?assertEqual({error, {instance_only_attribute, AttrN}},
+		graphdb_class:create_class("Bad", 3, [Bad])).
+
+%%-----------------------------------------------------------------------------
+%% create_class/3 accepts an instance_only QC declared unbound.
+%%-----------------------------------------------------------------------------
+create_class_3_accepts_instance_only_unbound(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, AttrN} = graphdb_attr:create_literal_attribute("serial", string),
+	Good = #{attribute => AttrN, value => undefined, instance_only => true},
+	{ok, ClassNref} = graphdb_class:create_class("Good", 3, [Good]),
+	{ok, Node} = graphdb_class:get_class(ClassNref),
+	?assert(lists:member(Good, Node#node.attribute_value_pairs)).
 
 
 %%-----------------------------------------------------------------------------
@@ -926,6 +958,57 @@ bind_qc_value_updates_existing_binding(_Config) ->
 	{ok, QCs}   = graphdb_class:inherited_qcs(Veh),
 	?assert(lists:member({AttrN, 4000}, QCs)),
 	?assertNot(lists:member({AttrN, 3500}, QCs)).
+
+%%-----------------------------------------------------------------------------
+%% add_qualifying_characteristic/3 with #{instance_only => true} stamps the
+%% marker onto the class node's QC AVP.
+%%-----------------------------------------------------------------------------
+add_qc_3_stamps_instance_only_marker(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, Veh}   = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+	{ok, AttrN} = graphdb_attr:create_literal_attribute("serial", string),
+	ok = graphdb_class:add_qualifying_characteristic(Veh, AttrN,
+		#{instance_only => true}),
+	{ok, Node} = graphdb_class:get_class(Veh),
+	?assert(lists:member(
+		#{attribute => AttrN, value => undefined, instance_only => true},
+		Node#node.attribute_value_pairs)).
+
+%%-----------------------------------------------------------------------------
+%% Idempotency: /3 with instance_only on an already-declared UNFLAGGED QC is
+%% a no-op — it returns ok but does NOT upgrade the stored entry.
+%%-----------------------------------------------------------------------------
+add_qc_3_idempotent_does_not_upgrade(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, Veh}   = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+	{ok, AttrN} = graphdb_attr:create_literal_attribute("serial", string),
+	ok = graphdb_class:add_qualifying_characteristic(Veh, AttrN),
+	ok = graphdb_class:add_qualifying_characteristic(Veh, AttrN,
+		#{instance_only => true}),
+	{ok, Node} = graphdb_class:get_class(Veh),
+	%% The original unflagged entry is preserved; no marked variant appears.
+	?assert(lists:member(#{attribute => AttrN, value => undefined},
+		Node#node.attribute_value_pairs)),
+	?assertNot(lists:member(
+		#{attribute => AttrN, value => undefined, instance_only => true},
+		Node#node.attribute_value_pairs)).
+
+
+%%-----------------------------------------------------------------------------
+%% bind_qc_value/3 refuses to bind a value on an instance-only QC, and the
+%% transaction abort leaves the QC unbound.
+%%-----------------------------------------------------------------------------
+bind_qc_value_rejects_instance_only(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, Veh}   = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+	{ok, AttrN} = graphdb_attr:create_literal_attribute("serial", string),
+	ok = graphdb_class:add_qualifying_characteristic(Veh, AttrN,
+		#{instance_only => true}),
+	?assertEqual({error, {instance_only_attribute, AttrN}},
+		graphdb_class:bind_qc_value(Veh, AttrN, "SN-1")),
+	%% Abort rolled back the write: the QC is still declared, still unbound.
+	{ok, QCs} = graphdb_class:inherited_qcs(Veh),
+	?assert(lists:member({AttrN, undefined}, QCs)).
 
 
 %%=============================================================================

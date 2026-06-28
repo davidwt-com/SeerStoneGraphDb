@@ -112,6 +112,7 @@
 		create_class/3,
 		add_superclass/2,
 		add_qualifying_characteristic/2,
+		add_qualifying_characteristic/3,
 		bind_qc_value/3,
 		add_template/2,
 		%% Lookups
@@ -154,7 +155,9 @@
 -ifdef(TEST).
 -export([
 		is_valid_parent_kind/1,
-		collect_qc_avps/1
+		collect_qc_avps/1,
+		is_instance_only/1,
+		validate_instance_only_avps/1
 		]).
 -endif.
 
@@ -231,6 +234,10 @@ add_template(ClassNref, Name) ->
 %%-----------------------------------------------------------------------------
 add_qualifying_characteristic(ClassNref, AttrNref) ->
 	gen_server:call(?MODULE, {add_qualifying_characteristic, ClassNref, AttrNref}).
+
+add_qualifying_characteristic(ClassNref, AttrNref, Opts) when is_map(Opts) ->
+	gen_server:call(?MODULE,
+		{add_qualifying_characteristic, ClassNref, AttrNref, Opts}).
 
 
 %%-----------------------------------------------------------------------------
@@ -370,6 +377,10 @@ handle_call({add_qualifying_characteristic, ClassNref, AttrNref}, _From,
 		State) ->
 	{reply, do_add_qc(ClassNref, AttrNref), State};
 
+handle_call({add_qualifying_characteristic, ClassNref, AttrNref, Opts}, _From,
+		State) ->
+	{reply, do_add_qc(ClassNref, AttrNref, Opts), State};
+
 handle_call({bind_qc_value, ClassNref, AttrNref, Value}, _From, State) ->
 	{reply, do_bind_qc_value(ClassNref, AttrNref, Value), State};
 
@@ -469,47 +480,52 @@ is_valid_parent_kind(_)        -> false.
 %% nref/id allocation stays outside the transaction.
 %%-----------------------------------------------------------------------------
 do_create_class(Name, ParentClassNref, AVPs, InstAttr) ->
-	case do_validate_parent(ParentClassNref) of
-		ok ->
-			ClassNref        = graphdb_nref:get_next(),
-			{TaxId1, TaxId2} = rel_id_server:get_id_pair(),
-			ClassNameAVP = #{attribute => ?NAME_ATTR_CLASS, value => Name},
-			ClassNode = #node{
-				nref = ClassNref,
-				kind = class,
-				parents = [ParentClassNref],
-				attribute_value_pairs = [ClassNameAVP | AVPs]
-			},
-			TaxP2C = #relationship{
-				id = TaxId1, kind = taxonomy,
-				source_nref = ParentClassNref,
-				characterization = ?ARC_CLS_CHILD,
-				target_nref = ClassNref,
-				reciprocal = ?ARC_CLS_PARENT,
-				avps = []
-			},
-			TaxC2P = #relationship{
-				id = TaxId2, kind = taxonomy,
-				source_nref = ClassNref,
-				characterization = ?ARC_CLS_PARENT,
-				target_nref = ParentClassNref,
-				reciprocal = ?ARC_CLS_CHILD,
-				avps = []
-			},
-			TemplateRows = template_rows(ClassNref, AVPs, InstAttr),
-			Txn = fun() ->
-				ok = mnesia:write(nodes, ClassNode, write),
-				ok = mnesia:write(relationships, TaxP2C, write),
-				ok = mnesia:write(relationships, TaxC2P, write),
-				[ ok = mnesia:write(T, R, write) || {T, R} <- TemplateRows ]
-			end,
-			case graphdb_mgr:transaction(Txn) of
-				%% Txn value is [] (abstract) or [ok,ok,ok] (template rows)
-				{ok, _Writes}    -> {ok, ClassNref};
-				{error, _} = Err -> Err
-			end;
+	case validate_instance_only_avps(AVPs) of
 		{error, _} = Err ->
-			Err
+			Err;
+		ok ->
+			case do_validate_parent(ParentClassNref) of
+				ok ->
+					ClassNref        = graphdb_nref:get_next(),
+					{TaxId1, TaxId2} = rel_id_server:get_id_pair(),
+					ClassNameAVP = #{attribute => ?NAME_ATTR_CLASS, value => Name},
+					ClassNode = #node{
+						nref = ClassNref,
+						kind = class,
+						parents = [ParentClassNref],
+						attribute_value_pairs = [ClassNameAVP | AVPs]
+					},
+					TaxP2C = #relationship{
+						id = TaxId1, kind = taxonomy,
+						source_nref = ParentClassNref,
+						characterization = ?ARC_CLS_CHILD,
+						target_nref = ClassNref,
+						reciprocal = ?ARC_CLS_PARENT,
+						avps = []
+					},
+					TaxC2P = #relationship{
+						id = TaxId2, kind = taxonomy,
+						source_nref = ClassNref,
+						characterization = ?ARC_CLS_PARENT,
+						target_nref = ParentClassNref,
+						reciprocal = ?ARC_CLS_CHILD,
+						avps = []
+					},
+					TemplateRows = template_rows(ClassNref, AVPs, InstAttr),
+					Txn = fun() ->
+						ok = mnesia:write(nodes, ClassNode, write),
+						ok = mnesia:write(relationships, TaxP2C, write),
+						ok = mnesia:write(relationships, TaxC2P, write),
+						[ ok = mnesia:write(T, R, write) || {T, R} <- TemplateRows ]
+					end,
+					case graphdb_mgr:transaction(Txn) of
+						%% Txn value is [] (abstract) or [ok,ok,ok] (template rows)
+						{ok, _Writes}    -> {ok, ClassNref};
+						{error, _} = Err -> Err
+					end;
+				{error, _} = Err ->
+					Err
+			end
 	end.
 
 
@@ -967,14 +983,21 @@ do_validate_parent(Nref) ->
 
 %%-----------------------------------------------------------------------------
 %% do_add_qc(ClassNref, AttrNref) -> ok | {error, term()}
+%% do_add_qc(ClassNref, AttrNref, Opts) -> ok | {error, term()}
 %%
-%% Adds the qualifying-characteristic AVP to the class node using the
-%% unified shape: #{attribute => AttrNref, value => undefined}.
+%% Adds the qualifying-characteristic AVP to the class node.  /2 is the
+%% plain declared-unbound form (delegates to /3 with empty Opts).  /3
+%% accepts Opts = #{instance_only => true} to stamp the instance-only
+%% marker onto the canonical declared-unbound shape.
+%%
 %% Validates both ClassNref (must be class) and AttrNref (must be
 %% attribute).  Idempotent: if any entry for AttrNref already exists
-%% (regardless of value), leaves it alone and returns ok.
+%% (regardless of value or flags), leaves it alone and returns ok.
 %%-----------------------------------------------------------------------------
 do_add_qc(ClassNref, AttrNref) ->
+	do_add_qc(ClassNref, AttrNref, #{}).
+
+do_add_qc(ClassNref, AttrNref, Opts) ->
 	Txn = fun() ->
 		case mnesia:read(nodes, ClassNref) of
 			[#node{kind = class, attribute_value_pairs = AVPs} = Node] ->
@@ -987,8 +1010,7 @@ do_add_qc(ClassNref, AttrNref) ->
 							true ->
 								already_exists;
 							false ->
-								NewAVP = #{attribute => AttrNref,
-									value => undefined},
+								NewAVP = new_qc_avp(AttrNref, Opts),
 								Updated = Node#node{
 									attribute_value_pairs = AVPs ++ [NewAVP]
 								},
@@ -1013,6 +1035,20 @@ do_add_qc(ClassNref, AttrNref) ->
 		{error, Reason}      -> {error, Reason}
 	end.
 
+%%-----------------------------------------------------------------------------
+%% new_qc_avp(AttrNref, Opts) -> map()
+%%
+%% Builds the QC AVP for a fresh declaration.  `instance_only => true` in
+%% Opts stamps the marker onto the canonical declared-unbound shape;
+%% otherwise the plain declared-unbound shape is returned.
+%%-----------------------------------------------------------------------------
+new_qc_avp(AttrNref, Opts) ->
+	Base = #{attribute => AttrNref, value => undefined},
+	case maps:get(instance_only, Opts, false) of
+		true  -> Base#{instance_only => true};
+		false -> Base
+	end.
+
 
 %%-----------------------------------------------------------------------------
 %% do_bind_qc_value(ClassNref, AttrNref, Value) -> ok | {error, term()}
@@ -1034,10 +1070,17 @@ do_bind_qc_value(ClassNref, AttrNref, Value) ->
 					false ->
 						mnesia:abort(qc_not_declared);
 					true ->
-						NewAVPs = update_qc_value(AVPs, AttrNref, Value),
-						mnesia:write(nodes,
-							N#node{attribute_value_pairs = NewAVPs},
-							write)
+						case is_qc_instance_only(AVPs, AttrNref) of
+							true ->
+								mnesia:abort(
+									{instance_only_attribute, AttrNref});
+							false ->
+								NewAVPs = update_qc_value(AVPs, AttrNref,
+									Value),
+								mnesia:write(nodes,
+									N#node{attribute_value_pairs = NewAVPs},
+									write)
+						end
 				end;
 			[_] -> mnesia:abort(not_a_class);
 			[]  -> mnesia:abort(not_found)
@@ -1060,6 +1103,18 @@ update_qc_value(AVPs, AttrNref, Value) ->
 		#{attribute := AttrNref} -> A#{value => Value};
 		_                        -> A
 	 end || A <- AVPs].
+
+%%-----------------------------------------------------------------------------
+%% is_qc_instance_only(AVPs, AttrNref) -> boolean()
+%%
+%% True iff the QC entry for AttrNref in AVPs carries the instance_only
+%% marker. Caller has already verified AttrNref is present.
+%%-----------------------------------------------------------------------------
+is_qc_instance_only(AVPs, AttrNref) ->
+	lists:any(fun(#{attribute := A} = E) when A =:= AttrNref ->
+				 is_instance_only(E);
+			 (_) -> false
+		  end, AVPs).
 
 
 %%-----------------------------------------------------------------------------
@@ -1191,3 +1246,31 @@ collect_qc_avps(Nodes) ->
 				end
 		end, Acc, AVPs)
 	end, [], Nodes).
+
+
+%%-----------------------------------------------------------------------------
+%% is_instance_only(QcMap) -> boolean()
+%%
+%% True iff a qualifying-characteristic AVP map carries the
+%% `instance_only => true` marker. Pure; consumed by the bind_qc_value
+%% and create_class enforcement gates.
+%%-----------------------------------------------------------------------------
+is_instance_only(#{instance_only := true}) -> true;
+is_instance_only(_)                        -> false.
+
+
+%%-----------------------------------------------------------------------------
+%% validate_instance_only_avps(AVPs) ->
+%%     ok | {error, {instance_only_attribute, integer()}}
+%%
+%% Rejects an initial create_class AVP list in which any entry is both
+%% marked `instance_only => true` AND carries a concrete (non-undefined)
+%% value. An instance-only QC declared unbound (value => undefined) is
+%% accepted. Pure; returns the first offending attribute nref.
+%%-----------------------------------------------------------------------------
+validate_instance_only_avps(AVPs) ->
+	case [A || #{attribute := A, value := V} = E <- AVPs,
+		V =/= undefined, is_instance_only(E)] of
+		[]      -> ok;
+		[A | _] -> {error, {instance_only_attribute, A}}
+	end.

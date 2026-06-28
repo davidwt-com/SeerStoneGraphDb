@@ -244,7 +244,7 @@ the ontology `nodes` Mnesia table with `kind = attribute`.
 Manages the "is a" hierarchy of class nodes in the ontology.
 
 - `create_class/2,3` (name, parent_class_nref [, avps]) — the `/3` form prepends an initial AVP list to the class node; a class created with the `instantiable => false` marker AVP is **abstract** and is born without a default template (L9)
-- `add_qualifying_characteristic/2` (class_nref, attribute_nref)
+- `add_qualifying_characteristic/2,3` (class_nref, attribute_nref [, opts]) — the `/3` form takes an options map; `#{instance_only => true}` marks the QC instance-only (binding a class-level value for it is rejected at `bind_qc_value/3`, `create_class/3`, and `update_node_avps/2`)
 - `is_instantiable/1` (class_nref) — `false` iff the class carries the `instantiable => false` marker
 - `get_class/1`, `subclasses/1`, `ancestors/1`, `inherited_qcs/1`
 - `get_template_in_txn/1`, `class_in_ancestry_in_txn/2`,

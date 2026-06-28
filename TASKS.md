@@ -281,29 +281,48 @@ from the rest of the permanent tier (a DB read in phase 1, which today does
 no DB access) — not worth it unless a caller needs to branch on the
 specific reason. Revisit if that need arises.
 
-### Template attribute list and instance-only enforcement (slice C, depends on slice B)
+### Instance-only qualifying characteristics (slice C) — IMPLEMENTED
 
-A template currently carries only a name and its compositional arc into
-the owning class — there is no per-template list of which attributes the
-template scopes. Without it, the class write-side cannot distinguish two
-categories of attribute a class declares:
+A class QC may be marked `instance_only => true`: the attribute is relevant
+to instances, but binding a value at the class level is a category error.
+Set via `graphdb_class:add_qualifying_characteristic/3` (`#{instance_only =>
+true}`) or a `create_class/3` initial AVP. Enforced at three class-level
+value-binding gates — `bind_qc_value/3`, `create_class/3`, and
+`update_node_avps/2` (the last covers `mutate/1`, both composing
+`update_node_avps_in_txn/3`) — each returning `{error,
+{instance_only_attribute, AttrNref}}`. Enforcement is local to the class
+node written. Design `docs/designs/slice-c-instance-only-qc-design.md`.
 
-- **Class-bindable** — the class may supply a value (or a useful
-  default); instances inherit it and may override. *Example:
-  `num_wheels = 4` on a Car class.*
-- **Instance-only** — the class declares the attribute as relevant, but
-  binding a value at the class level is a category error; the value is
-  meaningful only per instance. *Example: `serial_number`,
-  `owner_name`.* Binding a class-level value for such an attribute should
-  be rejected.
+**Deferred follow-ons (from slice C):**
 
-The distinction is per-class, per-template — the same attribute may be
-class-bindable in one class's template and instance-only in another's.
-Build the template attribute list, then enforce instance-only rejection
-in `create_class` and `update_node_avps`. The unified qualifying-
-characteristic AVP shape (a declared-but-unbound attribute carries
-`value => undefined`) already accommodates an instance-only attribute
-naturally — it stays `undefined` at every class level.
+- **Template attribute list** — per-template subset/relevance scoping of
+  class attributes (`TheKnowledgeNetwork.md` §7). A template currently
+  carries only a name and its compositional arc into the owning class; there
+  is no per-template list of which attributes it scopes. This is the
+  per-class, per-template axis: the same attribute may be class-bindable in
+  one class's template and instance-only in another's.
+- **Template-bound (variant) values** — templates carrying override values
+  stamped into instances at instantiation (e.g. a later custom-colour phone
+  variant whose colour is fixed in a template, not on the base class).
+- **Inherited instance-only enforcement (C2)** — close the subclass-redeclare
+  bypass: a subclass can re-declare a parent's instance-only QC *without* the
+  flag via `add_qualifying_characteristic/2`, then bind a value. Local gates
+  do not consult the inherited QC set because `collect_qc_avps/1` flattens
+  each QC to `{AttrNref, Value}`, dropping the marker. Closing it means
+  carrying the flag through `collect_qc_avps/1` / `inherited_qcs/1` and
+  having all three gates consult the effective (local + ancestor) QC set.
+- **Marker mutability via the general update path** — today `instance_only`
+  is settable only at QC declaration (`add_qualifying_characteristic/3`) or
+  `create_class/3`; it can be neither set nor cleared through
+  `update_node_avps/2` / `mutate/1`. That restriction is a *side effect* of
+  slice B's AVP well-formedness check (which rejects any update map whose
+  key-set is not exactly `[attribute]` or `[attribute, value]`), **not** a
+  deliberate long-term contract decision. Investigate whether toggling a
+  QC's instance-only status — and QC-shape edits generally — should be a
+  first-class mutation: a dedicated mutation kind, or a widened update
+  grammar that admits marker keys, versus remaining declaration-time only.
+  Decide and document the intended contract before any caller comes to
+  depend on the current behaviour.
 
 ### Relationship mutation (slice E)
 

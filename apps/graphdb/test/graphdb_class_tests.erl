@@ -96,3 +96,42 @@ collect_qc_avps_filters_name_avp_test() ->
 		]},
 	?assertEqual([{18, undefined}],
 		graphdb_class:collect_qc_avps([Node])).
+
+
+%%=============================================================================
+%% is_instance_only/1 tests
+%%=============================================================================
+
+is_instance_only_true_test() ->
+	?assert(graphdb_class:is_instance_only(
+		#{attribute => 42, value => undefined, instance_only => true})).
+
+is_instance_only_absent_key_test() ->
+	?assertNot(graphdb_class:is_instance_only(
+		#{attribute => 42, value => undefined})).
+
+is_instance_only_false_value_test() ->
+	?assertNot(graphdb_class:is_instance_only(
+		#{attribute => 42, value => undefined, instance_only => false})).
+
+%%=============================================================================
+%% validate_instance_only_avps/1 tests
+%%=============================================================================
+
+validate_instance_only_avps_empty_test() ->
+	?assertEqual(ok, graphdb_class:validate_instance_only_avps([])).
+
+validate_instance_only_avps_unbound_ok_test() ->
+	%% instance_only declared but unbound is legal at the class level.
+	?assertEqual(ok, graphdb_class:validate_instance_only_avps(
+		[#{attribute => 42, value => undefined, instance_only => true}])).
+
+validate_instance_only_avps_non_flagged_value_ok_test() ->
+	%% A normal class-bound value is legal.
+	?assertEqual(ok, graphdb_class:validate_instance_only_avps(
+		[#{attribute => 42, value => "red"}])).
+
+validate_instance_only_avps_rejects_flagged_value_test() ->
+	?assertEqual({error, {instance_only_attribute, 42}},
+		graphdb_class:validate_instance_only_avps(
+			[#{attribute => 42, value => "red", instance_only => true}])).
