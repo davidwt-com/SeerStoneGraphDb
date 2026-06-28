@@ -2492,6 +2492,9 @@ update_relationship_single_direction(_Config) ->
 		[#{attribute => Note, value => "fwd"}]),
 	?assert(lists:member(#{attribute => Note, value => "fwd"},
 		re_avps(A, Char, B))),
+	%% the protected Template AVP survives an ordinary edit
+	?assert(lists:any(fun(#{attribute := X}) -> X =:= ?ARC_TEMPLATE end,
+		re_avps(A, Char, B))),
 	%% reverse row untouched (proves independence)
 	?assertNot(lists:member(#{attribute => Note, value => "fwd"},
 		re_avps(B, Recip, A))).

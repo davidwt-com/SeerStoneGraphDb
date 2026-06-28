@@ -1429,10 +1429,20 @@ update_relationship_both_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
 		{ok, Fwd} ->
 			Recip = Fwd#relationship.reciprocal,
 			Tmpl  = template_of(Fwd),
-			ok = update_relationship_avps_in_txn(SourceNref, CharNref,
-				TargetNref, Tmpl, FwdUpdates),
-			ok = update_relationship_avps_in_txn(TargetNref, Recip,
-				SourceNref, Tmpl, RevUpdates)
+			%% Confirm the symmetric partner exists before editing either row,
+			%% so a corrupt half-edge surfaces {dangling_half_edge, Id} (the
+			%% same arm as remove) rather than a misleading relationship_not_found
+			%% from the second single-edge edit.
+			case resolve_forward_connection(TargetNref, Recip, SourceNref,
+					Tmpl) of
+				{ok, _Rev} ->
+					ok = update_relationship_avps_in_txn(SourceNref, CharNref,
+						TargetNref, Tmpl, FwdUpdates),
+					ok = update_relationship_avps_in_txn(TargetNref, Recip,
+						SourceNref, Tmpl, RevUpdates);
+				_ ->
+					mnesia:abort({dangling_half_edge, Fwd#relationship.id})
+			end
 	end.
 
 %%-----------------------------------------------------------------------------
