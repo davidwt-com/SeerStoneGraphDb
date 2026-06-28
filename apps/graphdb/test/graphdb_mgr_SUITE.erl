@@ -128,7 +128,11 @@
 	mutate_mixed_add_rel_and_update_avps/1,
 	mutate_update_avps_rollback/1,
 	mutate_update_avps_malformed/1,
-	mutate_update_avps_not_found/1
+	mutate_update_avps_not_found/1,
+	%% instance-only QC enforcement
+	update_node_avps_rejects_instance_only/1,
+	update_node_avps_delete_instance_only_ok/1,
+	mutate_rejects_instance_only/1
 ]).
 
 
@@ -213,7 +217,8 @@ groups() ->
 			mutate_mixed_add_rel_and_update_avps,
 			mutate_update_avps_rollback,
 			mutate_update_avps_malformed,
-			mutate_update_avps_not_found
+			mutate_update_avps_not_found,
+			mutate_rejects_instance_only
 		]},
 		{update_avps, [], [
 			update_node_avps_upsert_roundtrip,
@@ -225,7 +230,9 @@ groups() ->
 			update_node_avps_retired_marker_rejected,
 			update_node_avps_not_found,
 			update_node_avps_permanent_tier,
-			update_node_avps_atomic_rollback
+			update_node_avps_atomic_rollback,
+			update_node_avps_rejects_instance_only,
+			update_node_avps_delete_instance_only_ok
 		]}
 	].
 
@@ -309,7 +316,10 @@ init_per_testcase(TC, Config) when
 		TC =:= mutate_mixed_add_rel_and_update_avps;
 		TC =:= mutate_update_avps_rollback;
 		TC =:= mutate_update_avps_malformed;
-		TC =:= mutate_update_avps_not_found ->
+		TC =:= mutate_update_avps_not_found;
+		TC =:= update_node_avps_rejects_instance_only;
+		TC =:= update_node_avps_delete_instance_only_ok;
+		TC =:= mutate_rejects_instance_only ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
@@ -1412,3 +1422,49 @@ update_node_avps_atomic_rollback(_Config) ->
 			[#{attribute => Attr, value => "red"},
 			 #{attribute => BadAttr, value => "boom"}])),
 	?assertEqual(not_found, ua_value(Inst, Attr)).
+
+%%-----------------------------------------------------------------------------
+%% update_node_avps/2 rejects a value-bearing update to a class node's
+%% instance-only QC, and rolls the write back.
+%%-----------------------------------------------------------------------------
+update_node_avps_rejects_instance_only(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("IOClass", 3),
+	{ok, Attr} = graphdb_attr:create_literal_attribute("serial", string),
+	ok = graphdb_class:add_qualifying_characteristic(ClassNref, Attr,
+		#{instance_only => true}),
+	?assertEqual({error, {instance_only_attribute, Attr}},
+		graphdb_mgr:update_node_avps(ClassNref,
+			[#{attribute => Attr, value => "SN-1"}])),
+	%% Rollback: the QC stays declared-unbound, marker intact.
+	[#node{attribute_value_pairs = AVPs}] = mnesia:dirty_read(nodes, ClassNref),
+	?assert(lists:member(
+		#{attribute => Attr, value => undefined, instance_only => true}, AVPs)).
+
+%%-----------------------------------------------------------------------------
+%% update_node_avps/2 permits DELETING an instance-only QC (no `value` key).
+%%-----------------------------------------------------------------------------
+update_node_avps_delete_instance_only_ok(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("IODelClass", 3),
+	{ok, Attr} = graphdb_attr:create_literal_attribute("serial", string),
+	ok = graphdb_class:add_qualifying_characteristic(ClassNref, Attr,
+		#{instance_only => true}),
+	?assertEqual(ok,
+		graphdb_mgr:update_node_avps(ClassNref, [#{attribute => Attr}])),
+	[#node{attribute_value_pairs = AVPs}] = mnesia:dirty_read(nodes, ClassNref),
+	?assertNot(lists:any(fun(#{attribute := A}) -> A =:= Attr;
+				(_) -> false end, AVPs)).
+
+%%-----------------------------------------------------------------------------
+%% mutate/1 inherits the instance-only guard via update_node_avps_in_txn.
+%%-----------------------------------------------------------------------------
+mutate_rejects_instance_only(_Config) ->
+	{ok, ClassNref} = graphdb_class:create_class("IOMutClass", 3),
+	{ok, Attr} = graphdb_attr:create_literal_attribute("serial", string),
+	ok = graphdb_class:add_qualifying_characteristic(ClassNref, Attr,
+		#{instance_only => true}),
+	?assertEqual({error, {instance_only_attribute, Attr}},
+		graphdb_mgr:mutate([{update_node_avps, ClassNref,
+			[#{attribute => Attr, value => "SN-1"}]}])),
+	[#node{attribute_value_pairs = AVPs}] = mnesia:dirty_read(nodes, ClassNref),
+	?assert(lists:member(
+		#{attribute => Attr, value => undefined, instance_only => true}, AVPs)).

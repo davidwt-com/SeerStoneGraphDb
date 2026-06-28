@@ -151,7 +151,8 @@
 		validate_direction/1,
 		check_category_guard/1,
 		validate_avp_updates/1,
-		apply_avp_updates/2
+		apply_avp_updates/2,
+		check_instance_only/2
 		]).
 -endif.
 
@@ -755,6 +756,7 @@ update_node_avps_in_txn(Nref, AVPs, RetAttr) ->
 			mnesia:abort(not_found);
 		[Node] ->
 			ok = guard_retired_marker(AVPs, RetAttr),
+			ok = guard_instance_only(Node#node.attribute_value_pairs, AVPs),
 			ok = guard_attribute_existence(AVPs),
 			New = apply_avp_updates(Node#node.attribute_value_pairs, AVPs),
 			mnesia:write(nodes, Node#node{attribute_value_pairs = New}, write)
@@ -779,6 +781,32 @@ guard_attribute_existence(AVPs) ->
 		end
 	end, Upserts),
 	ok.
+
+%%-----------------------------------------------------------------------------
+%% check_instance_only(StoredAVPs, Updates) ->
+%%     ok | {error, {instance_only_attribute, integer()}}
+%%
+%% Pure. A value-bearing update (one carrying a `value` key, including
+%% value => undefined) targeting a stored entry marked
+%% `instance_only => true` is rejected. Deletes (no `value` key) and
+%% updates to non-marked attributes pass. Returns the first offender.
+%%-----------------------------------------------------------------------------
+check_instance_only(StoredAVPs, Updates) ->
+	Marked = [A || #{attribute := A} = E <- StoredAVPs,
+		maps:get(instance_only, E, false) =:= true],
+	ValueBearing = [A || #{attribute := A} = M <- Updates,
+		maps:is_key(value, M)],
+	case [A || A <- ValueBearing, lists:member(A, Marked)] of
+		[]      -> ok;
+		[A | _] -> {error, {instance_only_attribute, A}}
+	end.
+
+%% In-txn guard: aborts on the first instance-only violation.
+guard_instance_only(StoredAVPs, Updates) ->
+	case check_instance_only(StoredAVPs, Updates) of
+		ok                                        -> ok;
+		{error, {instance_only_attribute, _} = R} -> mnesia:abort(R)
+	end.
 
 %%-----------------------------------------------------------------------------
 %% set_marker(AVPs, RetAttr, Bool) -> AVPs'

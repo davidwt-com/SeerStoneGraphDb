@@ -165,3 +165,31 @@ apply_avp_updates_empty_updates_is_identity_test() ->
 update_node_avps_malformed_short_circuits_test() ->
 	?assertEqual({error, {invalid_avp, "bad"}},
 		graphdb_mgr:update_node_avps(123, ["bad"])).
+
+
+%%=============================================================================
+%% check_instance_only/2 tests (pure)
+%%=============================================================================
+
+check_instance_only_rejects_value_bearing_test() ->
+	Stored = [#{attribute => 42, value => undefined, instance_only => true}],
+	Updates = [#{attribute => 42, value => "SN-1"}],
+	?assertEqual({error, {instance_only_attribute, 42}},
+		graphdb_mgr:check_instance_only(Stored, Updates)).
+
+check_instance_only_rejects_undefined_value_test() ->
+	%% value => undefined still carries a `value` key -> still a bind attempt.
+	Stored = [#{attribute => 42, value => undefined, instance_only => true}],
+	Updates = [#{attribute => 42, value => undefined}],
+	?assertEqual({error, {instance_only_attribute, 42}},
+		graphdb_mgr:check_instance_only(Stored, Updates)).
+
+check_instance_only_allows_delete_test() ->
+	Stored = [#{attribute => 42, value => undefined, instance_only => true}],
+	Updates = [#{attribute => 42}],
+	?assertEqual(ok, graphdb_mgr:check_instance_only(Stored, Updates)).
+
+check_instance_only_allows_non_marked_test() ->
+	Stored = [#{attribute => 42, value => undefined}],
+	Updates = [#{attribute => 42, value => "red"}],
+	?assertEqual(ok, graphdb_mgr:check_instance_only(Stored, Updates)).
