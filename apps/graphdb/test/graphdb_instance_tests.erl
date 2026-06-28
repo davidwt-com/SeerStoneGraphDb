@@ -119,3 +119,16 @@ summarize_counts_test() ->
 	?assertEqual(#{fired => 1, failed => 1, not_attempted => 0, proposed => 1,
 				   connected => 0, required => 0, not_connected => 0},
 				 graphdb_instance:summarize(R2)).
+
+
+%%=============================================================================
+%% has_template_update/1 tests
+%%=============================================================================
+
+has_template_update_true_test() ->
+	?assert(graphdb_instance:has_template_update(
+		[#{attribute => ?ARC_TEMPLATE, value => 7}])).
+
+has_template_update_false_test() ->
+	?assertNot(graphdb_instance:has_template_update(
+		[#{attribute => 9999, value => "x"}, #{attribute => 8888}])).

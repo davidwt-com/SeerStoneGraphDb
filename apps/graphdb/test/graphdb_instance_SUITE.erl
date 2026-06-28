@@ -98,6 +98,11 @@
 	remove_relationship_ambiguous/1,
 	remove_relationship_disambiguate_by_template/1,
 	remove_relationship_dangling_half_edge/1,
+	%% Update relationships
+	update_relationship_single_direction/1,
+	update_relationship_reverse_direction/1,
+	update_relationship_protects_template/1,
+	update_relationship_not_found/1,
 	%% Lookups
 	get_instance_returns_node/1,
 	get_instance_not_found/1,
@@ -249,7 +254,11 @@ groups() ->
 			remove_relationship_not_found,
 			remove_relationship_ambiguous,
 			remove_relationship_disambiguate_by_template,
-			remove_relationship_dangling_half_edge
+			remove_relationship_dangling_half_edge,
+			update_relationship_single_direction,
+			update_relationship_reverse_direction,
+			update_relationship_protects_template,
+			update_relationship_not_found
 		]},
 		{lookups, [], [
 			get_instance_returns_node,
@@ -2456,3 +2465,57 @@ remove_relationship_dangling_half_edge(_Config) ->
 		graphdb_instance:remove_relationship(A, Char, B)),
 	%% the forward row is NOT deleted -- rollback left it intact
 	?assertEqual(1, re_count(A, Char, B)).
+
+
+%%=============================================================================
+%% Update-relationship (single direction) helpers and test cases
+%%=============================================================================
+
+%% fetch the single forward row's avps
+re_avps(A, Char, B) ->
+	{atomic, Rows} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, A, #relationship.source_nref)
+	end),
+	[R] = [X || X <- Rows,
+		X#relationship.kind =:= connection,
+		X#relationship.characterization =:= Char,
+		X#relationship.target_nref =:= B],
+	R#relationship.avps.
+
+update_relationship_single_direction(_Config) ->
+	#{a := A, b := B, char := Char, recip := Recip} = re_setup(),
+	{ok, Note} = graphdb_attr:create_literal_attribute("note", string),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	ok = graphdb_instance:update_relationship(A, Char, B,
+		[#{attribute => Note, value => "fwd"}]),
+	?assert(lists:member(#{attribute => Note, value => "fwd"},
+		re_avps(A, Char, B))),
+	%% reverse row untouched (proves independence)
+	?assertNot(lists:member(#{attribute => Note, value => "fwd"},
+		re_avps(B, Recip, A))).
+
+update_relationship_reverse_direction(_Config) ->
+	#{a := A, b := B, char := Char, recip := Recip} = re_setup(),
+	{ok, Note} = graphdb_attr:create_literal_attribute("note", string),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	%% name the reverse direction from the other endpoint: (T, R, S)
+	ok = graphdb_instance:update_relationship(B, Recip, A,
+		[#{attribute => Note, value => "rev"}]),
+	?assert(lists:member(#{attribute => Note, value => "rev"},
+		re_avps(B, Recip, A))),
+	?assertNot(lists:member(#{attribute => Note, value => "rev"},
+		re_avps(A, Char, B))).
+
+update_relationship_protects_template(_Config) ->
+	#{a := A, b := B, char := Char, recip := Recip} = re_setup(),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	?assertEqual({error, {protected_relationship_avp, ?ARC_TEMPLATE}},
+		graphdb_instance:update_relationship(A, Char, B,
+			[#{attribute => ?ARC_TEMPLATE, value => 7}])).
+
+update_relationship_not_found(_Config) ->
+	#{a := A, b := B, char := Char} = re_setup(),
+	{ok, Note} = graphdb_attr:create_literal_attribute("note", string),
+	?assertEqual({error, relationship_not_found},
+		graphdb_instance:update_relationship(A, Char, B,
+			[#{attribute => Note, value => "x"}])).

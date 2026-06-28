@@ -133,6 +133,10 @@
 		remove_relationship_in_txn/4,
 		resolve_forward_connection/4,
 		template_of/1,
+		update_relationship/4,
+		update_relationship/5,
+		update_relationship_avps_in_txn/5,
+		has_template_update/1,
 		%% Lookups
 		get_instance/1,
 		children/1,
@@ -1336,6 +1340,69 @@ txn_ok(Fun) ->
 	case graphdb_mgr:transaction(Fun) of
 		{ok, _}          -> ok;
 		{error, _} = Err -> Err
+	end.
+
+%%-----------------------------------------------------------------------------
+%% update_relationship_avps_in_txn(S, C, T, TemplateSpec, Updates) -> ok
+%%   (aborts the enclosing transaction on any failure)
+%%
+%% Tier-1 primitive: edits the AVPs of the SINGLE directed connection row named
+%% by (S, C, T) (narrowed by TemplateSpec).  Reuses slice B's pure
+%% apply_avp_updates/2 (merge/upsert/delete).  The ?ARC_TEMPLATE scope AVP is
+%% protected -- any update targeting it aborts.  Same not-found / ambiguity
+%% arms as remove.  The Template AVP at index 0 survives because no update may
+%% reference it.
+%%-----------------------------------------------------------------------------
+update_relationship_avps_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
+		Updates) ->
+	case has_template_update(Updates) of
+		true ->
+			mnesia:abort({protected_relationship_avp, ?ARC_TEMPLATE});
+		false ->
+			case resolve_forward_connection(SourceNref, CharNref, TargetNref,
+					TemplateSpec) of
+				not_found ->
+					mnesia:abort(relationship_not_found);
+				{ambiguous, Templates} ->
+					mnesia:abort({ambiguous_relationship, Templates});
+				{ok, Row} ->
+					New = graphdb_mgr:apply_avp_updates(
+						Row#relationship.avps, Updates),
+					mnesia:write(relationships,
+						Row#relationship{avps = New}, write)
+			end
+	end.
+
+%% True iff any update map targets the protected ?ARC_TEMPLATE scope AVP.
+has_template_update(Updates) ->
+	lists:any(fun(#{attribute := A}) -> A =:= ?ARC_TEMPLATE end, Updates).
+
+%%-----------------------------------------------------------------------------
+%% update_relationship(S, C, T, Updates) -> ok | {error, term()}
+%% update_relationship(S, C, T, TemplateNref, Updates) -> ok | {error, term()}
+%%
+%% Tier-2 public API: AVP-only edit of the single directed row named by
+%% (S, C, T).  Validates the update grammar client-side (slice B), then owns
+%% one transaction.
+%%-----------------------------------------------------------------------------
+update_relationship(SourceNref, CharNref, TargetNref, Updates) ->
+	do_update_relationship(SourceNref, CharNref, TargetNref, any, Updates).
+
+update_relationship(SourceNref, CharNref, TargetNref, TemplateNref, Updates)
+		when is_integer(TemplateNref) ->
+	do_update_relationship(SourceNref, CharNref, TargetNref, TemplateNref,
+		Updates).
+
+do_update_relationship(SourceNref, CharNref, TargetNref, TemplateSpec,
+		Updates) ->
+	case graphdb_mgr:validate_avp_updates(Updates) of
+		ok ->
+			txn_ok(fun() ->
+				update_relationship_avps_in_txn(SourceNref, CharNref,
+					TargetNref, TemplateSpec, Updates)
+			end);
+		{error, _} = Err ->
+			Err
 	end.
 
 
