@@ -92,6 +92,12 @@
 	add_relationship_default_avps_empty/1,
 	add_relationship_refuses_retired_endpoint/1,
 	class_of_returns_class/1,
+	%% Remove relationships
+	remove_relationship_basic/1,
+	remove_relationship_not_found/1,
+	remove_relationship_ambiguous/1,
+	remove_relationship_disambiguate_by_template/1,
+	remove_relationship_dangling_half_edge/1,
 	%% Lookups
 	get_instance_returns_node/1,
 	get_instance_not_found/1,
@@ -238,7 +244,12 @@ groups() ->
 			add_relationship_avps_are_per_direction,
 			add_relationship_default_avps_empty,
 			add_relationship_refuses_retired_endpoint,
-			class_of_returns_class
+			class_of_returns_class,
+			remove_relationship_basic,
+			remove_relationship_not_found,
+			remove_relationship_ambiguous,
+			remove_relationship_disambiguate_by_template,
+			remove_relationship_dangling_half_edge
 		]},
 		{lookups, [], [
 			get_instance_returns_node,
@@ -2368,3 +2379,80 @@ b5_custom_resolver_pure_additive(_Config) ->
 		graphdb_instance:create_instance("car", Car, 5, Conn, Additive),
 	{ok, Kids} = graphdb_instance:children(Root),
 	?assertEqual(2, length(Kids)).                 %% additive: both fire
+
+
+%%=============================================================================
+%% Remove-relationship helpers and test cases
+%%=============================================================================
+
+%% Setup helper: class, default template, two instances, a reciprocal
+%% arc-label pair, and one connection edge A--Char-->B.  Returns the nrefs.
+re_setup() ->
+	{ok, ClassNref}   = graphdb_class:create_class("Org", 3),
+	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
+	{ok, A, _} = graphdb_instance:create_instance("A", ClassNref, 5),
+	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
+	#{class => ClassNref, tmpl => DefaultTmpl, a => A, b => B,
+	  char => Char, recip => Recip}.
+
+%% count forward connection rows A--Char-->B
+re_count(A, Char, B) ->
+	{atomic, Rows} = mnesia:transaction(fun() ->
+		mnesia:index_read(relationships, A, #relationship.source_nref)
+	end),
+	length([R || R <- Rows,
+		R#relationship.kind =:= connection,
+		R#relationship.characterization =:= Char,
+		R#relationship.target_nref =:= B]).
+
+remove_relationship_basic(_Config) ->
+	#{a := A, b := B, char := Char, recip := Recip} = re_setup(),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	?assertEqual(1, re_count(A, Char, B)),
+	?assertEqual(1, re_count(B, Recip, A)),
+	ok = graphdb_instance:remove_relationship(A, Char, B),
+	?assertEqual(0, re_count(A, Char, B)),
+	?assertEqual(0, re_count(B, Recip, A)).
+
+remove_relationship_not_found(_Config) ->
+	#{a := A, b := B, char := Char} = re_setup(),
+	?assertEqual({error, relationship_not_found},
+		graphdb_instance:remove_relationship(A, Char, B)).
+
+remove_relationship_ambiguous(_Config) ->
+	#{a := A, b := B, char := Char, recip := Recip, class := Class} = re_setup(),
+	{ok, DefaultTmpl} = graphdb_class:default_template(Class),
+	{ok, AltTmpl}     = graphdb_class:add_template(Class, "social"),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip, DefaultTmpl),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip, AltTmpl),
+	?assertMatch({error, {ambiguous_relationship, [_, _]}},
+		graphdb_instance:remove_relationship(A, Char, B)).
+
+remove_relationship_disambiguate_by_template(_Config) ->
+	#{a := A, b := B, char := Char, recip := Recip, class := Class} = re_setup(),
+	{ok, DefaultTmpl} = graphdb_class:default_template(Class),
+	{ok, AltTmpl}     = graphdb_class:add_template(Class, "social"),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip, DefaultTmpl),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip, AltTmpl),
+	ok = graphdb_instance:remove_relationship(A, Char, B, DefaultTmpl),
+	%% one edge (the AltTmpl one) remains in each direction
+	?assertEqual(1, re_count(A, Char, B)),
+	?assertEqual(1, re_count(B, Recip, A)).
+
+remove_relationship_dangling_half_edge(_Config) ->
+	#{a := A, b := B, char := Char, recip := Recip} = re_setup(),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	%% manually delete the reverse row, leaving a half-edge
+	{atomic, ok} = mnesia:transaction(fun() ->
+		Rows = mnesia:index_read(relationships, B, #relationship.source_nref),
+		[Rev] = [R || R <- Rows,
+			R#relationship.characterization =:= Recip,
+			R#relationship.target_nref =:= A],
+		mnesia:delete_object(relationships, Rev, write)
+	end),
+	?assertMatch({error, {dangling_half_edge, _}},
+		graphdb_instance:remove_relationship(A, Char, B)),
+	%% the forward row is NOT deleted -- rollback left it intact
+	?assertEqual(1, re_count(A, Char, B)).

@@ -128,6 +128,10 @@
 		add_class_membership/2,
 		%% Tier-1 in-transaction primitive (write-path seam)
 		add_relationship_in_txn/9,
+		remove_relationship/3,
+		remove_relationship/4,
+		remove_relationship_in_txn/4,
+		resolve_forward_connection/4,
 		%% Lookups
 		get_instance/1,
 		children/1,
@@ -1234,6 +1238,104 @@ add_relationship_in_txn({_Id1, _Id2} = IdPair, SourceNref, CharNref,
 		ReciprocalNref, TemplateNref, AVPSpec),
 	lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
 		Rows).
+
+
+%%-----------------------------------------------------------------------------
+%% resolve_forward_connection(SourceNref, CharNref, TargetNref, TemplateSpec)
+%%   -> {ok, #relationship{}} | not_found | {ambiguous, [TemplateNref]}
+%%
+%% Tier-1 in-transaction helper.  Finds the directed connection row(s) whose
+%% (source, characterization, target) match, narrowed by TemplateSpec
+%% (`any` = ignore template; an integer = match that template AVP).  Classifies
+%% none / exactly-one / many; the ambiguous case carries each matching row's
+%% template so a /3 caller can re-issue as /4.  Reads only; never aborts.
+%%-----------------------------------------------------------------------------
+resolve_forward_connection(SourceNref, CharNref, TargetNref, TemplateSpec) ->
+	Rows = mnesia:index_read(relationships, SourceNref,
+		#relationship.source_nref),
+	Matches = [R || R <- Rows,
+		R#relationship.kind =:= connection,
+		R#relationship.characterization =:= CharNref,
+		R#relationship.target_nref =:= TargetNref,
+		template_matches(R, TemplateSpec)],
+	case Matches of
+		[]        -> not_found;
+		[Row]     -> {ok, Row};
+		Many      -> {ambiguous, [template_of(R) || R <- Many]}
+	end.
+
+template_matches(_Row, any) ->
+	true;
+template_matches(Row, TemplateNref) ->
+	template_of(Row) =:= TemplateNref.
+
+%% The Template AVP rides on a connection row's avps.
+template_of(#relationship{avps = AVPs}) ->
+	case find_avp_value(AVPs, ?ARC_TEMPLATE) of
+		{ok, V}   -> V;
+		not_found -> undefined
+	end.
+
+%%-----------------------------------------------------------------------------
+%% remove_relationship_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec)
+%%   -> ok    (aborts the enclosing transaction on any failure)
+%%
+%% Tier-1 primitive.  Must run inside an active mnesia transaction; never opens
+%% its own.  Resolves the forward row (relationship_not_found /
+%% {ambiguous_relationship, Templates}), locates its symmetric partner
+%% (T, R, S) under the same concrete template, and deletes both rows.  A
+%% missing partner is an integrity violation -- aborts {dangling_half_edge, Id}
+%% rather than deleting a half-edge.  Used by remove_relationship/3,4 (tier-2)
+%% and graphdb_mgr:mutate/1 (tier-3).
+%%-----------------------------------------------------------------------------
+remove_relationship_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec) ->
+	case resolve_forward_connection(SourceNref, CharNref, TargetNref,
+			TemplateSpec) of
+		not_found ->
+			mnesia:abort(relationship_not_found);
+		{ambiguous, Templates} ->
+			mnesia:abort({ambiguous_relationship, Templates});
+		{ok, Fwd} ->
+			Recip = Fwd#relationship.reciprocal,
+			Tmpl  = template_of(Fwd),
+			case resolve_forward_connection(TargetNref, Recip, SourceNref,
+					Tmpl) of
+				{ok, Rev} ->
+					ok = mnesia:delete_object(relationships, Fwd, write),
+					ok = mnesia:delete_object(relationships, Rev, write);
+				_ ->
+					mnesia:abort({dangling_half_edge, Fwd#relationship.id})
+			end
+	end.
+
+%%-----------------------------------------------------------------------------
+%% remove_relationship(SourceNref, CharNref, TargetNref) -> ok | {error, term()}
+%% remove_relationship(SourceNref, CharNref, TargetNref, TemplateNref)
+%%   -> ok | {error, term()}
+%%
+%% Tier-2 public API: deletes both directed rows of a logical connection edge
+%% atomically.  /3 ignores template (ambiguous if two templates match); /4
+%% narrows by an explicit template.  Plain functions owning one
+%% graphdb_mgr:transaction/1 in the caller's process (no gen_server state).
+%%-----------------------------------------------------------------------------
+remove_relationship(SourceNref, CharNref, TargetNref) ->
+	txn_ok(fun() ->
+		remove_relationship_in_txn(SourceNref, CharNref, TargetNref, any)
+	end).
+
+remove_relationship(SourceNref, CharNref, TargetNref, TemplateNref)
+		when is_integer(TemplateNref) ->
+	txn_ok(fun() ->
+		remove_relationship_in_txn(SourceNref, CharNref, TargetNref,
+			TemplateNref)
+	end).
+
+%% Run an in-txn primitive in one transaction; normalise {ok, _} -> ok.
+txn_ok(Fun) ->
+	case graphdb_mgr:transaction(Fun) of
+		{ok, _}          -> ok;
+		{error, _} = Err -> Err
+	end.
 
 
 %%-----------------------------------------------------------------------------
