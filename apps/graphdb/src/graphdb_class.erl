@@ -1070,10 +1070,17 @@ do_bind_qc_value(ClassNref, AttrNref, Value) ->
 					false ->
 						mnesia:abort(qc_not_declared);
 					true ->
-						NewAVPs = update_qc_value(AVPs, AttrNref, Value),
-						mnesia:write(nodes,
-							N#node{attribute_value_pairs = NewAVPs},
-							write)
+						case is_qc_instance_only(AVPs, AttrNref) of
+							true ->
+								mnesia:abort(
+									{instance_only_attribute, AttrNref});
+							false ->
+								NewAVPs = update_qc_value(AVPs, AttrNref,
+									Value),
+								mnesia:write(nodes,
+									N#node{attribute_value_pairs = NewAVPs},
+									write)
+						end
 				end;
 			[_] -> mnesia:abort(not_a_class);
 			[]  -> mnesia:abort(not_found)
@@ -1096,6 +1103,18 @@ update_qc_value(AVPs, AttrNref, Value) ->
 		#{attribute := AttrNref} -> A#{value => Value};
 		_                        -> A
 	 end || A <- AVPs].
+
+%%-----------------------------------------------------------------------------
+%% is_qc_instance_only(AVPs, AttrNref) -> boolean()
+%%
+%% True iff the QC entry for AttrNref in AVPs carries the instance_only
+%% marker. Caller has already verified AttrNref is present.
+%%-----------------------------------------------------------------------------
+is_qc_instance_only(AVPs, AttrNref) ->
+	lists:any(fun(#{attribute := A} = E) when A =:= AttrNref ->
+				 is_instance_only(E);
+			 (_) -> false
+		  end, AVPs).
 
 
 %%-----------------------------------------------------------------------------

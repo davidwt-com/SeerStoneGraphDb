@@ -112,6 +112,7 @@
 	bind_qc_value_updates_existing_binding/1,
 	add_qc_3_stamps_instance_only_marker/1,
 	add_qc_3_idempotent_does_not_upgrade/1,
+	bind_qc_value_rejects_instance_only/1,
 	%% Lookups
 	get_class_returns_node/1,
 	get_class_not_found/1,
@@ -209,7 +210,8 @@ groups() ->
 			bind_qc_value_undeclared_qc,
 			bind_qc_value_updates_existing_binding,
 			add_qc_3_stamps_instance_only_marker,
-			add_qc_3_idempotent_does_not_upgrade
+			add_qc_3_idempotent_does_not_upgrade,
+			bind_qc_value_rejects_instance_only
 		]},
 		{lookups, [], [
 			get_class_returns_node,
@@ -990,6 +992,23 @@ add_qc_3_idempotent_does_not_upgrade(_Config) ->
 	?assertNot(lists:member(
 		#{attribute => AttrN, value => undefined, instance_only => true},
 		Node#node.attribute_value_pairs)).
+
+
+%%-----------------------------------------------------------------------------
+%% bind_qc_value/3 refuses to bind a value on an instance-only QC, and the
+%% transaction abort leaves the QC unbound.
+%%-----------------------------------------------------------------------------
+bind_qc_value_rejects_instance_only(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, Veh}   = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+	{ok, AttrN} = graphdb_attr:create_literal_attribute("serial", string),
+	ok = graphdb_class:add_qualifying_characteristic(Veh, AttrN,
+		#{instance_only => true}),
+	?assertEqual({error, {instance_only_attribute, AttrN}},
+		graphdb_class:bind_qc_value(Veh, AttrN, "SN-1")),
+	%% Abort rolled back the write: the QC is still declared, still unbound.
+	{ok, QCs} = graphdb_class:inherited_qcs(Veh),
+	?assert(lists:member({AttrN, undefined}, QCs)).
 
 
 %%=============================================================================
