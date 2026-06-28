@@ -327,6 +327,12 @@ transaction(Fun) ->
 %%   {retire_node,      Nref}
 %%   {unretire_node,    Nref}
 %%   {update_node_avps, Nref, AVPs}                        merge/upsert AVP list
+%%   {remove_relationship, S, C, T}                        remove edge (any template)
+%%   {remove_relationship, S, C, T, Template}              remove edge (explicit template)
+%%   {update_relationship, S, C, T, Updates}               edit one direction's AVPs
+%%   {update_relationship, S, C, T, Template, Updates}     + explicit template
+%%   {update_relationship_both, S, C, T, {Fwd, Rev}}       edit both directions' AVPs
+%%   {update_relationship_both, S, C, T, Template, {Fwd, Rev}}  + explicit template
 %%
 %% Returns {ok, [Result]} -- one native success value per mutation in list
 %% order (every op returns `ok` today, so {ok, [ok, ok, ...]}) -- or the bare
@@ -378,11 +384,30 @@ validate_mutation({update_node_avps, Nref, AVPs}) when is_integer(Nref) ->
 		ok               -> tier_guard(Nref);
 		{error, _} = Err -> Err
 	end;
+validate_mutation({remove_relationship, _S, _C, _T}) ->
+	ok;
+validate_mutation({remove_relationship, _S, _C, _T, _Template}) ->
+	ok;
+validate_mutation({update_relationship, _S, _C, _T, Updates}) ->
+	validate_avp_updates(Updates);
+validate_mutation({update_relationship, _S, _C, _T, _Template, Updates}) ->
+	validate_avp_updates(Updates);
+validate_mutation({update_relationship_both, _S, _C, _T, {Fwd, Rev}}) ->
+	validate_both_avp_updates(Fwd, Rev);
+validate_mutation({update_relationship_both, _S, _C, _T, _Template,
+		{Fwd, Rev}}) ->
+	validate_both_avp_updates(Fwd, Rev);
 validate_mutation(M) ->
 	{error, {bad_mutation, M}}.
 
 tier_guard(Nref) when Nref >= ?NREF_START -> ok;
 tier_guard(_Nref)                         -> {error, permanent_node_immutable}.
+
+validate_both_avp_updates(Fwd, Rev) ->
+	case validate_avp_updates(Fwd) of
+		ok               -> validate_avp_updates(Rev);
+		{error, _} = Err -> Err
+	end.
 
 %% Phases 2 + 3. Precondition: Mutations already passed validate_mutations/1.
 %% Empty batch short-circuits with no transaction.
@@ -419,6 +444,18 @@ prepare({retire_node, _Nref} = M) ->
 prepare({unretire_node, _Nref} = M) ->
 	M;
 prepare({update_node_avps, _Nref, _AVPs} = M) ->
+	M;
+prepare({remove_relationship, _S, _C, _T} = M) ->
+	M;
+prepare({remove_relationship, _S, _C, _T, _Template} = M) ->
+	M;
+prepare({update_relationship, _S, _C, _T, _U} = M) ->
+	M;
+prepare({update_relationship, _S, _C, _T, _Template, _U} = M) ->
+	M;
+prepare({update_relationship_both, _S, _C, _T, _Pair} = M) ->
+	M;
+prepare({update_relationship_both, _S, _C, _T, _Template, _Pair} = M) ->
 	M.
 
 %% Phase 3 dispatch. Runs INSIDE the transaction: no gen_server calls, no
@@ -433,7 +470,21 @@ dispatch({retire_node, Nref}, _TkAttr, RetAttr) ->
 dispatch({unretire_node, Nref}, _TkAttr, RetAttr) ->
 	set_retired_(Nref, false, RetAttr);
 dispatch({update_node_avps, Nref, AVPs}, _TkAttr, RetAttr) ->
-	update_node_avps_in_txn(Nref, AVPs, RetAttr).
+	update_node_avps_in_txn(Nref, AVPs, RetAttr);
+dispatch({remove_relationship, S, C, T}, _TkAttr, _RetAttr) ->
+	graphdb_instance:remove_relationship_in_txn(S, C, T, any);
+dispatch({remove_relationship, S, C, T, Template}, _TkAttr, _RetAttr) ->
+	graphdb_instance:remove_relationship_in_txn(S, C, T, Template);
+dispatch({update_relationship, S, C, T, U}, _TkAttr, _RetAttr) ->
+	graphdb_instance:update_relationship_avps_in_txn(S, C, T, any, U);
+dispatch({update_relationship, S, C, T, Template, U}, _TkAttr, _RetAttr) ->
+	graphdb_instance:update_relationship_avps_in_txn(S, C, T, Template, U);
+dispatch({update_relationship_both, S, C, T, {Fwd, Rev}}, _TkAttr, _RetAttr) ->
+	graphdb_instance:update_relationship_both_in_txn(S, C, T, any, Fwd, Rev);
+dispatch({update_relationship_both, S, C, T, Template, {Fwd, Rev}}, _TkAttr,
+		_RetAttr) ->
+	graphdb_instance:update_relationship_both_in_txn(S, C, T, Template, Fwd,
+		Rev).
 
 
 %%-----------------------------------------------------------------------------

@@ -132,7 +132,10 @@
 	%% instance-only QC enforcement
 	update_node_avps_rejects_instance_only/1,
 	update_node_avps_delete_instance_only_ok/1,
-	mutate_rejects_instance_only/1
+	mutate_rejects_instance_only/1,
+	mutate_remove_relationship/1,
+	mutate_update_relationship/1,
+	mutate_mixed_rollback/1
 ]).
 
 
@@ -218,7 +221,10 @@ groups() ->
 			mutate_update_avps_rollback,
 			mutate_update_avps_malformed,
 			mutate_update_avps_not_found,
-			mutate_rejects_instance_only
+			mutate_rejects_instance_only,
+			mutate_remove_relationship,
+			mutate_update_relationship,
+			mutate_mixed_rollback
 		]},
 		{update_avps, [], [
 			update_node_avps_upsert_roundtrip,
@@ -319,7 +325,10 @@ init_per_testcase(TC, Config) when
 		TC =:= mutate_update_avps_not_found;
 		TC =:= update_node_avps_rejects_instance_only;
 		TC =:= update_node_avps_delete_instance_only_ok;
-		TC =:= mutate_rejects_instance_only ->
+		TC =:= mutate_rejects_instance_only;
+		TC =:= mutate_remove_relationship;
+		TC =:= mutate_update_relationship;
+		TC =:= mutate_mixed_rollback ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
@@ -1468,3 +1477,59 @@ mutate_rejects_instance_only(_Config) ->
 	[#node{attribute_value_pairs = AVPs}] = mnesia:dirty_read(nodes, ClassNref),
 	?assert(lists:member(
 		#{attribute => Attr, value => undefined, instance_only => true}, AVPs)).
+
+%% count outgoing connection rows Source--Char-->Target via the public read API
+mutate_conn_count(Source, Char, Target) ->
+	{ok, Rels} = graphdb_mgr:get_relationships(Source),
+	length([R || R <- Rels,
+		R#relationship.kind =:= connection,
+		R#relationship.characterization =:= Char,
+		R#relationship.target_nref =:= Target]).
+
+mutate_remove_relationship(_Config) ->
+	{ok, Class}   = graphdb_class:create_class("MRemoveOrg", 3),
+	{ok, A, _} = graphdb_instance:create_instance("MRA", Class, 5),
+	{ok, B, _} = graphdb_instance:create_instance("MRB", Class, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("MRKnows", "MRKnownBy",
+			instance),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	?assertEqual(1, mutate_conn_count(A, Char, B)),
+	?assertEqual({ok, [ok]},
+		graphdb_mgr:mutate([{remove_relationship, A, Char, B}])),
+	?assertEqual(0, mutate_conn_count(A, Char, B)),
+	?assertEqual(0, mutate_conn_count(B, Recip, A)),
+	ok = graphdb_mgr:verify_caches().
+
+mutate_update_relationship(_Config) ->
+	{ok, Class}   = graphdb_class:create_class("MUpdOrg", 3),
+	{ok, A, _} = graphdb_instance:create_instance("MUA", Class, 5),
+	{ok, B, _} = graphdb_instance:create_instance("MUB", Class, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("MUKnows", "MUKnownBy",
+			instance),
+	{ok, Note} = graphdb_attr:create_literal_attribute("munote", string),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	?assertEqual({ok, [ok, ok]}, graphdb_mgr:mutate([
+		{update_relationship, A, Char, B, [#{attribute => Note, value => "f"}]},
+		{update_relationship_both, A, Char, B,
+			{[#{attribute => Note, value => "F"}],
+			 [#{attribute => Note, value => "R"}]}}])),
+	ok = graphdb_mgr:verify_caches().
+
+mutate_mixed_rollback(_Config) ->
+	{ok, Class}   = graphdb_class:create_class("MMixOrg", 3),
+	{ok, A, _} = graphdb_instance:create_instance("MMA", Class, 5),
+	{ok, B, _} = graphdb_instance:create_instance("MMB", Class, 5),
+	{ok, {Char, Recip}} =
+		graphdb_attr:create_relationship_attribute_pair("MMKnows", "MMKnownBy",
+			instance),
+	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	%% second mutation removes a non-existent edge -> whole batch rolls back
+	?assertEqual({error, relationship_not_found}, graphdb_mgr:mutate([
+		{remove_relationship, A, Char, B},
+		{remove_relationship, A, Char, B}])),
+	%% the first remove was rolled back -- the edge is still present
+	?assertEqual(1, mutate_conn_count(A, Char, B)),
+	?assertEqual(1, mutate_conn_count(B, Recip, A)),
+	ok = graphdb_mgr:verify_caches().
