@@ -132,6 +132,7 @@
 		remove_relationship/4,
 		remove_relationship_in_txn/4,
 		resolve_forward_connection/4,
+		template_of/1,
 		%% Lookups
 		get_instance/1,
 		children/1,
