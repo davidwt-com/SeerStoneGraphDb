@@ -326,13 +326,47 @@ node written. Design `docs/designs/slice-c-instance-only-qc-design.md`.
 
 ### Relationship mutation (slice E)
 
+Design: `docs/designs/slice-e-relationship-mutation-design.md`.
+
 Only `add_relationship` (create) exists today — there is no remove or
-update. `remove_relationship` deletes both directed rows of a logical edge
-atomically and fixes the `parents`/`classes` caches on the referrers; it
-shares the arc-removal primitive with `delete_node` (slice A).
-`update_relationship` changes `characterization` / `target_nref` /
-`reciprocal` / AVPs; the AVP-only edit mirrors `update_node_avps`
-(slice B). Built on the transaction seam.
+update. Slice E adds, **connection-arcs only** (the exact mirror of
+`add_relationship`; no `parents`/`classes` cache work — connection arcs are
+never cached):
+
+- `remove_relationship/3,4` — atomically delete both directed rows of a
+  logical connection edge. (The earlier note that it "fixes the caches" and
+  "shares the arc-removal primitive with `delete_node`" was aspirational:
+  slice A shipped soft-retire only, so no hard-delete primitive exists to
+  share, and connection removal needs no cache fix.)
+- `update_relationship/4,5` + `update_relationship_both/4,5` — AVP-only edit
+  of an existing edge, reusing slice B's `validate_avp_updates/1` +
+  `apply_avp_updates/2`. Single-direction is the one tier-1 primitive;
+  `*_both` composes it twice with independent `{Fwd, Rev}` lists. The
+  `?ARC_TEMPLATE` scope AVP is protected from edit.
+
+Because nothing dedups connection edges at write time, the identity contract
+is: `(S, C, T)` (optionally narrowed by `Template`) matches a logical edge;
+zero matches → `relationship_not_found`, more than one → `ambiguous_relationship`.
+**Remove is edge-level (both rows); AVP update is directed-row-level (one
+row).** Built on the transaction seam; all three kinds compose into
+`mutate/1`.
+
+Deferred (recorded in the design): structural rewiring (`characterization` /
+`target_nref` / `reciprocal` — expressible as `mutate([remove, add])`); a
+rel-id-keyed form (the only disambiguator for genuine duplicate edges).
+
+### Compositional arc mutation — `add_parent` / `add_child` / `remove_parent` / `remove_child` (follow-up)
+
+Compositional-hierarchy ("part of") arc creators and removers between
+instances: `add_parent(Child, Parent)` / `add_child(Parent, Child)` write a
+`kind=composition` arc, and `remove_parent(Child, Parent)` /
+`remove_child(Parent, Child)` delete it — all **maintaining the child's
+`parents` cache** — the cache-touching counterpart that slice E
+(connection-only) deliberately does not cover. The cache-maintenance core
+here is also what a future `delete_node` hard-delete and a general
+(kind-agnostic) arc remover would reuse. Built on the transaction seam;
+tier-1 primitives + tier-2 wrappers + `mutate/1` grammar, with
+`verify_caches/0` clean after each.
 
 ### Multilingual write-path integration (slice D)
 
