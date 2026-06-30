@@ -65,7 +65,9 @@
 %%---------------------------------------------------------------------
 -export([
 	register_project_creates_child_of_projects/1,
-	is_project_false_for_non_child/1
+	is_project_false_for_non_child/1,
+	open_session_on_registered_project/1,
+	open_session_rejects_non_project/1
 ]).
 
 
@@ -78,7 +80,9 @@ suite() ->
 
 all() ->
 	[register_project_creates_child_of_projects,
-	 is_project_false_for_non_child].
+	 is_project_false_for_non_child,
+	 open_session_on_registered_project,
+	 open_session_rejects_non_project].
 
 groups() ->
 	[].
@@ -185,6 +189,21 @@ register_project_creates_child_of_projects(_Config) ->
 %%-----------------------------------------------------------------------------
 is_project_false_for_non_child(_Config) ->
 	?assertNot(graphdb_project:is_project(?NREF_CLASSES)).
+
+%%-----------------------------------------------------------------------------
+%% open_session returns {ok, Session} for a registered project.
+%%-----------------------------------------------------------------------------
+open_session_on_registered_project(_Config) ->
+	{ok, P} = graphdb_project:register_project("Acme"),
+	{ok, S} = graphdb_project:open_session(P),
+	?assertEqual(P, graphdb_project:session_project(S)).
+
+%%-----------------------------------------------------------------------------
+%% open_session returns {error, not_a_project} for a non-project nref.
+%%-----------------------------------------------------------------------------
+open_session_rejects_non_project(_Config) ->
+	?assertEqual({error, not_a_project},
+				 graphdb_project:open_session(?NREF_CLASSES)).
 
 
 %%=============================================================================

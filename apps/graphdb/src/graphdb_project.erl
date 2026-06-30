@@ -78,7 +78,7 @@ end)).
 %%---------------------------------------------------------------------
 %% Exports
 %%---------------------------------------------------------------------
--export([register_project/1, is_project/1]).
+-export([register_project/1, is_project/1, open_session/1, session_project/1]).
 
 
 %%=====================================================================
@@ -134,3 +134,25 @@ is_project(Nref) ->
 		{ok, #node{parents = Parents}} -> lists:member(?NREF_PROJECTS, Parents);
 		_                              -> false
 	end.
+
+
+%%---------------------------------------------------------------------
+%% open_session(ProjectNref) -> {ok, Session} | {error, not_a_project}
+%%
+%% Opens a session on a registered project. Returns an opaque Session map
+%% if the nref is a registered project, otherwise {error, not_a_project}.
+%% Session is #{kind => project_session, project => Nref}.
+%%---------------------------------------------------------------------
+open_session(ProjectNref) ->
+	case is_project(ProjectNref) of
+		true  -> {ok, #{kind => project_session, project => ProjectNref}};
+		false -> {error, not_a_project}
+	end.
+
+
+%%---------------------------------------------------------------------
+%% session_project(Session) -> ProjectNref
+%%
+%% Extracts the project nref from an opaque session map.
+%%---------------------------------------------------------------------
+session_project(#{kind := project_session, project := Nref}) -> Nref.
