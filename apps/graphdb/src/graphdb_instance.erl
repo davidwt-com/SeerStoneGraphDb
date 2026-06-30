@@ -101,12 +101,15 @@
 }).
 
 -record(state, {
-	target_kind_avp_nref,	%% integer() -- nref of the seeded `target_kind`
-							%% literal-attribute, cached from graphdb_attr
-							%% at init time and used by add_relationship
-							%% validation.
-	instantiable_nref,		%% integer() -- seeded `instantiable` marker
-	retired_nref			%% integer() -- seeded `retired` marker
+	target_kind_avp_nref,			%% integer() -- nref of the seeded `target_kind`
+									%% literal-attribute, cached from graphdb_attr
+									%% at init time and used by add_relationship
+									%% validation.
+	instantiable_nref,				%% integer() -- seeded `instantiable` marker
+	retired_nref,					%% integer() -- seeded `retired` marker
+	remote_reference_class_nref,	%% integer() -- seeded "Remote Reference" class
+	remote_project_nref,			%% integer() -- seeded `remote_project` literal
+	remote_nref_nref				%% integer() -- seeded `remote_nref` literal
 }).
 
 
@@ -147,7 +150,11 @@
 		class_of/1,
 		class_memberships/1,
 		%% Inheritance
-		resolve_value/2
+		resolve_value/2,
+		%% Proxy recognizer
+		remote_reference_class/0,
+		is_proxy/1,
+		proxy_coordinates/1
 		]).
 
 %%---------------------------------------------------------------------
@@ -381,24 +388,79 @@ resolve_value(InstanceNref, AttrNref) ->
 	gen_server:call(?MODULE, {resolve_value, InstanceNref, AttrNref}).
 
 
+%%-----------------------------------------------------------------------------
+%% remote_reference_class() -> integer()
+%%
+%% Returns the nref of the seeded "Remote Reference" class node.
+%% The class is seeded at init time under the Classes category (nref 3).
+%%-----------------------------------------------------------------------------
+remote_reference_class() ->
+	gen_server:call(?MODULE, remote_reference_class).
+
+
+%%-----------------------------------------------------------------------------
+%% is_proxy(#node{}) -> boolean()
+%%
+%% Returns true iff the node is a member of the "Remote Reference" class.
+%% This is a representation-contract check only — no dereference.
+%%-----------------------------------------------------------------------------
+is_proxy(#node{classes = Classes}) ->
+	lists:member(remote_reference_class(), Classes).
+
+
+%%-----------------------------------------------------------------------------
+%% proxy_coordinates(#node{}) ->
+%%     {ok, #{remote_project => integer(), remote_nref => integer()}}
+%%   | not_a_proxy
+%%
+%% Extracts the remote_project and remote_nref AVP values from a proxy node.
+%% Returns not_a_proxy if the node is not a member of the Remote Reference class.
+%%-----------------------------------------------------------------------------
+proxy_coordinates(#node{attribute_value_pairs = AVPs} = N) ->
+	case is_proxy(N) of
+		false ->
+			not_a_proxy;
+		true ->
+			{ok, #{remote_project := RP, remote_nref := RN}} =
+				graphdb_attr:seeded_nrefs(),
+			{ok, #{remote_project => avp_value(AVPs, RP),
+				   remote_nref    => avp_value(AVPs, RN)}}
+	end.
+
+
 %%=============================================================================
 %% gen_server Behaviour Callbacks
 %%=============================================================================
 
 init([]) ->
-	logger:info("graphdb_instance: started"),
-	%% Cache the seeded `target_kind` literal-attribute nref from
-	%% graphdb_attr.  Used by add_relationship validation to check
-	%% that an arc's target node has the kind declared on the
-	%% characterization.  Also cache `instantiable` to check at
-	%% create_instance time that the class is not marked non-instantiable.
-	%% graphdb_attr is started before graphdb_instance by graphdb_sup,
-	%% so this call is safe at init time.
-	{ok, #{target_kind := TkAttr, instantiable := InstAttr,
-		   retired := RetAttr}} = graphdb_attr:seeded_nrefs(),
-	{ok, #state{target_kind_avp_nref = TkAttr,
-				instantiable_nref = InstAttr,
-				retired_nref = RetAttr}}.
+	%% Cache literal-attribute nrefs from graphdb_attr.  graphdb_attr is
+	%% started before graphdb_instance by graphdb_sup, so this call is
+	%% safe at init time.
+	try
+		{ok, #{target_kind    := TkAttr,
+			   instantiable   := InstAttr,
+			   retired        := RetAttr,
+			   remote_project := RpAttr,
+			   remote_nref    := RnAttr}} = graphdb_attr:seeded_nrefs(),
+		%% Ensure the "Remote Reference" class exists under Classes (nref 3).
+		%% find_subclass_by_name runs a transaction; graphdb_class:create_class
+		%% is a gen_server call resolved outside any transaction.
+		RRClass = ensure_remote_reference_class(),
+		logger:info("graphdb_instance: started "
+			"(target_kind=~p, instantiable=~p, retired=~p, "
+			"remote_reference_class=~p, remote_project=~p, remote_nref=~p)",
+			[TkAttr, InstAttr, RetAttr, RRClass, RpAttr, RnAttr]),
+		{ok, #state{target_kind_avp_nref          = TkAttr,
+					instantiable_nref              = InstAttr,
+					retired_nref                   = RetAttr,
+					remote_reference_class_nref    = RRClass,
+					remote_project_nref            = RpAttr,
+					remote_nref_nref               = RnAttr}}
+	catch
+		throw:{error, Reason} ->
+			logger:error("graphdb_instance: seeding failed: ~p", [Reason]),
+			{stop, {seed_failed, Reason}}
+	end.
 
 
 %%-----------------------------------------------------------------------------
@@ -447,6 +509,13 @@ handle_call({class_memberships, Nref}, _From, State) ->
 handle_call({resolve_value, InstNref, AttrNref}, _From, State) ->
 	{reply, do_resolve_value(InstNref, AttrNref), State};
 
+%%-----------------------------------------------------------------------------
+%% handle_call/3 -- Proxy accessor
+%%-----------------------------------------------------------------------------
+handle_call(remote_reference_class, _From,
+		#state{remote_reference_class_nref = RRClass} = State) ->
+	{reply, RRClass, State};
+
 handle_call(Request, From, State) ->
 	?UEM(handle_call, {Request, From, State}),
 	{noreply, State}.
@@ -492,6 +561,72 @@ find_avp_value([#{attribute := A} | _], A) ->
 	not_found;
 find_avp_value([_ | Rest], AttrNref) ->
 	find_avp_value(Rest, AttrNref).
+
+
+%%-----------------------------------------------------------------------------
+%% avp_value(AVPs, AttrNref) -> term()
+%%
+%% Unwraps find_avp_value/2, returning the raw value.  Only used where the
+%% value is expected to be present (e.g., a verified proxy node).
+%%-----------------------------------------------------------------------------
+avp_value(AVPs, AttrNref) ->
+	{ok, V} = find_avp_value(AVPs, AttrNref),
+	V.
+
+
+%%-----------------------------------------------------------------------------
+%% ensure_remote_reference_class() -> integer()
+%%
+%% Idempotent init helper: returns the nref of the "Remote Reference" class
+%% under the Classes category (nref 3), creating it on first startup.
+%% Throws {error, Reason} on failure (caught by init/1 try/catch).
+%%-----------------------------------------------------------------------------
+ensure_remote_reference_class() ->
+	case find_subclass_by_name(?NREF_CLASSES, "Remote Reference") of
+		{ok, Nref} ->
+			Nref;
+		not_found ->
+			case graphdb_class:create_class("Remote Reference", ?NREF_CLASSES) of
+				{ok, Nref}      -> Nref;
+				{error, Reason} -> throw({error, Reason})
+			end
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% find_subclass_by_name(ParentNref, Name) -> {ok, Nref} | not_found
+%%
+%% Searches the direct taxonomy children of ParentNref for a class node
+%% whose NAME_ATTR_CLASS AVP matches Name.  Runs in one Mnesia transaction.
+%% Throws {error, Reason} on transaction failure.
+%%-----------------------------------------------------------------------------
+find_subclass_by_name(ParentNref, Name) ->
+	F = fun() ->
+		Arcs = mnesia:index_read(relationships, ParentNref,
+								 #relationship.source_nref),
+		ChildNrefs = [A#relationship.target_nref || A <- Arcs,
+					  A#relationship.kind =:= taxonomy,
+					  A#relationship.characterization =:= ?ARC_CLS_CHILD],
+		Nodes = lists:flatmap(fun(N) -> mnesia:read(nodes, N) end, ChildNrefs),
+		lists:search(fun(N) -> class_has_name(N, Name) end, Nodes)
+	end,
+	case graphdb_mgr:transaction(F) of
+		{ok, {value, #node{nref = Nref}}} -> {ok, Nref};
+		{ok, false}                       -> not_found;
+		{error, Reason}                   -> throw({error, Reason})
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% class_has_name(#node{}, Name) -> boolean()
+%%
+%% True iff the node carries a NAME_ATTR_CLASS AVP with value Name.
+%%-----------------------------------------------------------------------------
+class_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
+	lists:any(fun
+		(#{attribute := ?NAME_ATTR_CLASS, value := V}) -> V =:= Name;
+		(_) -> false
+	end, AVPs).
 
 
 %%-----------------------------------------------------------------------------

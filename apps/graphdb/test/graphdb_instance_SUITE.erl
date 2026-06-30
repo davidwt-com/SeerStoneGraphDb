@@ -199,7 +199,10 @@
 	%% B5 end-to-end firing
 	b5_firing_same_level_mode_priority/1,
 	b5_firing_cross_level_shadow/1,
-	b5_custom_resolver_pure_additive/1
+	b5_custom_resolver_pure_additive/1,
+	%% Proxy recognizer
+	proxy_recognizer_identifies_proxy/1,
+	proxy_recognizer_rejects_plain_instance/1
 ]).
 
 
@@ -213,7 +216,7 @@ suite() ->
 all() ->
 	[{group, creation}, {group, relationships}, {group, lookups},
 	 {group, hierarchy}, {group, inheritance}, {group, multi_membership},
-	 {group, firing}].
+	 {group, firing}, {group, proxy_recognizer}].
 
 groups() ->
 	[
@@ -354,6 +357,10 @@ groups() ->
 			b5_firing_same_level_mode_priority,
 			b5_firing_cross_level_shadow,
 			b5_custom_resolver_pure_additive
+		]},
+		{proxy_recognizer, [], [
+			proxy_recognizer_identifies_proxy,
+			proxy_recognizer_rejects_plain_instance
 		]}
 	].
 
@@ -2539,3 +2546,32 @@ update_relationship_both_directions(_Config) ->
 	?assertNot(lists:member(#{attribute => RAttr, value => "R"}, FwdAVPs)),
 	?assert(lists:member(#{attribute => RAttr, value => "R"}, RevAVPs)),
 	?assertNot(lists:member(#{attribute => FAttr, value => "F"}, RevAVPs)).
+
+
+%%=============================================================================
+%% Proxy recognizer test cases
+%%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% A node carrying the "Remote Reference" class membership and both proxy AVPs
+%% is recognised as a proxy; coordinates are extracted correctly.
+%%-----------------------------------------------------------------------------
+proxy_recognizer_identifies_proxy(_Config) ->
+	{ok, #{remote_project := RP, remote_nref := RN}} = graphdb_attr:seeded_nrefs(),
+	RRClass = graphdb_instance:remote_reference_class(),
+	Node = #node{nref = 999999001, kind = instance, classes = [RRClass],
+				 attribute_value_pairs =
+					 [#{attribute => RP, value => 5},
+					  #{attribute => RN, value => 42}]},
+	?assert(graphdb_instance:is_proxy(Node)),
+	?assertEqual({ok, #{remote_project => 5, remote_nref => 42}},
+				 graphdb_instance:proxy_coordinates(Node)).
+
+%%-----------------------------------------------------------------------------
+%% A plain instance with no class membership and no AVPs is not a proxy.
+%%-----------------------------------------------------------------------------
+proxy_recognizer_rejects_plain_instance(_Config) ->
+	Node = #node{nref = 999999002, kind = instance, classes = [],
+				 attribute_value_pairs = []},
+	?assertNot(graphdb_instance:is_proxy(Node)),
+	?assertEqual(not_a_proxy, graphdb_instance:proxy_coordinates(Node)).

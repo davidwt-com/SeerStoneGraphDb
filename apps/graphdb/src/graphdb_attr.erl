@@ -107,7 +107,9 @@
 	relationship_avp_nref,			%% integer() -- seeded literal attribute
 	attribute_type_nref,			%% integer() -- seeded literal attribute
 	instantiable_nref,				%% integer() -- seeded marker literal attribute
-	retired_nref					%% integer() -- seeded `retired` lifecycle marker
+	retired_nref,					%% integer() -- seeded `retired` lifecycle marker
+	remote_project_nref,			%% integer() -- seeded `remote_project` proxy literal
+	remote_nref_nref				%% integer() -- seeded `remote_nref` proxy literal
 }).
 
 
@@ -348,18 +350,22 @@ init([]) ->
 			relationship_avp_nref = ensure_seed("relationship_avp", AttrLitNref),
 			attribute_type_nref   = ensure_seed("attribute_type", AttrLitNref),
 			instantiable_nref     = ensure_seed("instantiable", AttrLitNref),
-			retired_nref          = ensure_seed("retired", AttrLitNref)
+			retired_nref          = ensure_seed("retired", AttrLitNref),
+			remote_project_nref   = ensure_seed("remote_project", AttrLitNref),
+			remote_nref_nref      = ensure_seed("remote_nref", AttrLitNref)
 		},
 		ok = ensure_template_avp_marker(State#state.relationship_avp_nref),
 		ok = retro_stamp_bootstrap_attribute_types(
 			State#state.attribute_type_nref),
 		logger:info("graphdb_attr: started (attribute_literals_group=~p, "
 			"literal_type=~p, target_kind=~p, relationship_avp=~p, "
-			"attribute_type=~p, instantiable=~p, retired=~p)",
+			"attribute_type=~p, instantiable=~p, retired=~p, "
+			"remote_project=~p, remote_nref=~p)",
 			[AttrLitNref, State#state.literal_type_nref,
 			 State#state.target_kind_nref, State#state.relationship_avp_nref,
 			 State#state.attribute_type_nref, State#state.instantiable_nref,
-			 State#state.retired_nref]),
+			 State#state.retired_nref, State#state.remote_project_nref,
+			 State#state.remote_nref_nref]),
 		{ok, State}
 	catch
 		throw:{error, Reason} ->
@@ -420,7 +426,9 @@ handle_call(seeded_nrefs, _From, State) ->
 		relationship_avp => State#state.relationship_avp_nref,
 		attribute_type   => State#state.attribute_type_nref,
 		instantiable     => State#state.instantiable_nref,
-		retired          => State#state.retired_nref
+		retired          => State#state.retired_nref,
+		remote_project   => State#state.remote_project_nref,
+		remote_nref      => State#state.remote_nref_nref
 	}},
 	{reply, Reply, State};
 
