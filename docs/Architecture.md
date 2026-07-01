@@ -211,13 +211,15 @@ Every `kind = connection` arc carries a `Template` AVP — `#{attribute
 semantic context. The AVP attribute is bootstrap-seeded at nref 31;
 it is forbidden on relationships of any other kind. Template nodes
 are compositional children of class nodes (see §3 cache field
-sources). API: `graphdb_instance:add_relationship/4,5`.
+sources). API: `graphdb_instance:add_relationship/5,6,7` (session-first — SP1).
 
-Connection edges are mutated through `graphdb_instance`
-(connection-arcs only — these never touch the `parents`/`classes` caches):
-`remove_relationship/3,4` deletes **both** directed rows of a logical edge
-atomically; `update_relationship/4,5` and `update_relationship_both/4,5` edit
-the per-direction AVP metadata, reusing the slice-B AVP merge grammar. Remove
+Connection edges are mutated through `graphdb_instance` (connection-arcs
+only — these never touch the `parents`/`classes` caches; all take a project
+`Session` first arg — SP1 — and reject an invalid one with
+`{error, invalid_session}`): `remove_relationship/4,5` deletes **both**
+directed rows of a logical edge atomically; `update_relationship/5,6` and
+`update_relationship_both/5,6` edit the per-direction AVP metadata, reusing the
+slice-B AVP merge grammar. Remove
 is logical-edge-level; AVP update is directed-row-level (the `(S,C,T)` triple
 names one directed row — name `(T,R,S)` to edit the reverse). The `Template`
 AVP is protected from edit. Since nothing dedups connection edges at write
@@ -328,6 +330,11 @@ literal AVP on every arc-label attribute node. Built-in arc labels
 (nrefs 21–30) carry it; `graphdb_attr:create_relationship_attribute_pair/4`
 requires it for runtime additions.
 
+This routing table is the code contract of the pure module `graphdb_ns`
+(`namespace_of/1`, `target_namespace/1` → `environment | project | home`) —
+see the SP1 model below. Against today's single store it is behaviour-
+preserving; SP2 gives it physical teeth.
+
 Every `graphdb_attr` creator takes an explicit, validated `ParentNref`
 (must name an existing `kind=attribute` node); the named functions
 (`create_name_attribute`, `create_literal_attribute`,
@@ -354,6 +361,39 @@ Visibility of the anchor node is governed by ACL AVPs on that node
 (not yet implemented). Globally visible projects have no access
 restriction; owner-specific projects have a permissioned ACL. The node
 always exists regardless of its visibility.
+
+### Reference & namespace model (SP1)
+
+The environment/project separation is a four-sub-project program
+(design: `designs/project-env-reference-namespace-model-design.md`; tracking:
+`../TASKS.md` → *Multi-project sessions*). **SP1 is implemented at the API/code
+layer only — no `node`/`relationship` record changes:**
+
+- **`graphdb_ns`** — pure namespace-resolution module encoding the routing
+  table above; every nref field resolves to `environment | project | home`.
+- **`graphdb_project`** — project registry (`register_project/1`,
+  `is_project/1`) creating the nref-5 anchor, plus the project **session**
+  (`open_session/1`, `session_project/1`, `require_session/1`) and the
+  canonical project-scoped relationship API surface. A session is an opaque
+  value threaded as data — the workers are shared singletons, so project
+  context cannot be ambient.
+- **Required session on the project write path** — `create_instance`,
+  `add_relationship`, `remove_relationship`, `update_relationship`(`_both`),
+  and `add_class_membership` take a `Session` first arg and reject a missing/
+  invalid one with `{error, invalid_session}`.
+- **Proxy contract** — a cross-project link is a local node of the seeded
+  "Remote Reference" class carrying `remote_project` / `remote_nref` AVP
+  payload; no structural reference crosses a project boundary. Recognized by
+  `graphdb_instance:is_proxy/1` / `proxy_coordinates/1`. Representation only;
+  creation/dereference are SP2/SP3.
+- **Namespace-agnostic in SP1** — `mutate/1` and the instance reads
+  (`get_instance` / `children` / `compositional_ancestors` / `resolve_value`),
+  like `get_node` / `get_relationships`, are not session-gated: `mutate/1` is a
+  mixed env/project batch, and the reads are consumed by `graphdb_query`.
+  Their per-namespace routing lands in SP2.
+
+SP2 (physical per-project store + allocator-from-1), SP3 (distribution /
+residency + proxy dereference), and SP4 (migration) remain.
 
 ---
 

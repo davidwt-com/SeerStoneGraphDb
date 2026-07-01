@@ -160,7 +160,7 @@ nref spaces:
 - **Environment**: scaffold nrefs 1–35; permanent tier `[?LABEL_START, ?NREF_START)` = `[10001, 1000000)` holds English (10000), loader-assigned atom-labeled bootstrap nodes, and worker `init/1` seeds (graphdb_attr, graphdb_language sub-groups); runtime allocations ≥ `?NREF_START` (1000000). Boundaries are macros in `apps/graphdb/include/graphdb_nrefs.hrl` — **not** directives in `bootstrap.terms`. All graphdb node-nref allocation goes through `graphdb_nref` (first child of `graphdb_sup`): permanent phase during init, runtime phase after the `graphdb:start/2` flip.
 - **Project**: allocator starts at **1** — no pre-assigned nrefs, no bootstrap file, no floor needed
 
-Cross-database nref resolution: `characterization` and `reciprocal` fields always reference environment nrefs; `target_nref` is routed to environment or project based on the arc label's `target_kind` AVP stored in the environment attribute library.
+Cross-database nref resolution: `characterization` and `reciprocal` fields always reference environment nrefs; `target_nref` is routed to environment or project based on the arc label's `target_kind` AVP stored in the environment attribute library. This routing is encoded by the pure `graphdb_ns` module (SP1). A project is an anchor node under `Projects` (nref 5); project write operations require a `graphdb_project` session (SP1 — see `docs/designs/project-env-reference-namespace-model-design.md` and `TASKS.md` → *Multi-project sessions*). SP1 is behaviour-preserving against today's single store; physical per-project storage is SP2.
 
 ### Bootstrap Nref Quick-Reference (BFS, nrefs 1–35)
 
