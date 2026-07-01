@@ -78,7 +78,13 @@ end)).
 %%---------------------------------------------------------------------
 %% Exports
 %%---------------------------------------------------------------------
--export([register_project/1, is_project/1, open_session/1, session_project/1]).
+-export([register_project/1, is_project/1, open_session/1, session_project/1,
+		require_session/1,
+		add_relationship/5, add_relationship/6, add_relationship/7,
+		add_class_membership/3,
+		remove_relationship/4, remove_relationship/5,
+		update_relationship/5, update_relationship/6,
+		update_relationship_both/5, update_relationship_both/6]).
 
 
 %%=====================================================================
@@ -156,3 +162,67 @@ open_session(ProjectNref) ->
 %% Extracts the project nref from an opaque session map.
 %%---------------------------------------------------------------------
 session_project(#{kind := project_session, project := Nref}) -> Nref.
+
+
+%%---------------------------------------------------------------------
+%% require_session(Session) -> ok | {error, invalid_session}
+%%
+%% Gate for project-scoped operations: a well-formed project session
+%% passes; any other term is rejected.  Pure (no store access) — the
+%% session was already validated against the registry by open_session/1.
+%%---------------------------------------------------------------------
+require_session(#{kind := project_session, project := _}) -> ok;
+require_session(_)                                        -> {error, invalid_session}.
+
+
+%%=====================================================================
+%% Canonical project-scoped relationship API (SP1 §8 relocation).
+%%
+%% These are the project side of the environment/project split: they
+%% take a project Session as the first argument and delegate to the
+%% graphdb_instance implementations.  The session is validated inside
+%% graphdb_instance via require_session/1.
+%%=====================================================================
+
+add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+	graphdb_instance:add_relationship(Session, SourceNref, CharNref,
+		TargetNref, ReciprocalNref).
+
+add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
+		TemplateNref) ->
+	graphdb_instance:add_relationship(Session, SourceNref, CharNref,
+		TargetNref, ReciprocalNref, TemplateNref).
+
+add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
+		TemplateNref, AVPSpec) ->
+	graphdb_instance:add_relationship(Session, SourceNref, CharNref,
+		TargetNref, ReciprocalNref, TemplateNref, AVPSpec).
+
+add_class_membership(Session, InstanceNref, ClassNref) ->
+	graphdb_instance:add_class_membership(Session, InstanceNref, ClassNref).
+
+remove_relationship(Session, SourceNref, CharNref, TargetNref) ->
+	graphdb_instance:remove_relationship(Session, SourceNref, CharNref,
+		TargetNref).
+
+remove_relationship(Session, SourceNref, CharNref, TargetNref, TemplateNref) ->
+	graphdb_instance:remove_relationship(Session, SourceNref, CharNref,
+		TargetNref, TemplateNref).
+
+update_relationship(Session, SourceNref, CharNref, TargetNref, Updates) ->
+	graphdb_instance:update_relationship(Session, SourceNref, CharNref,
+		TargetNref, Updates).
+
+update_relationship(Session, SourceNref, CharNref, TargetNref, TemplateNref,
+		Updates) ->
+	graphdb_instance:update_relationship(Session, SourceNref, CharNref,
+		TargetNref, TemplateNref, Updates).
+
+update_relationship_both(Session, SourceNref, CharNref, TargetNref, Pair) ->
+	graphdb_instance:update_relationship_both(Session, SourceNref, CharNref,
+		TargetNref, Pair).
+
+update_relationship_both(Session, SourceNref, CharNref, TargetNref, TemplateNref,
+		Pair) ->
+	graphdb_instance:update_relationship_both(Session, SourceNref, CharNref,
+		TargetNref, TemplateNref, Pair).

@@ -582,7 +582,7 @@ q4_outgoing_and_incoming_connections(_Config) ->
     %% in one call and returns {ok, {FwdNref, RevNref}}.
     {ok, {MakesA, MadeByA}} = graphdb_attr:create_relationship_attribute_pair(
                                   "makes", "made_by", instance),
-    ok = graphdb_instance:add_relationship(Ford, MakesA, Tau, MadeByA),
+    ok = graphdb_instance:add_relationship(sess(), Ford, MakesA, Tau, MadeByA),
     {ok, R} = graphdb_query:execute_query(
         #q_describe{nref = Tau, labels = default}),
     Outgoing = maps:get(outgoing_connections, R),
@@ -742,3 +742,21 @@ resume_against_refreshed_session_fails(_Config) ->
     S2 = graphdb_query:refresh(S1),
     ?assertEqual({error, snapshot_expired},
                  graphdb_query:resume(Cont, S2)).
+
+%%---------------------------------------------------------------------
+%% sess() -> Session
+%%
+%% SP1 test helper: returns a project session, memoised per test-case
+%% process.  Registers a project under Projects (nref 5) on first use and
+%% opens a session against it; subsequent calls in the same process reuse it.
+%%---------------------------------------------------------------------
+sess() ->
+	case get(sp1_session) of
+		undefined ->
+			{ok, P} = graphdb_project:register_project("SP1 test session"),
+			{ok, S} = graphdb_project:open_session(P),
+			put(sp1_session, S),
+			S;
+		S ->
+			S
+	end.

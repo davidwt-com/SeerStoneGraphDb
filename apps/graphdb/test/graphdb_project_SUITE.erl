@@ -35,16 +35,6 @@
 	attribute_value_pairs
 }).
 
--record(relationship, {
-	id,
-	kind,
-	source_nref,
-	characterization,
-	target_nref,
-	reciprocal,
-	avps
-}).
-
 
 %%---------------------------------------------------------------------
 %% Common Test callbacks
@@ -83,9 +73,6 @@ all() ->
 	 is_project_false_for_non_child,
 	 open_session_on_registered_project,
 	 open_session_rejects_non_project].
-
-groups() ->
-	[].
 
 
 %%-----------------------------------------------------------------------------

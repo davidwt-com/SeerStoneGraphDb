@@ -713,7 +713,7 @@ add_relationship_delegates(_Config) ->
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	%% Delegate through mgr
 	?assertEqual(ok,
-		graphdb_mgr:add_relationship(InstA, CharNref, InstB, RecipNref)),
+		graphdb_mgr:add_relationship(sess(), InstA, CharNref, InstB, RecipNref)),
 	%% Verify the arc is readable
 	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
 	Targets = [R#relationship.target_nref || R <- Rels,
@@ -1493,7 +1493,7 @@ mutate_remove_relationship(_Config) ->
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("MRKnows", "MRKnownBy",
 			instance),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
 	?assertEqual(1, mutate_conn_count(A, Char, B)),
 	?assertEqual({ok, [ok]},
 		graphdb_mgr:mutate([{remove_relationship, A, Char, B}])),
@@ -1509,7 +1509,7 @@ mutate_update_relationship(_Config) ->
 		graphdb_attr:create_relationship_attribute_pair("MUKnows", "MUKnownBy",
 			instance),
 	{ok, Note} = graphdb_attr:create_literal_attribute("munote", string),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
 	?assertEqual({ok, [ok, ok]}, graphdb_mgr:mutate([
 		{update_relationship, A, Char, B, [#{attribute => Note, value => "f"}]},
 		{update_relationship_both, A, Char, B,
@@ -1524,7 +1524,7 @@ mutate_mixed_rollback(_Config) ->
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("MMKnows", "MMKnownBy",
 			instance),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
 	%% second mutation removes a non-existent edge -> whole batch rolls back
 	?assertEqual({error, relationship_not_found}, graphdb_mgr:mutate([
 		{remove_relationship, A, Char, B},
@@ -1533,3 +1533,21 @@ mutate_mixed_rollback(_Config) ->
 	?assertEqual(1, mutate_conn_count(A, Char, B)),
 	?assertEqual(1, mutate_conn_count(B, Recip, A)),
 	ok = graphdb_mgr:verify_caches().
+
+%%---------------------------------------------------------------------
+%% sess() -> Session
+%%
+%% SP1 test helper: returns a project session, memoised per test-case
+%% process.  Registers a project under Projects (nref 5) on first use and
+%% opens a session against it; subsequent calls in the same process reuse it.
+%%---------------------------------------------------------------------
+sess() ->
+	case get(sp1_session) of
+		undefined ->
+			{ok, P} = graphdb_project:register_project("SP1 test session"),
+			{ok, S} = graphdb_project:open_session(P),
+			put(sp1_session, S),
+			S;
+		S ->
+			S
+	end.

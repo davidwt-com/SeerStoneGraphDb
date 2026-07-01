@@ -95,6 +95,8 @@
 	%% Remove relationships
 	remove_relationship_basic/1,
 	remove_relationship_not_found/1,
+	remove_relationship_rejects_bad_session/1,
+	add_relationship_rejects_bad_session/1,
 	remove_relationship_ambiguous/1,
 	remove_relationship_disambiguate_by_template/1,
 	remove_relationship_dangling_half_edge/1,
@@ -256,6 +258,8 @@ groups() ->
 			class_of_returns_class,
 			remove_relationship_basic,
 			remove_relationship_not_found,
+			remove_relationship_rejects_bad_session,
+			add_relationship_rejects_bad_session,
 			remove_relationship_ambiguous,
 			remove_relationship_disambiguate_by_template,
 			remove_relationship_dangling_half_edge,
@@ -414,6 +418,11 @@ init_per_testcase(TC, Config) ->
 	%% Mirror production graphdb:start/2: flip to runtime tier after all workers
 	%% have seeded so that user-level create_* calls allocate runtime nrefs.
 	maybe_set_runtime_phase(TC),
+	%% SP1: pre-warm the project session (register a project + open it) as part
+	%% of setup, so its arc rows are already in the baseline before any test body
+	%% captures a relationships/nodes before/after delta.  Runs in the test-case
+	%% process, so sess()'s process-dict memo is visible to the body.
+	_ = sess(),
 	setup_firing_fixtures(TC, Config1).
 
 %% Test cases that call graphdb_mgr:retire_node/1 require runtime nrefs.
@@ -684,7 +693,7 @@ add_relationship_basic(_Config) ->
 	{ok, {MakesNref, MadeByNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", instance),
 	RelsBefore = mnesia:table_info(relationships, size),
-	ok = graphdb_instance:add_relationship(A, MakesNref, B, MadeByNref),
+	ok = graphdb_instance:add_relationship(sess(), A, MakesNref, B, MadeByNref),
 	RelsAfter = mnesia:table_info(relationships, size),
 	?assertEqual(RelsBefore + 2, RelsAfter).
 
@@ -697,7 +706,7 @@ add_relationship_both_directions(_Config) ->
 	{ok, Taurus, _} = graphdb_instance:create_instance("Taurus", ClassNref, 5),
 	{ok, {MakesNref, MadeByNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", instance),
-	ok = graphdb_instance:add_relationship(Ford, MakesNref, Taurus, MadeByNref),
+	ok = graphdb_instance:add_relationship(sess(), Ford, MakesNref, Taurus, MadeByNref),
 
 	%% Ford -> Taurus (char=Makes, reciprocal=MadeBy)
 	{atomic, FordOut} = mnesia:transaction(fun() ->
@@ -730,7 +739,7 @@ add_relationship_stamps_template_avp(_Config) ->
 	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
 
 	{atomic, ARels} = mnesia:transaction(fun() ->
 		mnesia:index_read(relationships, A, #relationship.source_nref)
@@ -752,7 +761,7 @@ add_relationship_explicit_template(_Config) ->
 	{ok, B, _} = graphdb_instance:create_instance("Bob", ClassNref, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip, AltTmpl),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip, AltTmpl),
 
 	{atomic, ARels} = mnesia:transaction(fun() ->
 		mnesia:index_read(relationships, A, #relationship.source_nref)
@@ -774,7 +783,7 @@ add_relationship_rejects_non_template_nref(_Config) ->
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	%% ClassNref is a class, not a template
 	?assertMatch({error, {invalid_template, _, not_a_template}},
-		graphdb_instance:add_relationship(A, Char, B, Recip, ClassNref)).
+		graphdb_instance:add_relationship(sess(), A, Char, B, Recip, ClassNref)).
 
 %%-----------------------------------------------------------------------------
 %% add_relationship/5 rejects a template whose parent class is unrelated
@@ -789,7 +798,7 @@ add_relationship_rejects_template_out_of_ancestry(_Config) ->
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertMatch({error, {template_class_not_in_ancestry, _, _, _, _}},
-		graphdb_instance:add_relationship(A, Char, B, Recip, VehTmpl)).
+		graphdb_instance:add_relationship(sess(), A, Char, B, Recip, VehTmpl)).
 
 %%-----------------------------------------------------------------------------
 %% After deleting the default template, /4 returns no_default_template;
@@ -806,7 +815,7 @@ add_relationship_no_default_after_delete(_Config) ->
 		mnesia:delete({nodes, DefaultTmpl})
 	end),
 	?assertEqual({error, no_default_template},
-		graphdb_instance:add_relationship(A, Char, B, Recip)).
+		graphdb_instance:add_relationship(sess(), A, Char, B, Recip)).
 
 %%-----------------------------------------------------------------------------
 %% missing source nref is rejected.
@@ -817,7 +826,7 @@ add_relationship_rejects_missing_source(_Config) ->
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertEqual({error, {source_not_found, 99999}},
-		graphdb_instance:add_relationship(99999, Char, B, Recip)).
+		graphdb_instance:add_relationship(sess(), 99999, Char, B, Recip)).
 
 %%-----------------------------------------------------------------------------
 %% missing target nref is rejected.
@@ -828,7 +837,7 @@ add_relationship_rejects_missing_target(_Config) ->
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertEqual({error, {target_not_found, 99999}},
-		graphdb_instance:add_relationship(A, Char, 99999, Recip)).
+		graphdb_instance:add_relationship(sess(), A, Char, 99999, Recip)).
 
 %%-----------------------------------------------------------------------------
 %% missing characterization nref is rejected.
@@ -840,7 +849,7 @@ add_relationship_rejects_missing_characterization(_Config) ->
 	{ok, {_Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertEqual({error, {characterization_not_found, 99999}},
-		graphdb_instance:add_relationship(A, 99999, B, Recip)).
+		graphdb_instance:add_relationship(sess(), A, 99999, B, Recip)).
 
 %%-----------------------------------------------------------------------------
 %% missing reciprocal nref is rejected.
@@ -852,7 +861,7 @@ add_relationship_rejects_missing_reciprocal(_Config) ->
 	{ok, {Char, _Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertEqual({error, {reciprocal_not_found, 99999}},
-		graphdb_instance:add_relationship(A, Char, B, 99999)).
+		graphdb_instance:add_relationship(sess(), A, Char, B, 99999)).
 
 %%-----------------------------------------------------------------------------
 %% characterization that is not kind=attribute is rejected.  Uses
@@ -865,7 +874,7 @@ add_relationship_rejects_non_attribute_char(_Config) ->
 	{ok, {_Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertMatch({error, {characterization_not_an_attribute, 5, category}},
-		graphdb_instance:add_relationship(A, 5, B, Recip)).
+		graphdb_instance:add_relationship(sess(), A, 5, B, Recip)).
 
 %%-----------------------------------------------------------------------------
 %% reciprocal that is not kind=attribute is rejected.
@@ -877,7 +886,7 @@ add_relationship_rejects_non_attribute_reciprocal(_Config) ->
 	{ok, {Char, _Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertMatch({error, {reciprocal_not_an_attribute, 5, category}},
-		graphdb_instance:add_relationship(A, Char, B, 5)).
+		graphdb_instance:add_relationship(sess(), A, Char, B, 5)).
 
 %%-----------------------------------------------------------------------------
 %% target whose kind disagrees with the characterization's
@@ -892,7 +901,7 @@ add_relationship_rejects_target_kind_mismatch(_Config) ->
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Has", "HeldBy", class),
 	?assertEqual({error, {target_kind_mismatch, class, instance}},
-		graphdb_instance:add_relationship(A, Char, B, Recip)).
+		graphdb_instance:add_relationship(sess(), A, Char, B, Recip)).
 
 %%-----------------------------------------------------------------------------
 %% source that exists and passes endpoint validation but has no instance->class
@@ -905,7 +914,7 @@ add_relationship_rejects_source_has_no_class(_Config) ->
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	?assertEqual({error, {source_has_no_class, ClassNref}},
-		graphdb_instance:add_relationship(ClassNref, Char, B, Recip)).
+		graphdb_instance:add_relationship(sess(), ClassNref, Char, B, Recip)).
 
 %%-----------------------------------------------------------------------------
 %% target that exists and passes endpoint validation but has no instance->class
@@ -918,7 +927,7 @@ add_relationship_rejects_target_has_no_class(_Config) ->
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Has", "HeldBy", class),
 	?assertEqual({error, {target_has_no_class, ClassNref}},
-		graphdb_instance:add_relationship(A, Char, ClassNref, Recip)).
+		graphdb_instance:add_relationship(sess(), A, Char, ClassNref, Recip)).
 
 
 %%-----------------------------------------------------------------------------
@@ -935,7 +944,7 @@ add_relationship_stamps_user_avps(_Config) ->
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	{ok, Confidence} = graphdb_attr:create_literal_attribute("confidence", float),
 	UserAVP = #{attribute => Confidence, value => 0.95},
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip, DefaultTmpl,
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip, DefaultTmpl,
 		{[UserAVP], [UserAVP]}),
 
 	%% Both directions should carry Template AVP and the user AVP.
@@ -964,7 +973,7 @@ add_relationship_avps_are_per_direction(_Config) ->
 	{ok, Confidence} = graphdb_attr:create_literal_attribute("conf",    float),
 	FwdOnly = #{attribute => Source,     value => "research-paper"},
 	RevOnly = #{attribute => Confidence, value => 0.42},
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip, DefaultTmpl,
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip, DefaultTmpl,
 		{[FwdOnly], [RevOnly]}),
 
 	{atomic, ARels} = mnesia:transaction(fun() ->
@@ -996,7 +1005,7 @@ add_relationship_default_avps_empty(_Config) ->
 	{ok, B, _} = graphdb_instance:create_instance("B", ClassNref, 5),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
 
 	{atomic, ARels} = mnesia:transaction(fun() ->
 		mnesia:index_read(relationships, A, #relationship.source_nref)
@@ -1016,12 +1025,12 @@ add_relationship_refuses_retired_endpoint(_Config) ->
 	{ok, Tgt, _}  = graphdb_instance:create_instance("t", ClassNref, 3),
 	{ok, {Fwd, Rec}} =
 		graphdb_attr:create_relationship_attribute_pair("Likes", "LikedBy", instance),
-	ok = graphdb_instance:add_relationship(Src, Fwd, Tgt, Rec),
+	ok = graphdb_instance:add_relationship(sess(), Src, Fwd, Tgt, Rec),
 	ok = graphdb_mgr:retire_node(Tgt),
 	{ok, Tgt2, _} = graphdb_instance:create_instance("t2", ClassNref, 3),
 	ok = graphdb_mgr:retire_node(Tgt2),
 	?assertEqual({error, {endpoint_retired, Tgt2}},
-		graphdb_instance:add_relationship(Src, Fwd, Tgt2, Rec)).
+		graphdb_instance:add_relationship(sess(), Src, Fwd, Tgt2, Rec)).
 
 
 %%-----------------------------------------------------------------------------
@@ -1160,7 +1169,7 @@ resolve_value_from_connected(_Config) ->
 	{ok, Taurus, _} = graphdb_instance:create_instance("Taurus", ClassNref, 5),
 	{ok, {MakesNref, MadeByNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", instance),
-	ok = graphdb_instance:add_relationship(Taurus, MadeByNref, Ford, MakesNref),
+	ok = graphdb_instance:add_relationship(sess(), Taurus, MadeByNref, Ford, MakesNref),
 	%% Taurus doesn't have country, its class doesn't, no ancestors have it
 	%% — resolved from connected Ford
 	?assertMatch({ok, "USA", _},
@@ -1215,7 +1224,7 @@ resolve_value_priority_ancestor_over_connected(_Config) ->
 	set_avp(Peer, TestAttr, "peer_region"),
 	{ok, {LinksNref, LinkedByNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Links", "LinkedBy", instance),
-	ok = graphdb_instance:add_relationship(Child, LinksNref, Peer, LinkedByNref),
+	ok = graphdb_instance:add_relationship(sess(), Child, LinksNref, Peer, LinkedByNref),
 	%% Child has no local value, class has no value
 	%% Ancestor Parent (priority 3) should win over connected Peer (priority 4)
 	?assertMatch({ok, "ancestor_region", _},
@@ -1327,7 +1336,7 @@ resolve_value_source_connected(_Config) ->
 						"Taurus", ClassNref, ?NREF_PROJECTS),
 	{ok, {MakesNref, MadeByNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", instance),
-	ok = graphdb_instance:add_relationship(Taurus, MadeByNref, Ford, MakesNref),
+	ok = graphdb_instance:add_relationship(sess(), Taurus, MadeByNref, Ford, MakesNref),
 	?assertEqual({ok, "USA", {connected, Ford}},
 		graphdb_instance:resolve_value(Taurus, TestAttr)).
 
@@ -1345,7 +1354,7 @@ add_class_membership_basic(_Config) ->
 	{ok, ClassB} = graphdb_class:create_class("Toy", 3),
 	{ok, Inst, _}   = graphdb_instance:create_instance("ToyCar", ClassA, 5),
 	?assertEqual({ok, [ClassA]}, graphdb_instance:class_memberships(Inst)),
-	?assertEqual(ok, graphdb_instance:add_class_membership(Inst, ClassB)),
+	?assertEqual(ok, graphdb_instance:add_class_membership(sess(), Inst, ClassB)),
 	?assertEqual({ok, [ClassA, ClassB]},
 		graphdb_instance:class_memberships(Inst)).
 
@@ -1356,7 +1365,7 @@ add_class_membership_writes_arcs(_Config) ->
 	{ok, ClassA} = graphdb_class:create_class("A", 3),
 	{ok, ClassB} = graphdb_class:create_class("B", 3),
 	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
-	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	ok = graphdb_instance:add_class_membership(sess(), Inst, ClassB),
 
 	%% Instance -> ClassB (char=29, reciprocal=30)
 	{atomic, InstOut} = mnesia:transaction(fun() ->
@@ -1386,9 +1395,9 @@ add_class_membership_idempotent(_Config) ->
 	{ok, ClassA} = graphdb_class:create_class("A", 3),
 	{ok, ClassB} = graphdb_class:create_class("B", 3),
 	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
-	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	ok = graphdb_instance:add_class_membership(sess(), Inst, ClassB),
 	RelsBefore = mnesia:table_info(relationships, size),
-	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	ok = graphdb_instance:add_class_membership(sess(), Inst, ClassB),
 	RelsAfter = mnesia:table_info(relationships, size),
 	?assertEqual(RelsBefore, RelsAfter),
 	?assertEqual({ok, [ClassA, ClassB]},
@@ -1400,7 +1409,7 @@ add_class_membership_idempotent(_Config) ->
 add_class_membership_rejects_missing_instance(_Config) ->
 	{ok, ClassA} = graphdb_class:create_class("A", 3),
 	?assertEqual({error, not_found},
-		graphdb_instance:add_class_membership(99999, ClassA)).
+		graphdb_instance:add_class_membership(sess(), 99999, ClassA)).
 
 %%-----------------------------------------------------------------------------
 %% Non-instance subject (e.g., a class node) is rejected.
@@ -1408,7 +1417,7 @@ add_class_membership_rejects_missing_instance(_Config) ->
 add_class_membership_rejects_non_instance(_Config) ->
 	{ok, ClassA} = graphdb_class:create_class("A", 3),
 	?assertEqual({error, not_an_instance},
-		graphdb_instance:add_class_membership(ClassA, ClassA)).
+		graphdb_instance:add_class_membership(sess(), ClassA, ClassA)).
 
 %%-----------------------------------------------------------------------------
 %% Missing class target is rejected.
@@ -1417,7 +1426,7 @@ add_class_membership_rejects_missing_class(_Config) ->
 	{ok, ClassA} = graphdb_class:create_class("A", 3),
 	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
 	?assertEqual({error, class_not_found},
-		graphdb_instance:add_class_membership(Inst, 99999)).
+		graphdb_instance:add_class_membership(sess(), Inst, 99999)).
 
 %%-----------------------------------------------------------------------------
 %% Non-class target (e.g., an attribute node) is rejected.
@@ -1427,7 +1436,7 @@ add_class_membership_rejects_non_class_target(_Config) ->
 	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
 	%% Nref 6 (Names) is an attribute node
 	?assertMatch({error, {not_a_class, attribute}},
-		graphdb_instance:add_class_membership(Inst, 6)).
+		graphdb_instance:add_class_membership(sess(), Inst, 6)).
 
 %%-----------------------------------------------------------------------------
 %% A non-instantiable (abstract) class target is rejected — an instance
@@ -1442,7 +1451,7 @@ add_class_membership_refuses_abstract_class(_Config) ->
 		[#{attribute => Inst, value => false}]),
 	RelsBefore = mnesia:table_info(relationships, size),
 	?assertEqual({error, {class_not_instantiable, Abstract}},
-		graphdb_instance:add_class_membership(Instance, Abstract)),
+		graphdb_instance:add_class_membership(sess(), Instance, Abstract)),
 	?assertEqual(RelsBefore, mnesia:table_info(relationships, size)).
 
 %%-----------------------------------------------------------------------------
@@ -1454,7 +1463,7 @@ add_class_membership_refuses_retired_class(_Config) ->
 	{ok, Inst, _} = graphdb_instance:create_instance("m", ClassA, 3),
 	ok = graphdb_mgr:retire_node(ClassB),
 	?assertEqual({error, {class_retired, ClassB}},
-		graphdb_instance:add_class_membership(Inst, ClassB)).
+		graphdb_instance:add_class_membership(sess(), Inst, ClassB)).
 
 %%-----------------------------------------------------------------------------
 %% After create_instance/3, class_memberships/1 returns the single class.
@@ -1479,7 +1488,7 @@ resolve_value_unique_across_two_classes(_Config) ->
 	{ok, Attr}   = graphdb_attr:create_literal_attribute("badge", string),
 	set_avp(ClassA, Attr, "blue_badge"),
 	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
-	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	ok = graphdb_instance:add_class_membership(sess(), Inst, ClassB),
 	?assertMatch({ok, "blue_badge", _},
 		graphdb_instance:resolve_value(Inst, Attr)).
 
@@ -1494,7 +1503,7 @@ resolve_value_same_value_two_classes(_Config) ->
 	set_avp(ClassA, Attr, "red"),
 	set_avp(ClassB, Attr, "red"),
 	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
-	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	ok = graphdb_instance:add_class_membership(sess(), Inst, ClassB),
 	?assertMatch({ok, "red", _},
 		graphdb_instance:resolve_value(Inst, Attr)).
 
@@ -1509,7 +1518,7 @@ resolve_value_ambiguous_two_classes(_Config) ->
 	set_avp(ClassA, Attr, "sweet"),
 	set_avp(ClassB, Attr, "salty"),
 	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
-	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	ok = graphdb_instance:add_class_membership(sess(), Inst, ClassB),
 	Result = graphdb_instance:resolve_value(Inst, Attr),
 	?assertMatch({error, {ambiguous_class_value, Attr, _}}, Result),
 	{error, {ambiguous_class_value, _, Hits}} = Result,
@@ -1528,7 +1537,7 @@ resolve_value_local_overrides_ambiguity(_Config) ->
 	set_avp(ClassA, Attr, "sweet"),
 	set_avp(ClassB, Attr, "salty"),
 	{ok, Inst, _}   = graphdb_instance:create_instance("X", ClassA, 5),
-	ok = graphdb_instance:add_class_membership(Inst, ClassB),
+	ok = graphdb_instance:add_class_membership(sess(), Inst, ClassB),
 	set_avp(Inst, Attr, "umami"),
 	?assertMatch({ok, "umami", _},
 		graphdb_instance:resolve_value(Inst, Attr)).
@@ -1547,7 +1556,7 @@ resolve_value_ambiguity_via_taxonomy(_Config) ->
 	set_avp(AnimalCls, Attr, "biological"),
 	set_avp(ToyCls,    Attr, "manufactured"),
 	{ok, Inst, _} = graphdb_instance:create_instance("Plushie", MammalCls, 5),
-	ok = graphdb_instance:add_class_membership(Inst, ToyCls),
+	ok = graphdb_instance:add_class_membership(sess(), Inst, ToyCls),
 	Result = graphdb_instance:resolve_value(Inst, Attr),
 	?assertMatch({error, {ambiguous_class_value, Attr, _}}, Result),
 	{error, {ambiguous_class_value, _, Hits}} = Result,
@@ -2427,41 +2436,55 @@ re_count(A, Char, B) ->
 
 remove_relationship_basic(_Config) ->
 	#{a := A, b := B, char := Char, recip := Recip} = re_setup(),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
 	?assertEqual(1, re_count(A, Char, B)),
 	?assertEqual(1, re_count(B, Recip, A)),
-	ok = graphdb_instance:remove_relationship(A, Char, B),
+	ok = graphdb_instance:remove_relationship(sess(), A, Char, B),
 	?assertEqual(0, re_count(A, Char, B)),
 	?assertEqual(0, re_count(B, Recip, A)).
 
 remove_relationship_not_found(_Config) ->
 	#{a := A, b := B, char := Char} = re_setup(),
 	?assertEqual({error, relationship_not_found},
-		graphdb_instance:remove_relationship(A, Char, B)).
+		graphdb_instance:remove_relationship(sess(), A, Char, B)).
+
+%% SP1: a project op requires a valid session.  A non-session term is
+%% rejected before any store access -- covers the tier-2 (plain-function)
+%% session gate.
+remove_relationship_rejects_bad_session(_Config) ->
+	?assertEqual({error, invalid_session},
+		graphdb_instance:remove_relationship(not_a_session, 1, 2, 3)).
+
+%% SP1: covers the gen_server-wrapper session gate (a distinct code path
+%% from the tier-2 gate above): with_session/2 short-circuits before the
+%% gen_server:call.
+add_relationship_rejects_bad_session(_Config) ->
+	?assertEqual({error, invalid_session},
+		graphdb_instance:add_relationship(not_a_session, 1, 2, 3, 4)).
 
 remove_relationship_ambiguous(_Config) ->
 	#{a := A, b := B, char := Char, recip := Recip, class := Class} = re_setup(),
 	{ok, DefaultTmpl} = graphdb_class:default_template(Class),
 	{ok, AltTmpl}     = graphdb_class:add_template(Class, "social"),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip, DefaultTmpl),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip, AltTmpl),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip, DefaultTmpl),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip, AltTmpl),
 	?assertMatch({error, {ambiguous_relationship, [_, _]}},
-		graphdb_instance:remove_relationship(A, Char, B)).
+		graphdb_instance:remove_relationship(sess(), A, Char, B)).
 
 remove_relationship_disambiguate_by_template(_Config) ->
 	#{a := A, b := B, char := Char, recip := Recip, class := Class} = re_setup(),
 	{ok, DefaultTmpl} = graphdb_class:default_template(Class),
 	{ok, AltTmpl}     = graphdb_class:add_template(Class, "social"),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip, DefaultTmpl),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip, AltTmpl),
-	ok = graphdb_instance:remove_relationship(A, Char, B, DefaultTmpl),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip, DefaultTmpl),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip, AltTmpl),
+	ok = graphdb_instance:remove_relationship(sess(), A, Char, B, DefaultTmpl),
 	%% one edge (the AltTmpl one) remains in each direction
 	?assertEqual(1, re_count(A, Char, B)),
 	?assertEqual(1, re_count(B, Recip, A)).
 
 remove_relationship_dangling_half_edge(_Config) ->
 	#{a := A, b := B, char := Char, recip := Recip} = re_setup(),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
 	%% manually delete the reverse row, leaving a half-edge
 	{atomic, ok} = mnesia:transaction(fun() ->
 		Rows = mnesia:index_read(relationships, B, #relationship.source_nref),
@@ -2471,7 +2494,7 @@ remove_relationship_dangling_half_edge(_Config) ->
 		mnesia:delete_object(relationships, Rev, write)
 	end),
 	?assertMatch({error, {dangling_half_edge, _}},
-		graphdb_instance:remove_relationship(A, Char, B)),
+		graphdb_instance:remove_relationship(sess(), A, Char, B)),
 	%% the forward row is NOT deleted -- rollback left it intact
 	?assertEqual(1, re_count(A, Char, B)).
 
@@ -2494,8 +2517,8 @@ re_avps(A, Char, B) ->
 update_relationship_single_direction(_Config) ->
 	#{a := A, b := B, char := Char, recip := Recip} = re_setup(),
 	{ok, Note} = graphdb_attr:create_literal_attribute("note", string),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
-	ok = graphdb_instance:update_relationship(A, Char, B,
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
+	ok = graphdb_instance:update_relationship(sess(), A, Char, B,
 		[#{attribute => Note, value => "fwd"}]),
 	?assert(lists:member(#{attribute => Note, value => "fwd"},
 		re_avps(A, Char, B))),
@@ -2509,9 +2532,9 @@ update_relationship_single_direction(_Config) ->
 update_relationship_reverse_direction(_Config) ->
 	#{a := A, b := B, char := Char, recip := Recip} = re_setup(),
 	{ok, Note} = graphdb_attr:create_literal_attribute("note", string),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
 	%% name the reverse direction from the other endpoint: (T, R, S)
-	ok = graphdb_instance:update_relationship(B, Recip, A,
+	ok = graphdb_instance:update_relationship(sess(), B, Recip, A,
 		[#{attribute => Note, value => "rev"}]),
 	?assert(lists:member(#{attribute => Note, value => "rev"},
 		re_avps(B, Recip, A))),
@@ -2520,24 +2543,24 @@ update_relationship_reverse_direction(_Config) ->
 
 update_relationship_protects_template(_Config) ->
 	#{a := A, b := B, char := Char, recip := Recip} = re_setup(),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
 	?assertEqual({error, {protected_relationship_avp, ?ARC_TEMPLATE}},
-		graphdb_instance:update_relationship(A, Char, B,
+		graphdb_instance:update_relationship(sess(), A, Char, B,
 			[#{attribute => ?ARC_TEMPLATE, value => 7}])).
 
 update_relationship_not_found(_Config) ->
 	#{a := A, b := B, char := Char} = re_setup(),
 	{ok, Note} = graphdb_attr:create_literal_attribute("note", string),
 	?assertEqual({error, relationship_not_found},
-		graphdb_instance:update_relationship(A, Char, B,
+		graphdb_instance:update_relationship(sess(), A, Char, B,
 			[#{attribute => Note, value => "x"}])).
 
 update_relationship_both_directions(_Config) ->
 	#{a := A, b := B, char := Char, recip := Recip} = re_setup(),
 	{ok, FAttr} = graphdb_attr:create_literal_attribute("fwd_meta", string),
 	{ok, RAttr} = graphdb_attr:create_literal_attribute("rev_meta", string),
-	ok = graphdb_instance:add_relationship(A, Char, B, Recip),
-	ok = graphdb_instance:update_relationship_both(A, Char, B,
+	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
+	ok = graphdb_instance:update_relationship_both(sess(), A, Char, B,
 		{[#{attribute => FAttr, value => "F"}],
 		 [#{attribute => RAttr, value => "R"}]}),
 	FwdAVPs = re_avps(A, Char, B),
@@ -2575,3 +2598,21 @@ proxy_recognizer_rejects_plain_instance(_Config) ->
 				 attribute_value_pairs = []},
 	?assertNot(graphdb_instance:is_proxy(Node)),
 	?assertEqual(not_a_proxy, graphdb_instance:proxy_coordinates(Node)).
+
+%%---------------------------------------------------------------------
+%% sess() -> Session
+%%
+%% SP1 test helper: returns a project session, memoised per test-case
+%% process.  Registers a project under Projects (nref 5) on first use and
+%% opens a session against it; subsequent calls in the same process reuse it.
+%%---------------------------------------------------------------------
+sess() ->
+	case get(sp1_session) of
+		undefined ->
+			{ok, P} = graphdb_project:register_project("SP1 test session"),
+			{ok, S} = graphdb_project:open_session(P),
+			put(sp1_session, S),
+			S;
+		S ->
+			S
+	end.

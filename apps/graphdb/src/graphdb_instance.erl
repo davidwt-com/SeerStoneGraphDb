@@ -125,23 +125,23 @@
 		create_instance/3,
 		create_instance/4,
 		create_instance/5,
-		add_relationship/4,
 		add_relationship/5,
 		add_relationship/6,
-		add_class_membership/2,
+		add_relationship/7,
+		add_class_membership/3,
 		%% Tier-1 in-transaction primitive (write-path seam)
 		add_relationship_in_txn/9,
-		remove_relationship/3,
 		remove_relationship/4,
+		remove_relationship/5,
 		remove_relationship_in_txn/4,
 		resolve_forward_connection/4,
 		template_of/1,
-		update_relationship/4,
 		update_relationship/5,
+		update_relationship/6,
 		update_relationship_avps_in_txn/5,
 		has_template_update/1,
-		update_relationship_both/4,
 		update_relationship_both/5,
+		update_relationship_both/6,
 		update_relationship_both_in_txn/6,
 		%% Lookups
 		get_instance/1,
@@ -253,10 +253,12 @@ report_only(_Ctx) -> defer.
 %% its default template removed; the caller must then use /5 to provide
 %% an explicit template.
 %%-----------------------------------------------------------------------------
-add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref) ->
-	gen_server:call(?MODULE,
-		{add_relationship, SourceNref, CharNref, TargetNref,
-			ReciprocalNref, default, {[], []}}).
+add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+	with_session(Session, fun() ->
+		gen_server:call(?MODULE,
+			{add_relationship, SourceNref, CharNref, TargetNref,
+				ReciprocalNref, default, {[], []}})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -271,11 +273,13 @@ add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref) ->
 %% whose parent class is in the taxonomic ancestry of the source's
 %% class or the target's class.
 %%-----------------------------------------------------------------------------
-add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref) when is_integer(TemplateNref) ->
-	gen_server:call(?MODULE,
-		{add_relationship, SourceNref, CharNref, TargetNref,
-			ReciprocalNref, TemplateNref, {[], []}}).
+	with_session(Session, fun() ->
+		gen_server:call(?MODULE,
+			{add_relationship, SourceNref, CharNref, TargetNref,
+				ReciprocalNref, TemplateNref, {[], []}})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -290,12 +294,14 @@ add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 %% The Template AVP (#{attribute => 31, value => TemplateNref}) is
 %% prepended to each direction's user-supplied AVP list.
 %%-----------------------------------------------------------------------------
-add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref, {FwdAVPs, RevAVPs} = AVPSpec)
 		when is_integer(TemplateNref), is_list(FwdAVPs), is_list(RevAVPs) ->
-	gen_server:call(?MODULE,
-		{add_relationship, SourceNref, CharNref, TargetNref,
-			ReciprocalNref, TemplateNref, AVPSpec}).
+	with_session(Session, fun() ->
+		gen_server:call(?MODULE,
+			{add_relationship, SourceNref, CharNref, TargetNref,
+				ReciprocalNref, TemplateNref, AVPSpec})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -362,9 +368,11 @@ class_memberships(InstanceNref) ->
 %% a class already present returns ok without writing.  Validates that
 %% the subject is an instance and the target is a class.
 %%-----------------------------------------------------------------------------
-add_class_membership(InstanceNref, ClassNref) ->
-	gen_server:call(?MODULE,
-		{add_class_membership, InstanceNref, ClassNref}).
+add_class_membership(Session, InstanceNref, ClassNref) ->
+	with_session(Session, fun() ->
+		gen_server:call(?MODULE,
+			{add_class_membership, InstanceNref, ClassNref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -1461,22 +1469,36 @@ remove_relationship_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec) ->
 %% narrows by an explicit template.  Plain functions owning one
 %% graphdb_mgr:transaction/1 in the caller's process (no gen_server state).
 %%-----------------------------------------------------------------------------
-remove_relationship(SourceNref, CharNref, TargetNref) ->
-	txn_ok(fun() ->
-		remove_relationship_in_txn(SourceNref, CharNref, TargetNref, any)
+remove_relationship(Session, SourceNref, CharNref, TargetNref) ->
+	with_session(Session, fun() ->
+		txn_ok(fun() ->
+			remove_relationship_in_txn(SourceNref, CharNref, TargetNref, any)
+		end)
 	end).
 
-remove_relationship(SourceNref, CharNref, TargetNref, TemplateNref)
+remove_relationship(Session, SourceNref, CharNref, TargetNref, TemplateNref)
 		when is_integer(TemplateNref) ->
-	txn_ok(fun() ->
-		remove_relationship_in_txn(SourceNref, CharNref, TargetNref,
-			TemplateNref)
+	with_session(Session, fun() ->
+		txn_ok(fun() ->
+			remove_relationship_in_txn(SourceNref, CharNref, TargetNref,
+				TemplateNref)
+		end)
 	end).
 
 %% Run an in-txn primitive in one transaction; normalise {ok, _} -> ok.
 txn_ok(Fun) ->
 	case graphdb_mgr:transaction(Fun) of
 		{ok, _}          -> ok;
+		{error, _} = Err -> Err
+	end.
+
+%% Gate a project operation on a valid project session (SP1).  A missing or
+%% malformed session short-circuits with {error, invalid_session}; a valid
+%% one runs Fun.  The session is required but otherwise inert against today's
+%% single store (SP2 gives it physical routing).
+with_session(Session, Fun) ->
+	case graphdb_project:require_session(Session) of
+		ok               -> Fun();
 		{error, _} = Err -> Err
 	end.
 
@@ -1523,13 +1545,17 @@ has_template_update(Updates) ->
 %% (S, C, T).  Validates the update grammar client-side (slice B), then owns
 %% one transaction.
 %%-----------------------------------------------------------------------------
-update_relationship(SourceNref, CharNref, TargetNref, Updates) ->
-	do_update_relationship(SourceNref, CharNref, TargetNref, any, Updates).
+update_relationship(Session, SourceNref, CharNref, TargetNref, Updates) ->
+	with_session(Session, fun() ->
+		do_update_relationship(SourceNref, CharNref, TargetNref, any, Updates)
+	end).
 
-update_relationship(SourceNref, CharNref, TargetNref, TemplateNref, Updates)
-		when is_integer(TemplateNref) ->
-	do_update_relationship(SourceNref, CharNref, TargetNref, TemplateNref,
-		Updates).
+update_relationship(Session, SourceNref, CharNref, TargetNref, TemplateNref,
+		Updates) when is_integer(TemplateNref) ->
+	with_session(Session, fun() ->
+		do_update_relationship(SourceNref, CharNref, TargetNref, TemplateNref,
+			Updates)
+	end).
 
 do_update_relationship(SourceNref, CharNref, TargetNref, TemplateSpec,
 		Updates) ->
@@ -1590,12 +1616,17 @@ update_relationship_both_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
 %% transaction.  The two update lists are independent (forward need not mirror
 %% reverse).  Both lists are validated client-side (slice B grammar).
 %%-----------------------------------------------------------------------------
-update_relationship_both(SourceNref, CharNref, TargetNref, {Fwd, Rev}) ->
-	do_update_both(SourceNref, CharNref, TargetNref, any, Fwd, Rev).
+update_relationship_both(Session, SourceNref, CharNref, TargetNref,
+		{Fwd, Rev}) ->
+	with_session(Session, fun() ->
+		do_update_both(SourceNref, CharNref, TargetNref, any, Fwd, Rev)
+	end).
 
-update_relationship_both(SourceNref, CharNref, TargetNref, TemplateNref,
+update_relationship_both(Session, SourceNref, CharNref, TargetNref, TemplateNref,
 		{Fwd, Rev}) when is_integer(TemplateNref) ->
-	do_update_both(SourceNref, CharNref, TargetNref, TemplateNref, Fwd, Rev).
+	with_session(Session, fun() ->
+		do_update_both(SourceNref, CharNref, TargetNref, TemplateNref, Fwd, Rev)
+	end).
 
 do_update_both(SourceNref, CharNref, TargetNref, TemplateSpec, Fwd, Rev) ->
 	case {graphdb_mgr:validate_avp_updates(Fwd),
