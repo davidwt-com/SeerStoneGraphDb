@@ -717,8 +717,10 @@ list_attributes_includes_bootstrap_and_runtime(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
 	{ok, Before} = graphdb_attr:list_attributes(),
 	%% Bootstrap has 27 attribute nodes (nrefs 6-31 = 26, plus lang_code);
-	%% seeding adds the Attribute Literals sub-group + 6 literal attrs = 7
-	?assertEqual(27 + 7, length(Before)),
+	%% seeding adds: Attribute Literals sub-group (1) + 8 literal attrs
+	%% (literal_type, target_kind, relationship_avp, attribute_type,
+	%% instantiable, retired, remote_project, remote_nref) = 9 total
+	?assertEqual(27 + 9, length(Before)),
 
 	{ok, _} = graphdb_attr:create_name_attribute("One"),
 	{ok, _} = graphdb_attr:create_name_attribute("Two"),

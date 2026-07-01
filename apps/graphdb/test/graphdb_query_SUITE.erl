@@ -548,7 +548,7 @@ q3_class_not_found(_Config) ->
 %%---------------------------------------------------------------------
 q4_describes_instance_with_class(_Config) ->
     {ok, Vehicle} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
-    {ok, Taurus, _}  = graphdb_instance:create_instance(
+    {ok, Taurus, _}  = graphdb_instance:create_instance(sess(), 
                        "Taurus", Vehicle, ?NREF_PROJECTS),
     {ok, R} = graphdb_query:execute_query(
         #q_describe{nref = Taurus, labels = default}),
@@ -562,7 +562,7 @@ q4_resolves_inherited_attributes(_Config) ->
     ok = graphdb_class:add_qualifying_characteristic(Vehicle, WeightA),
     %% Bind a class-level value (Task 0 adds bind_qc_value/3)
     ok = graphdb_class:bind_qc_value(Vehicle, WeightA, 3500),
-    {ok, Taurus, _} = graphdb_instance:create_instance(
+    {ok, Taurus, _} = graphdb_instance:create_instance(sess(), 
                       "Taurus", Vehicle, ?NREF_PROJECTS),
     {ok, R} = graphdb_query:execute_query(
         #q_describe{nref = Taurus, labels = default}),
@@ -574,15 +574,15 @@ q4_resolves_inherited_attributes(_Config) ->
 q4_outgoing_and_incoming_connections(_Config) ->
     {ok, Mfr}    = graphdb_class:create_class("Manufacturer", ?NREF_CLASSES),
     {ok, Veh}    = graphdb_class:create_class("Vehicle",      ?NREF_CLASSES),
-    {ok, Ford, _}   = graphdb_instance:create_instance(
+    {ok, Ford, _}   = graphdb_instance:create_instance(sess(), 
                        "Ford",   Mfr, ?NREF_PROJECTS),
-    {ok, Tau, _}    = graphdb_instance:create_instance(
+    {ok, Tau, _}    = graphdb_instance:create_instance(sess(), 
                        "Taurus", Veh, ?NREF_PROJECTS),
     %% create_relationship_attribute/3 atomically creates BOTH directions
     %% in one call and returns {ok, {FwdNref, RevNref}}.
     {ok, {MakesA, MadeByA}} = graphdb_attr:create_relationship_attribute_pair(
                                   "makes", "made_by", instance),
-    ok = graphdb_instance:add_relationship(Ford, MakesA, Tau, MadeByA),
+    ok = graphdb_instance:add_relationship(sess(), Ford, MakesA, Tau, MadeByA),
     {ok, R} = graphdb_query:execute_query(
         #q_describe{nref = Tau, labels = default}),
     Outgoing = maps:get(outgoing_connections, R),
@@ -598,9 +598,9 @@ q4_outgoing_and_incoming_connections(_Config) ->
 
 q4_compositional_ancestors(_Config) ->
     {ok, Veh}    = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
-    {ok, Car, _}    = graphdb_instance:create_instance(
+    {ok, Car, _}    = graphdb_instance:create_instance(sess(), 
                        "Car",    Veh, ?NREF_PROJECTS),
-    {ok, Engine, _} = graphdb_instance:create_instance(
+    {ok, Engine, _} = graphdb_instance:create_instance(sess(), 
                        "Engine", Veh, Car),
     {ok, R} = graphdb_query:execute_query(
         #q_describe{nref = Engine, labels = default}),
@@ -617,9 +617,9 @@ q4_instance_not_found(_Config) ->
 %%---------------------------------------------------------------------
 q5_lists_direct_instances(_Config) ->
     {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
-    {ok, Tau, _} = graphdb_instance:create_instance(
+    {ok, Tau, _} = graphdb_instance:create_instance(sess(), 
                     "Taurus", Veh, ?NREF_PROJECTS),
-    {ok, Acc, _} = graphdb_instance:create_instance(
+    {ok, Acc, _} = graphdb_instance:create_instance(sess(), 
                     "Accord", Veh, ?NREF_PROJECTS),
     {ok, Insts} = graphdb_query:execute_query(
         #q_instances_of{class = Veh, recursive = false}),
@@ -629,7 +629,7 @@ q5_lists_direct_instances(_Config) ->
 q5_recursive_includes_subclass_instances(_Config) ->
     {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
     {ok, Car} = graphdb_class:create_class("Car",     Veh),
-    {ok, Tau, _} = graphdb_instance:create_instance(
+    {ok, Tau, _} = graphdb_instance:create_instance(sess(), 
                     "Taurus", Car, ?NREF_PROJECTS),
     {ok, Insts} = graphdb_query:execute_query(
         #q_instances_of{class = Veh, recursive = true}),
@@ -638,7 +638,7 @@ q5_recursive_includes_subclass_instances(_Config) ->
 q5_non_recursive_excludes_subclasses(_Config) ->
     {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
     {ok, Car} = graphdb_class:create_class("Car",     Veh),
-    {ok, Tau, _} = graphdb_instance:create_instance(
+    {ok, Tau, _} = graphdb_instance:create_instance(sess(), 
                     "Taurus", Car, ?NREF_PROJECTS),
     {ok, Insts} = graphdb_query:execute_query(
         #q_instances_of{class = Veh, recursive = false}),
@@ -707,9 +707,9 @@ q6_arc_kind_filter(_Config) ->
     %% B (child) -> A (parent) via composition; restricting to taxonomy
     %% yields no_path because the path is purely compositional.
     {ok, Cls} = graphdb_class:create_class("Cls", ?NREF_CLASSES),
-    {ok, A, _}   = graphdb_instance:create_instance(
+    {ok, A, _}   = graphdb_instance:create_instance(sess(), 
                     "A", Cls, ?NREF_PROJECTS),
-    {ok, B, _}   = graphdb_instance:create_instance("B", Cls, A),
+    {ok, B, _}   = graphdb_instance:create_instance(sess(), "B", Cls, A),
     {ok, [_|_]} = graphdb_query:execute_query(
         #q_find_path{from      = B,
                      to        = A,
@@ -742,3 +742,21 @@ resume_against_refreshed_session_fails(_Config) ->
     S2 = graphdb_query:refresh(S1),
     ?assertEqual({error, snapshot_expired},
                  graphdb_query:resume(Cont, S2)).
+
+%%---------------------------------------------------------------------
+%% sess() -> Session
+%%
+%% SP1 test helper: returns a project session, memoised per test-case
+%% process.  Registers a project under Projects (nref 5) on first use and
+%% opens a session against it; subsequent calls in the same process reuse it.
+%%---------------------------------------------------------------------
+sess() ->
+	case get(sp1_session) of
+		undefined ->
+			{ok, P} = graphdb_project:register_project("SP1 test session"),
+			{ok, S} = graphdb_project:open_session(P),
+			put(sp1_session, S),
+			S;
+		S ->
+			S
+	end.

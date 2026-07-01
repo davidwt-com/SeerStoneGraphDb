@@ -1,6 +1,6 @@
 # Ontology Tree — Bootstrap + Runtime Init Seeds
 
-**Status:** current as of 2026-06-17 (post soft-retire Task 1 — `retired` lifecycle marker added).
+**Status:** current as of 2026-06-29 (SP1 Task 4 — "Remote Reference" proxy class + `remote_project`/`remote_nref` literal attributes added).
 
 This diagram is the **organisational shape of the environment ontology**
 immediately after `application:start(database)` finishes. It captures:
@@ -80,6 +80,8 @@ graph LR
   NAT["attribute_type<br/>(runtime, attribute)"]:::attr
   NIN["instantiable<br/>(runtime, attribute)"]:::attr
   NRE["retired<br/>(runtime, attribute)"]:::attr
+  NRP["remote_project<br/>(runtime, attribute)"]:::attr
+  NRN["remote_nref<br/>(runtime, attribute)"]:::attr
   NBL["base_language<br/>(runtime, attribute)"]:::attr
   NPL["project_language<br/>(runtime, attribute)"]:::attr
   NRCC["child_class_nref<br/>(runtime, attribute)"]:::attr
@@ -111,10 +113,11 @@ graph LR
   NRAT["applies_to (rule arc)<br/>(runtime, attribute)"]:::attr
   NRAB["applied_by (rule arc)<br/>(runtime, attribute)"]:::attr
 
-  %% --- Classes sub-tree (F4 Phase A rule meta-ontology) ---
+  %% --- Classes sub-tree (F4 Phase A rule meta-ontology + SP1 proxy contract) ---
   NRULE["Rule (abstract)<br/>(runtime, class)"]:::cls
   NCMPR["CompositionRule<br/>(runtime, class)"]:::cls
   NCONR["ConnectionRule<br/>(runtime, class)"]:::cls
+  NRRR["Remote Reference<br/>(runtime, class)"]:::cls
 
   %% --- Languages sub-tree ---
   N32["Human Languages<br/>(32, category)"]:::cat
@@ -170,6 +173,8 @@ graph LR
   NAL ==> NAT
   NAL ==> NIN
   NAL ==> NRE
+  NAL ==> NRP
+  NAL ==> NRN
   NLL ==> NBL
   NLL ==> NPL
   NRL ==> NRCC
@@ -200,10 +205,11 @@ graph LR
   N16 ==> NRAT
   N16 ==> NRAB
 
-  %% --- Taxonomy: Classes — F4 Phase A rule meta-ontology ---
+  %% --- Taxonomy: Classes — F4 Phase A rule meta-ontology + SP1 proxy ---
   N3 ==> NRULE
   NRULE ==> NCMPR
   NRULE ==> NCONR
+  N3 ==> NRRR
 ```
 
 ## Legend
@@ -248,13 +254,15 @@ Subtree → arc kind:
 
 Runtime sub-group / attribute / class nrefs sit at 10000+ and are not
 enumerated here (they shift between sessions); the L7 Attribute
-Literals sub-group (6 literals: `literal_type`, `target_kind`,
-`relationship_avp`, `attribute_type`, `instantiable`, `retired`) and
-Language Literals sub-group are seeded by `graphdb_attr:init/1` and
-`graphdb_language:init/1`, and the F4 Rule Literals sub-group (8
-literals, including `reciprocal_nref` added in B4) plus the `Rule` /
-`CompositionRule` / `ConnectionRule` meta-classes and the `applies_to`
-/ `applied_by` pair are seeded by `graphdb_rules:init/1`.
+Literals sub-group (8 literals: `literal_type`, `target_kind`,
+`relationship_avp`, `attribute_type`, `instantiable`, `retired`,
+`remote_project`, `remote_nref`) and Language Literals sub-group are
+seeded by `graphdb_attr:init/1` and `graphdb_language:init/1`; the
+F4 Rule Literals sub-group (8 literals, including `reciprocal_nref`
+added in B4) plus the `Rule` / `CompositionRule` / `ConnectionRule`
+meta-classes and the `applies_to` / `applied_by` pair are seeded by
+`graphdb_rules:init/1`; the `Remote Reference` class (SP1 Task 4) is
+seeded by `graphdb_instance:init/1`.
 
 ## Maintenance
 

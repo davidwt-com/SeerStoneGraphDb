@@ -114,8 +114,8 @@
 		%% Write operations (delegate to workers)
 		create_attribute/3,
 		create_class/2,
-		create_instance/3,
-		add_relationship/4,
+		create_instance/4,
+		add_relationship/5,
 		delete_node/1,
 		retire_node/1,
 		unretire_node/1,
@@ -222,26 +222,38 @@ create_class(Name, ParentClassNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% create_instance(Name, ClassNref, ParentNref) ->
+%% create_instance(Session, Name, ClassNref, ParentNref) ->
 %%     {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
-%% Creates a new instance node and fires mandatory composition rules.
-%% Delegates to graphdb_instance; propagates the 3-tuple return verbatim.
+%% Creates a new instance node in the project named by Session and fires
+%% mandatory composition rules.  A project operation requires a valid session
+%% (SP1).  Delegates to graphdb_instance; propagates the 3-tuple return verbatim.
 %%-----------------------------------------------------------------------------
-create_instance(Name, ClassNref, ParentNref) ->
-	gen_server:call(?MODULE, {create_instance, Name, ClassNref, ParentNref}).
+create_instance(Session, Name, ClassNref, ParentNref) ->
+	case graphdb_project:require_session(Session) of
+		{error, _} = Err -> Err;
+		ok ->
+			gen_server:call(?MODULE,
+				{create_instance, Session, Name, ClassNref, ParentNref})
+	end.
 
 
 %%-----------------------------------------------------------------------------
-%% add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref) ->
-%%     {ok, {Id1, Id2}} | {error, term()}
+%% add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+%%     ok | {error, term()}
 %%
-%% Creates a bidirectional relationship (two directed rows).
-%% Delegates to graphdb_instance (not yet implemented).
+%% Creates a bidirectional relationship (two directed rows) in the project
+%% named by Session.  A project operation requires a valid session (SP1);
+%% delegates to graphdb_instance.
 %%-----------------------------------------------------------------------------
-add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref) ->
-	gen_server:call(?MODULE,
-		{add_relationship, SourceNref, CharNref, TargetNref, ReciprocalNref}).
+add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+	case graphdb_project:require_session(Session) of
+		{error, _} = Err -> Err;
+		ok ->
+			gen_server:call(?MODULE,
+				{add_relationship, Session, SourceNref, CharNref, TargetNref,
+					ReciprocalNref})
+	end.
 
 
 %%-----------------------------------------------------------------------------
@@ -594,14 +606,18 @@ handle_call({create_class, Name, ParentClassNref}, _From, State) ->
 	%% Class nodes are kind=class -- never category, no guard needed.
 	{reply, graphdb_class:create_class(Name, ParentClassNref), State};
 
-handle_call({create_instance, Name, ClassNref, ParentNref}, _From, State) ->
+handle_call({create_instance, Session, Name, ClassNref, ParentNref}, _From,
+		State) ->
 	%% Instance nodes are kind=instance -- never category, no guard needed.
-	{reply, graphdb_instance:create_instance(Name, ClassNref, ParentNref), State};
-
-handle_call({add_relationship, SourceNref, CharNref, TargetNref, ReciprocalNref},
-		_From, State) ->
 	{reply,
-		graphdb_instance:add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref),
+		graphdb_instance:create_instance(Session, Name, ClassNref, ParentNref),
+		State};
+
+handle_call({add_relationship, Session, SourceNref, CharNref, TargetNref,
+		ReciprocalNref}, _From, State) ->
+	{reply,
+		graphdb_instance:add_relationship(Session, SourceNref, CharNref,
+			TargetNref, ReciprocalNref),
 		State};
 
 handle_call({retire_node, Nref}, _From, State0) ->

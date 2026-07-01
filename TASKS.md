@@ -425,19 +425,59 @@ resolver is supplied via `create_instance/4`.
 
 ## Multi-project sessions
 
-Every public API already accepts a `Scope` of `environment | {project,
-_}`; the handlers serve the `environment` scope only and reject or empty
-`{project, _}` requests. This area turns project scope on:
+This is a four-sub-project program (design:
+`docs/designs/project-env-reference-namespace-model-design.md`). SP1 (the
+reference & namespace model) is done; SP2–SP4 remain.
 
-- Session state carrying a list of `{ProjectId, AnchorNref}` (a list,
-  not a singleton).
-- Cross-project arc traversal — an arc whose target is a project nref
-  carries `target_kind` but not *which* project; the session must supply
-  that context.
-- Session-level priority resolution — environment first, then project
-  A's rules, then project B's, or a declared order.
-- Project-scoped overlay tables for rule instances and for language
-  labels (`language_<code>_<anchor_nref>`).
+### SP1 — reference & namespace model — IMPLEMENTED
+
+At the API/code layer only, no `node`/`relationship` record changes:
+
+- **`graphdb_ns`** — pure module encoding the field-role namespace map
+  (`namespace_of/1`, `target_namespace/1`): every nref reference resolves to
+  `environment | project | home`. The code expression of design §3.
+- **`graphdb_project`** — project registry (`register_project/1`,
+  `is_project/1`) creating an anchor node under `Projects` (nref 5); project
+  session (`open_session/1`, `session_project/1`, `require_session/1`); and
+  the canonical project-scoped relationship API surface (env/project split).
+- **Proxy representation contract** — a seeded "Remote Reference" class (under
+  Classes, nref 3) + `remote_project` / `remote_nref` literal attributes +
+  `graphdb_instance:is_proxy/1` / `proxy_coordinates/1` recognizers. Cross-
+  project links are local proxy nodes carrying remote coordinates as AVP
+  payload; no structural reference ever crosses a project boundary.
+- **Required project session on the project write path** — `create_instance`,
+  `add_relationship`, `remove_relationship`, `update_relationship`(`_both`),
+  and `add_class_membership` take a `Session` first arg and reject a missing/
+  invalid one with `{error, invalid_session}`. Behaviour-preserving against
+  today's single store (the session is validated but inert until SP2).
+
+**SP1 deliberate deferrals (to SP2+):**
+
+- `mutate/1` and the instance reads (`get_instance` / `children` /
+  `compositional_ancestors` / `resolve_value`) stay **namespace-agnostic** in
+  SP1 — like `get_node` / `get_relationships`. `mutate/1` is mixed env/project
+  (a project session would over-constrain env-only batches); the reads are
+  consumed by `graphdb_query`, so gating them would force the deferred
+  query-session unification. Their per-namespace routing lands in SP2.
+- `proxy_coordinates/1` assumes a well-formed proxy (both AVPs present); it can
+  badmatch on a malformed proxy. Harmless until SP2 adds proxy **creation**;
+  handle the missing-AVP case there.
+- Proxy-node creation API and dereference; private environment overlays
+  (a private overlay hiding a project's nref-5 anchor); session unification
+  with the `graphdb_query` session.
+
+### SP2+ — turning project scope on
+
+- **Physical project store (SP2)** — separate Mnesia table set / schema per
+  project; per-project allocator from 1; the resolution seam gains real
+  env-vs-project routing; the session binds to physical storage.
+- **Distribution & residency (SP3)** — projects on separate nodes / locations;
+  environment reachability or replication at each location; proxy dereference.
+- **Migration (SP4)** — move existing instances out of the shared environment
+  tables into project storage; reassign their nrefs.
+- Session state may carry multiple `{ProjectId, AnchorNref}` and a
+  cross-project priority order; project-scoped overlay tables for rule
+  instances and language labels (`language_<code>_<anchor_nref>`).
 
 **Open question — multi-class instance creation.** `create_instance`
 stays single-class: one primary driving class. Additional class

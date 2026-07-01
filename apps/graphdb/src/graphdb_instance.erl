@@ -101,12 +101,15 @@
 }).
 
 -record(state, {
-	target_kind_avp_nref,	%% integer() -- nref of the seeded `target_kind`
-							%% literal-attribute, cached from graphdb_attr
-							%% at init time and used by add_relationship
-							%% validation.
-	instantiable_nref,		%% integer() -- seeded `instantiable` marker
-	retired_nref			%% integer() -- seeded `retired` marker
+	target_kind_avp_nref,			%% integer() -- nref of the seeded `target_kind`
+									%% literal-attribute, cached from graphdb_attr
+									%% at init time and used by add_relationship
+									%% validation.
+	instantiable_nref,				%% integer() -- seeded `instantiable` marker
+	retired_nref,					%% integer() -- seeded `retired` marker
+	remote_reference_class_nref,	%% integer() -- seeded "Remote Reference" class
+	remote_project_nref,			%% integer() -- seeded `remote_project` literal
+	remote_nref_nref				%% integer() -- seeded `remote_nref` literal
 }).
 
 
@@ -119,26 +122,26 @@
 -export([
 		start_link/0,
 		%% Creators
-		create_instance/3,
 		create_instance/4,
 		create_instance/5,
-		add_relationship/4,
+		create_instance/6,
 		add_relationship/5,
 		add_relationship/6,
-		add_class_membership/2,
+		add_relationship/7,
+		add_class_membership/3,
 		%% Tier-1 in-transaction primitive (write-path seam)
 		add_relationship_in_txn/9,
-		remove_relationship/3,
 		remove_relationship/4,
+		remove_relationship/5,
 		remove_relationship_in_txn/4,
 		resolve_forward_connection/4,
 		template_of/1,
-		update_relationship/4,
 		update_relationship/5,
+		update_relationship/6,
 		update_relationship_avps_in_txn/5,
 		has_template_update/1,
-		update_relationship_both/4,
 		update_relationship_both/5,
+		update_relationship_both/6,
 		update_relationship_both_in_txn/6,
 		%% Lookups
 		get_instance/1,
@@ -147,7 +150,11 @@
 		class_of/1,
 		class_memberships/1,
 		%% Inheritance
-		resolve_value/2
+		resolve_value/2,
+		%% Proxy recognizer
+		remote_reference_class/0,
+		is_proxy/1,
+		proxy_coordinates/1
 		]).
 
 %%---------------------------------------------------------------------
@@ -197,8 +204,8 @@ start_link() ->
 %%   - instance→class membership arc pair (char=29/30)
 %%   - compositional parent→child arc pair (char=28/27)
 %%-----------------------------------------------------------------------------
-create_instance(Name, ClassNref, ParentNref) ->
-	create_instance(Name, ClassNref, ParentNref, fun report_only/1).
+create_instance(Session, Name, ClassNref, ParentNref) ->
+	create_instance(Session, Name, ClassNref, ParentNref, fun report_only/1).
 
 %%-----------------------------------------------------------------------------
 %% create_instance(Name, ClassNref, ParentNref, ConnResolver) ->
@@ -209,9 +216,9 @@ create_instance(Name, ClassNref, ParentNref) ->
 %% outcome and nothing is connected.  /4 supplies the built-in default
 %% conflict resolver.
 %%-----------------------------------------------------------------------------
-create_instance(Name, ClassNref, ParentNref, ConnResolver)
+create_instance(Session, Name, ClassNref, ParentNref, ConnResolver)
 		when is_function(ConnResolver, 1) ->
-	create_instance(Name, ClassNref, ParentNref, ConnResolver,
+	create_instance(Session, Name, ClassNref, ParentNref, ConnResolver,
 					graphdb_rules:default_conflict_resolver()).
 
 %%-----------------------------------------------------------------------------
@@ -222,11 +229,14 @@ create_instance(Name, ClassNref, ParentNref, ConnResolver)
 %% in the CALLER's process (where seeded_nrefs/0 is safe) and applied per
 %% cascade level for composition rules and per plan node for connection rules.
 %%-----------------------------------------------------------------------------
-create_instance(Name, ClassNref, ParentNref, ConnResolver, ConflictResolver)
+create_instance(Session, Name, ClassNref, ParentNref, ConnResolver,
+		ConflictResolver)
 		when is_function(ConnResolver, 1), is_function(ConflictResolver, 1) ->
-	gen_server:call(?MODULE,
-		{create_instance, Name, ClassNref, ParentNref, ConnResolver,
-		 ConflictResolver}).
+	with_session(Session, fun() ->
+		gen_server:call(?MODULE,
+			{create_instance, Name, ClassNref, ParentNref, ConnResolver,
+			 ConflictResolver})
+	end).
 
 %% report_only(ConnContext) -> defer   (the built-in /3 resolver)
 report_only(_Ctx) -> defer.
@@ -246,10 +256,12 @@ report_only(_Ctx) -> defer.
 %% its default template removed; the caller must then use /5 to provide
 %% an explicit template.
 %%-----------------------------------------------------------------------------
-add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref) ->
-	gen_server:call(?MODULE,
-		{add_relationship, SourceNref, CharNref, TargetNref,
-			ReciprocalNref, default, {[], []}}).
+add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+	with_session(Session, fun() ->
+		gen_server:call(?MODULE,
+			{add_relationship, SourceNref, CharNref, TargetNref,
+				ReciprocalNref, default, {[], []}})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -264,11 +276,13 @@ add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref) ->
 %% whose parent class is in the taxonomic ancestry of the source's
 %% class or the target's class.
 %%-----------------------------------------------------------------------------
-add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref) when is_integer(TemplateNref) ->
-	gen_server:call(?MODULE,
-		{add_relationship, SourceNref, CharNref, TargetNref,
-			ReciprocalNref, TemplateNref, {[], []}}).
+	with_session(Session, fun() ->
+		gen_server:call(?MODULE,
+			{add_relationship, SourceNref, CharNref, TargetNref,
+				ReciprocalNref, TemplateNref, {[], []}})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -283,12 +297,14 @@ add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 %% The Template AVP (#{attribute => 31, value => TemplateNref}) is
 %% prepended to each direction's user-supplied AVP list.
 %%-----------------------------------------------------------------------------
-add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref, {FwdAVPs, RevAVPs} = AVPSpec)
 		when is_integer(TemplateNref), is_list(FwdAVPs), is_list(RevAVPs) ->
-	gen_server:call(?MODULE,
-		{add_relationship, SourceNref, CharNref, TargetNref,
-			ReciprocalNref, TemplateNref, AVPSpec}).
+	with_session(Session, fun() ->
+		gen_server:call(?MODULE,
+			{add_relationship, SourceNref, CharNref, TargetNref,
+				ReciprocalNref, TemplateNref, AVPSpec})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -355,9 +371,11 @@ class_memberships(InstanceNref) ->
 %% a class already present returns ok without writing.  Validates that
 %% the subject is an instance and the target is a class.
 %%-----------------------------------------------------------------------------
-add_class_membership(InstanceNref, ClassNref) ->
-	gen_server:call(?MODULE,
-		{add_class_membership, InstanceNref, ClassNref}).
+add_class_membership(Session, InstanceNref, ClassNref) ->
+	with_session(Session, fun() ->
+		gen_server:call(?MODULE,
+			{add_class_membership, InstanceNref, ClassNref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -381,24 +399,79 @@ resolve_value(InstanceNref, AttrNref) ->
 	gen_server:call(?MODULE, {resolve_value, InstanceNref, AttrNref}).
 
 
+%%-----------------------------------------------------------------------------
+%% remote_reference_class() -> integer()
+%%
+%% Returns the nref of the seeded "Remote Reference" class node.
+%% The class is seeded at init time under the Classes category (nref 3).
+%%-----------------------------------------------------------------------------
+remote_reference_class() ->
+	gen_server:call(?MODULE, remote_reference_class).
+
+
+%%-----------------------------------------------------------------------------
+%% is_proxy(#node{}) -> boolean()
+%%
+%% Returns true iff the node is a member of the "Remote Reference" class.
+%% This is a representation-contract check only — no dereference.
+%%-----------------------------------------------------------------------------
+is_proxy(#node{classes = Classes}) ->
+	lists:member(remote_reference_class(), Classes).
+
+
+%%-----------------------------------------------------------------------------
+%% proxy_coordinates(#node{}) ->
+%%     {ok, #{remote_project => integer(), remote_nref => integer()}}
+%%   | not_a_proxy
+%%
+%% Extracts the remote_project and remote_nref AVP values from a proxy node.
+%% Returns not_a_proxy if the node is not a member of the Remote Reference class.
+%%-----------------------------------------------------------------------------
+proxy_coordinates(#node{attribute_value_pairs = AVPs} = N) ->
+	case is_proxy(N) of
+		false ->
+			not_a_proxy;
+		true ->
+			{ok, #{remote_project := RP, remote_nref := RN}} =
+				graphdb_attr:seeded_nrefs(),
+			{ok, #{remote_project => avp_value(AVPs, RP),
+				   remote_nref    => avp_value(AVPs, RN)}}
+	end.
+
+
 %%=============================================================================
 %% gen_server Behaviour Callbacks
 %%=============================================================================
 
 init([]) ->
-	logger:info("graphdb_instance: started"),
-	%% Cache the seeded `target_kind` literal-attribute nref from
-	%% graphdb_attr.  Used by add_relationship validation to check
-	%% that an arc's target node has the kind declared on the
-	%% characterization.  Also cache `instantiable` to check at
-	%% create_instance time that the class is not marked non-instantiable.
-	%% graphdb_attr is started before graphdb_instance by graphdb_sup,
-	%% so this call is safe at init time.
-	{ok, #{target_kind := TkAttr, instantiable := InstAttr,
-		   retired := RetAttr}} = graphdb_attr:seeded_nrefs(),
-	{ok, #state{target_kind_avp_nref = TkAttr,
-				instantiable_nref = InstAttr,
-				retired_nref = RetAttr}}.
+	%% Cache literal-attribute nrefs from graphdb_attr.  graphdb_attr is
+	%% started before graphdb_instance by graphdb_sup, so this call is
+	%% safe at init time.
+	try
+		{ok, #{target_kind    := TkAttr,
+			   instantiable   := InstAttr,
+			   retired        := RetAttr,
+			   remote_project := RpAttr,
+			   remote_nref    := RnAttr}} = graphdb_attr:seeded_nrefs(),
+		%% Ensure the "Remote Reference" class exists under Classes (nref 3).
+		%% find_subclass_by_name runs a transaction; graphdb_class:create_class
+		%% is a gen_server call resolved outside any transaction.
+		RRClass = ensure_remote_reference_class(),
+		logger:info("graphdb_instance: started "
+			"(target_kind=~p, instantiable=~p, retired=~p, "
+			"remote_reference_class=~p, remote_project=~p, remote_nref=~p)",
+			[TkAttr, InstAttr, RetAttr, RRClass, RpAttr, RnAttr]),
+		{ok, #state{target_kind_avp_nref          = TkAttr,
+					instantiable_nref              = InstAttr,
+					retired_nref                   = RetAttr,
+					remote_reference_class_nref    = RRClass,
+					remote_project_nref            = RpAttr,
+					remote_nref_nref               = RnAttr}}
+	catch
+		throw:{error, Reason} ->
+			logger:error("graphdb_instance: seeding failed: ~p", [Reason]),
+			{stop, {seed_failed, Reason}}
+	end.
 
 
 %%-----------------------------------------------------------------------------
@@ -447,6 +520,13 @@ handle_call({class_memberships, Nref}, _From, State) ->
 handle_call({resolve_value, InstNref, AttrNref}, _From, State) ->
 	{reply, do_resolve_value(InstNref, AttrNref), State};
 
+%%-----------------------------------------------------------------------------
+%% handle_call/3 -- Proxy accessor
+%%-----------------------------------------------------------------------------
+handle_call(remote_reference_class, _From,
+		#state{remote_reference_class_nref = RRClass} = State) ->
+	{reply, RRClass, State};
+
 handle_call(Request, From, State) ->
 	?UEM(handle_call, {Request, From, State}),
 	{noreply, State}.
@@ -492,6 +572,72 @@ find_avp_value([#{attribute := A} | _], A) ->
 	not_found;
 find_avp_value([_ | Rest], AttrNref) ->
 	find_avp_value(Rest, AttrNref).
+
+
+%%-----------------------------------------------------------------------------
+%% avp_value(AVPs, AttrNref) -> term()
+%%
+%% Unwraps find_avp_value/2, returning the raw value.  Only used where the
+%% value is expected to be present (e.g., a verified proxy node).
+%%-----------------------------------------------------------------------------
+avp_value(AVPs, AttrNref) ->
+	{ok, V} = find_avp_value(AVPs, AttrNref),
+	V.
+
+
+%%-----------------------------------------------------------------------------
+%% ensure_remote_reference_class() -> integer()
+%%
+%% Idempotent init helper: returns the nref of the "Remote Reference" class
+%% under the Classes category (nref 3), creating it on first startup.
+%% Throws {error, Reason} on failure (caught by init/1 try/catch).
+%%-----------------------------------------------------------------------------
+ensure_remote_reference_class() ->
+	case find_subclass_by_name(?NREF_CLASSES, "Remote Reference") of
+		{ok, Nref} ->
+			Nref;
+		not_found ->
+			case graphdb_class:create_class("Remote Reference", ?NREF_CLASSES) of
+				{ok, Nref}      -> Nref;
+				{error, Reason} -> throw({error, Reason})
+			end
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% find_subclass_by_name(ParentNref, Name) -> {ok, Nref} | not_found
+%%
+%% Searches the direct taxonomy children of ParentNref for a class node
+%% whose NAME_ATTR_CLASS AVP matches Name.  Runs in one Mnesia transaction.
+%% Throws {error, Reason} on transaction failure.
+%%-----------------------------------------------------------------------------
+find_subclass_by_name(ParentNref, Name) ->
+	F = fun() ->
+		Arcs = mnesia:index_read(relationships, ParentNref,
+								 #relationship.source_nref),
+		ChildNrefs = [A#relationship.target_nref || A <- Arcs,
+					  A#relationship.kind =:= taxonomy,
+					  A#relationship.characterization =:= ?ARC_CLS_CHILD],
+		Nodes = lists:flatmap(fun(N) -> mnesia:read(nodes, N) end, ChildNrefs),
+		lists:search(fun(N) -> class_has_name(N, Name) end, Nodes)
+	end,
+	case graphdb_mgr:transaction(F) of
+		{ok, {value, #node{nref = Nref}}} -> {ok, Nref};
+		{ok, false}                       -> not_found;
+		{error, Reason}                   -> throw({error, Reason})
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% class_has_name(#node{}, Name) -> boolean()
+%%
+%% True iff the node carries a NAME_ATTR_CLASS AVP with value Name.
+%%-----------------------------------------------------------------------------
+class_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
+	lists:any(fun
+		(#{attribute := ?NAME_ATTR_CLASS, value := V}) -> V =:= Name;
+		(_) -> false
+	end, AVPs).
 
 
 %%-----------------------------------------------------------------------------
@@ -1326,22 +1472,36 @@ remove_relationship_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec) ->
 %% narrows by an explicit template.  Plain functions owning one
 %% graphdb_mgr:transaction/1 in the caller's process (no gen_server state).
 %%-----------------------------------------------------------------------------
-remove_relationship(SourceNref, CharNref, TargetNref) ->
-	txn_ok(fun() ->
-		remove_relationship_in_txn(SourceNref, CharNref, TargetNref, any)
+remove_relationship(Session, SourceNref, CharNref, TargetNref) ->
+	with_session(Session, fun() ->
+		txn_ok(fun() ->
+			remove_relationship_in_txn(SourceNref, CharNref, TargetNref, any)
+		end)
 	end).
 
-remove_relationship(SourceNref, CharNref, TargetNref, TemplateNref)
+remove_relationship(Session, SourceNref, CharNref, TargetNref, TemplateNref)
 		when is_integer(TemplateNref) ->
-	txn_ok(fun() ->
-		remove_relationship_in_txn(SourceNref, CharNref, TargetNref,
-			TemplateNref)
+	with_session(Session, fun() ->
+		txn_ok(fun() ->
+			remove_relationship_in_txn(SourceNref, CharNref, TargetNref,
+				TemplateNref)
+		end)
 	end).
 
 %% Run an in-txn primitive in one transaction; normalise {ok, _} -> ok.
 txn_ok(Fun) ->
 	case graphdb_mgr:transaction(Fun) of
 		{ok, _}          -> ok;
+		{error, _} = Err -> Err
+	end.
+
+%% Gate a project operation on a valid project session (SP1).  A missing or
+%% malformed session short-circuits with {error, invalid_session}; a valid
+%% one runs Fun.  The session is required but otherwise inert against today's
+%% single store (SP2 gives it physical routing).
+with_session(Session, Fun) ->
+	case graphdb_project:require_session(Session) of
+		ok               -> Fun();
 		{error, _} = Err -> Err
 	end.
 
@@ -1388,13 +1548,17 @@ has_template_update(Updates) ->
 %% (S, C, T).  Validates the update grammar client-side (slice B), then owns
 %% one transaction.
 %%-----------------------------------------------------------------------------
-update_relationship(SourceNref, CharNref, TargetNref, Updates) ->
-	do_update_relationship(SourceNref, CharNref, TargetNref, any, Updates).
+update_relationship(Session, SourceNref, CharNref, TargetNref, Updates) ->
+	with_session(Session, fun() ->
+		do_update_relationship(SourceNref, CharNref, TargetNref, any, Updates)
+	end).
 
-update_relationship(SourceNref, CharNref, TargetNref, TemplateNref, Updates)
-		when is_integer(TemplateNref) ->
-	do_update_relationship(SourceNref, CharNref, TargetNref, TemplateNref,
-		Updates).
+update_relationship(Session, SourceNref, CharNref, TargetNref, TemplateNref,
+		Updates) when is_integer(TemplateNref) ->
+	with_session(Session, fun() ->
+		do_update_relationship(SourceNref, CharNref, TargetNref, TemplateNref,
+			Updates)
+	end).
 
 do_update_relationship(SourceNref, CharNref, TargetNref, TemplateSpec,
 		Updates) ->
@@ -1455,12 +1619,17 @@ update_relationship_both_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
 %% transaction.  The two update lists are independent (forward need not mirror
 %% reverse).  Both lists are validated client-side (slice B grammar).
 %%-----------------------------------------------------------------------------
-update_relationship_both(SourceNref, CharNref, TargetNref, {Fwd, Rev}) ->
-	do_update_both(SourceNref, CharNref, TargetNref, any, Fwd, Rev).
+update_relationship_both(Session, SourceNref, CharNref, TargetNref,
+		{Fwd, Rev}) ->
+	with_session(Session, fun() ->
+		do_update_both(SourceNref, CharNref, TargetNref, any, Fwd, Rev)
+	end).
 
-update_relationship_both(SourceNref, CharNref, TargetNref, TemplateNref,
+update_relationship_both(Session, SourceNref, CharNref, TargetNref, TemplateNref,
 		{Fwd, Rev}) when is_integer(TemplateNref) ->
-	do_update_both(SourceNref, CharNref, TargetNref, TemplateNref, Fwd, Rev).
+	with_session(Session, fun() ->
+		do_update_both(SourceNref, CharNref, TargetNref, TemplateNref, Fwd, Rev)
+	end).
 
 do_update_both(SourceNref, CharNref, TargetNref, TemplateSpec, Fwd, Rev) ->
 	case {graphdb_mgr:validate_avp_updates(Fwd),
