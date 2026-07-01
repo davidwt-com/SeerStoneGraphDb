@@ -162,6 +162,18 @@ table set — the seam is **behavior-preserving** but is the **correctness
 boundary** SP2 fills in. No structural code outside the seam should assume a
 global nref space.
 
+`graphdb_ns` is **intentionally unused by production code in SP1**: it is the
+pure *classifier* that the SP2 store-router will consume. Shipping it now fixes
+the namespace contract as a testable unit (exhaustive table-driven tests over
+§3) before the router exists — it is not dead code.
+
+The per-operation session gate (`graphdb_project:require_session/1`) is
+**shape-only**: it accepts any well-formed `#{kind := project_session, …}`
+value, including one naming a project that no longer exists. Registry-existence
+is validated once by `open_session/1`; re-checking it on every operation would
+cost a store read per call for no SP1 benefit (the session is inert). SP2, when
+the session binds to physical storage, is the natural point to revisit this.
+
 ## 8. Environment-op vs project-op split
 
 The env/project line decides which APIs take a session:

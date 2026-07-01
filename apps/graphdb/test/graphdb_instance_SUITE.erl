@@ -98,6 +98,8 @@
 	remove_relationship_not_found/1,
 	remove_relationship_rejects_bad_session/1,
 	add_relationship_rejects_bad_session/1,
+	update_relationship_rejects_bad_session/1,
+	add_class_membership_rejects_bad_session/1,
 	remove_relationship_ambiguous/1,
 	remove_relationship_disambiguate_by_template/1,
 	remove_relationship_dangling_half_edge/1,
@@ -262,6 +264,8 @@ groups() ->
 			remove_relationship_not_found,
 			remove_relationship_rejects_bad_session,
 			add_relationship_rejects_bad_session,
+			update_relationship_rejects_bad_session,
+			add_class_membership_rejects_bad_session,
 			remove_relationship_ambiguous,
 			remove_relationship_disambiguate_by_template,
 			remove_relationship_dangling_half_edge,
@@ -2473,6 +2477,16 @@ remove_relationship_rejects_bad_session(_Config) ->
 add_relationship_rejects_bad_session(_Config) ->
 	?assertEqual({error, invalid_session},
 		graphdb_instance:add_relationship(not_a_session, 1, 2, 3, 4)).
+
+%% SP1: the update-* family (tier-2) also rejects a bad session.
+update_relationship_rejects_bad_session(_Config) ->
+	?assertEqual({error, invalid_session},
+		graphdb_instance:update_relationship(not_a_session, 1, 2, 3, [])).
+
+%% SP1: add_class_membership (gen_server-wrapper) also rejects a bad session.
+add_class_membership_rejects_bad_session(_Config) ->
+	?assertEqual({error, invalid_session},
+		graphdb_instance:add_class_membership(not_a_session, 1, 2)).
 
 remove_relationship_ambiguous(_Config) ->
 	#{a := A, b := B, char := Char, recip := Recip, class := Class} = re_setup(),
