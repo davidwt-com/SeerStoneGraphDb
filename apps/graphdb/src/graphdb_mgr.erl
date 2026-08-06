@@ -244,36 +244,36 @@ create_class(Name, ParentClassNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% create_instance(Session, Name, ClassNref, ParentNref) ->
+%% create_instance(Project, Name, ClassNref, ParentNref) ->
 %%     {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
-%% Creates a new instance node in the project named by Session and fires
-%% mandatory composition rules.  A project operation requires a valid session
-%% (SP1).  Delegates to graphdb_instance; propagates the 3-tuple return verbatim.
+%% Creates a new instance node in Project and fires mandatory composition
+%% rules.  A project operation requires a valid Project handle (SP2).
+%% Delegates to graphdb_instance; propagates the 3-tuple return verbatim.
 %%-----------------------------------------------------------------------------
-create_instance(Session, Name, ClassNref, ParentNref) ->
-	case graphdb_project:require_session(Session) of
+create_instance(Project, Name, ClassNref, ParentNref) ->
+	case graphdb_project:require_project(Project) of
 		{error, _} = Err -> Err;
 		ok ->
 			gen_server:call(?MODULE,
-				{create_instance, Session, Name, ClassNref, ParentNref})
+				{create_instance, Project, Name, ClassNref, ParentNref})
 	end.
 
 
 %%-----------------------------------------------------------------------------
-%% add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+%% add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
 %%     ok | {error, term()}
 %%
-%% Creates a bidirectional relationship (two directed rows) in the project
-%% named by Session.  A project operation requires a valid session (SP1);
-%% delegates to graphdb_instance.
+%% Creates a bidirectional relationship (two directed rows) in Project.  A
+%% project operation requires a valid Project handle (SP2); delegates to
+%% graphdb_instance.
 %%-----------------------------------------------------------------------------
-add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
-	case graphdb_project:require_session(Session) of
+add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+	case graphdb_project:require_project(Project) of
 		{error, _} = Err -> Err;
 		ok ->
 			gen_server:call(?MODULE,
-				{add_relationship, Session, SourceNref, CharNref, TargetNref,
+				{add_relationship, Project, SourceNref, CharNref, TargetNref,
 					ReciprocalNref})
 	end.
 
