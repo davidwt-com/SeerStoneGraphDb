@@ -31,8 +31,8 @@
 %%---------------------------------------------------------------------
 %% Rev A Date: April 2026 Author: (completion of Dallas Noyes's design)
 %% Initial implementation: compositional hierarchy over Mnesia.
-%% Provides create_instance/3,4, add_relationship/4, get_instance/1,
-%% children/1, compositional_ancestors/1, resolve_value/2.
+%% Provides create_instance/4,5,6, add_relationship/5,6,7, get_instance/2,
+%% children/2, compositional_ancestors/2, resolve_value/3.
 %%---------------------------------------------------------------------
 -module(graphdb_instance).
 -behaviour(gen_server).
@@ -492,10 +492,10 @@ handle_call({add_relationship, Home, S, C, T, R, TemplateSpec, AVPSpec},
 		do_add_relationship(Home, S, C, T, R, TemplateSpec, AVPSpec, State),
 		State};
 
-handle_call({add_class_membership, InstanceNref, ClassNref}, _From,
+handle_call({add_class_membership, Project, InstanceNref, ClassNref}, _From,
 		#state{instantiable_nref = InstAttr, retired_nref = RetAttr} = State) ->
-	{reply, do_add_class_membership(InstanceNref, ClassNref, InstAttr, RetAttr),
-		State};
+	{reply, do_add_class_membership(Project, InstanceNref, ClassNref, InstAttr,
+		RetAttr), State};
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Lookups
@@ -1874,37 +1874,40 @@ write_connection_arcs(Home, SourceNref, CharNref, TargetNref, ReciprocalNref,
 
 
 %%-----------------------------------------------------------------------------
-%% do_add_class_membership(InstanceNref, ClassNref, InstAttr, RetAttr) ->
-%%     ok | {error, term()}
+%% do_add_class_membership(Project, InstanceNref, ClassNref, InstAttr, RetAttr)
+%%     -> ok | {error, term()}
 %%
 %% Validates the subject (must be an instance) and the target (must be
 %% a class, not retired, and instantiable), then atomically writes the
 %% 29/30 arc pair and appends ClassNref to the instance's classes cache.
 %% Idempotent.
 %%
-%% Not yet Project-routed (Task 9's scope) -- do_write_class_membership/2
-%% below still writes the literal `nodes`/`relationships` tables, so this
-%% passes the literal `environment` Home to do_get_instance/2 to match:
-%% graphdb_ns:node_table(environment) resolves to the same `nodes` atom,
-%% so behaviour is unchanged pending Task 9's full routing of this path.
+%% Project-routed: the instance node lives in the Project's node table and
+%% the 29/30 membership arc pair is written to the Project's relationship
+%% table -- including the class->instance direction, whose source_nref is
+%% an environment class nref (per the knowledge model, membership arcs are
+%% project-database writes, not environment writes).  ClassNref itself is
+%% validated against the literal environment via do_validate_class/3.
 %%-----------------------------------------------------------------------------
-do_add_class_membership(InstanceNref, ClassNref, InstAttr, RetAttr) ->
-	case do_get_instance(environment, InstanceNref) of
+do_add_class_membership(Project, InstanceNref, ClassNref, InstAttr, RetAttr) ->
+	case do_get_instance(Project, InstanceNref) of
 		{ok, _} ->
 			case do_validate_class(ClassNref, InstAttr, RetAttr) of
-				ok               -> do_write_class_membership(InstanceNref,
-									ClassNref);
+				ok               -> do_write_class_membership(Project,
+									InstanceNref, ClassNref);
 				{error, _} = Err -> Err
 			end;
 		{error, _} = Err ->
 			Err
 	end.
 
-do_write_class_membership(InstanceNref, ClassNref) ->
-	{Id1, Id2} = rel_id_server:get_id_pair(),
+do_write_class_membership(Project, InstanceNref, ClassNref) ->
+	{Id1, Id2} = graphdb_project:next_rel_id_pair(Project),
+	NodesTab = graphdb_ns:node_table(Project),
+	RelsTab  = graphdb_ns:rel_table(Project),
 	Txn = fun() ->
 		[#node{kind = instance, classes = Classes} = Node] =
-			mnesia:read(nodes, InstanceNref),
+			mnesia:read(NodesTab, InstanceNref),
 		case lists:member(ClassNref, Classes) of
 			true ->
 				already_exists;
@@ -1926,9 +1929,9 @@ do_write_class_membership(InstanceNref, ClassNref) ->
 					avps = []
 				},
 				Updated = Node#node{classes = Classes ++ [ClassNref]},
-				ok = mnesia:write(nodes, Updated, write),
-				ok = mnesia:write(relationships, I2C, write),
-				ok = mnesia:write(relationships, C2I, write),
+				ok = mnesia:write(NodesTab, Updated, write),
+				ok = mnesia:write(RelsTab, I2C, write),
+				ok = mnesia:write(RelsTab, C2I, write),
 				ok
 		end
 	end,
@@ -1977,9 +1980,9 @@ do_class_of(Project, InstanceNref) ->
 %%-----------------------------------------------------------------------------
 %% class_of_in_txn(Home, InstanceNref) -> {ok, ClassNref} | not_found
 %%
-%% Tier-1 in-transaction twin of do_class_of/1.  Assumes it runs inside an
+%% Tier-1 in-transaction twin of do_class_of/2.  Assumes it runs inside an
 %% active mnesia activity; uses a bare index_read against Home's relationship
-%% table.  do_class_of/1 keeps its own transaction for its public class_of
+%% table.  do_class_of/2 keeps its own transaction for its public class_of
 %% caller.
 %%-----------------------------------------------------------------------------
 class_of_in_txn(Home, InstanceNref) ->
