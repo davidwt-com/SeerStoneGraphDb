@@ -127,6 +127,7 @@
 		update_node_avps/3,
 		%% Batch write (tier-3 entry point)
 		mutate/1,
+		mutate/2,
 		%% Tier-1 in-txn write primitive (composed by mutate/1)
 		update_node_avps_in_txn/4,
 		%% Transaction helper (write-path seam)
@@ -395,10 +396,21 @@ transaction(Fun) ->
 
 %%-----------------------------------------------------------------------------
 %% mutate([Mutation]) -> {ok, [Result]} | {error, Reason}
+%% mutate(Project, [Mutation]) -> {ok, [Result]} | {error, Reason}
 %%
 %% Tier-3 batch write entry point: applies an ordered list of mutations
 %% ATOMICALLY in one graphdb_mgr:transaction/1, composing the write-path
 %% seam's tier-1 primitives directly. All commit or none do.
+%%
+%% mutate/1 resolves Home = environment (its grammar and behaviour are
+%% UNCHANGED from before mutate/2 existed). mutate/2 is the Project-aware
+%% twin: it resolves Home = Project, so add_relationship / remove_relationship
+%% / update_relationship(_both) / update_node_avps / retire_node /
+%% unretire_node all touch Project's own tables. A batch may still mix
+%% environment and project references (an add_relationship whose Char/Recip
+%% are environment attribute nrefs, as always) but spans at most one project
+%% plus the environment (design doc7). mutate/2 is gated on a well-formed
+%% Project handle via with_project/2, same as the other Project-taking twins.
 %%
 %% Mutation grammar (tagged tuples mirroring the public arities):
 %%   {add_relationship, S, C, T, R}                       default template, no AVPs
@@ -432,56 +444,71 @@ transaction(Fun) ->
 %%-----------------------------------------------------------------------------
 -spec mutate([tuple()]) -> {ok, [term()]} | {error, term()}.
 mutate(Mutations) ->
-	case validate_mutations(Mutations) of
-		ok               -> run_mutations(Mutations);
+	do_mutate(environment, Mutations).
+
+-spec mutate(map(), [tuple()]) -> {ok, [term()]} | {error, term()}.
+mutate(Project, Mutations) ->
+	with_project(Project, fun(P) -> do_mutate(P, Mutations) end).
+
+do_mutate(Home, Mutations) ->
+	case validate_mutations(Home, Mutations) of
+		ok               -> run_mutations(Home, Mutations);
 		{error, _} = Err -> Err
 	end.
 
 %% Phase 1: static validation. No DB access, no allocation. A malformed term
 %% -> {error, {bad_mutation, M}}; a permanent-tier retire/unretire ->
 %% {error, permanent_node_immutable} (the same static guard set_retired/3
-%% applies in the solo path).
-validate_mutations([]) ->
+%% applies in the solo path). Home threads into tier_guard/2 only -- every
+%% other clause ignores it (pure shape check, unaffected by Home).
+validate_mutations(_Home, []) ->
 	ok;
-validate_mutations([M | Rest]) ->
-	case validate_mutation(M) of
-		ok               -> validate_mutations(Rest);
+validate_mutations(Home, [M | Rest]) ->
+	case validate_mutation(Home, M) of
+		ok               -> validate_mutations(Home, Rest);
 		{error, _} = Err -> Err
 	end.
 
-validate_mutation({add_relationship, _S, _C, _T, _R}) ->
+validate_mutation(_Home, {add_relationship, _S, _C, _T, _R}) ->
 	ok;
-validate_mutation({add_relationship, _S, _C, _T, _R, _Template}) ->
+validate_mutation(_Home, {add_relationship, _S, _C, _T, _R, _Template}) ->
 	ok;
-validate_mutation({add_relationship, _S, _C, _T, _R, _Template, {_Fwd, _Rev}}) ->
+validate_mutation(_Home,
+		{add_relationship, _S, _C, _T, _R, _Template, {_Fwd, _Rev}}) ->
 	ok;
-validate_mutation({retire_node, Nref}) when is_integer(Nref) ->
-	tier_guard(Nref);
-validate_mutation({unretire_node, Nref}) when is_integer(Nref) ->
-	tier_guard(Nref);
-validate_mutation({update_node_avps, Nref, AVPs}) when is_integer(Nref) ->
+validate_mutation(Home, {retire_node, Nref}) when is_integer(Nref) ->
+	tier_guard(Home, Nref);
+validate_mutation(Home, {unretire_node, Nref}) when is_integer(Nref) ->
+	tier_guard(Home, Nref);
+validate_mutation(Home, {update_node_avps, Nref, AVPs}) when is_integer(Nref) ->
 	case validate_avp_updates(AVPs) of
-		ok               -> tier_guard(Nref);
+		ok               -> tier_guard(Home, Nref);
 		{error, _} = Err -> Err
 	end;
-validate_mutation({remove_relationship, _S, _C, _T}) ->
+validate_mutation(_Home, {remove_relationship, _S, _C, _T}) ->
 	ok;
-validate_mutation({remove_relationship, _S, _C, _T, _Template}) ->
+validate_mutation(_Home, {remove_relationship, _S, _C, _T, _Template}) ->
 	ok;
-validate_mutation({update_relationship, _S, _C, _T, Updates}) ->
+validate_mutation(_Home, {update_relationship, _S, _C, _T, Updates}) ->
 	validate_avp_updates(Updates);
-validate_mutation({update_relationship, _S, _C, _T, _Template, Updates}) ->
+validate_mutation(_Home, {update_relationship, _S, _C, _T, _Template, Updates}) ->
 	validate_avp_updates(Updates);
-validate_mutation({update_relationship_both, _S, _C, _T, {Fwd, Rev}}) ->
+validate_mutation(_Home, {update_relationship_both, _S, _C, _T, {Fwd, Rev}}) ->
 	validate_both_avp_updates(Fwd, Rev);
-validate_mutation({update_relationship_both, _S, _C, _T, _Template,
+validate_mutation(_Home, {update_relationship_both, _S, _C, _T, _Template,
 		{Fwd, Rev}}) ->
 	validate_both_avp_updates(Fwd, Rev);
-validate_mutation(M) ->
+validate_mutation(_Home, M) ->
 	{error, {bad_mutation, M}}.
 
-tier_guard(Nref) when Nref >= ?NREF_START -> ok;
-tier_guard(_Nref)                         -> {error, permanent_node_immutable}.
+%% tier_guard(Home, Nref) -> ok | {error, permanent_node_immutable}
+%% A project's allocator has no permanent tier (design4): any Home other
+%% than environment is unconditionally ok. Only the literal environment
+%% tier is guarded against Nref < ?NREF_START, matching mutate/1's original
+%% (Home-less) behaviour exactly.
+tier_guard(Home, _Nref) when Home =/= environment -> ok;
+tier_guard(environment, Nref) when Nref >= ?NREF_START -> ok;
+tier_guard(environment, _Nref)                         -> {error, permanent_node_immutable}.
 
 validate_both_avp_updates(Fwd, Rev) ->
 	case validate_avp_updates(Fwd) of
@@ -489,82 +516,89 @@ validate_both_avp_updates(Fwd, Rev) ->
 		{error, _} = Err -> Err
 	end.
 
-%% Phases 2 + 3. Precondition: Mutations already passed validate_mutations/1.
+%% Phases 2 + 3. Precondition: Mutations already passed validate_mutations/2.
 %% Empty batch short-circuits with no transaction.
-run_mutations([]) ->
+run_mutations(_Home, []) ->
 	{ok, []};
-run_mutations(Mutations) ->
+run_mutations(Home, Mutations) ->
 	%% Phase 2 (outside the transaction): resolve the seeded attr nrefs once,
 	%% and allocate one rel-id pair per add_relationship.
 	{ok, #{target_kind := TkAttr, retired := RetAttr}} =
 		graphdb_attr:seeded_nrefs(),
-	Prepared = [prepare(M) || M <- Mutations],
+	Prepared = [prepare(Home, M) || M <- Mutations],
 	%% Phase 3: one transaction folding the prepared list in order.
 	graphdb_mgr:transaction(fun() ->
-		[dispatch(P, TkAttr, RetAttr) || P <- Prepared]
+		[dispatch(Home, P, TkAttr, RetAttr) || P <- Prepared]
 	end).
 
 %% Phase 2 per-mutation prep. Allocates one rel-id pair per add_relationship
-%% via rel_id_server (a gen_server call -- MUST stay outside the transaction)
-%% and normalises each add_relationship to the explicit
+%% (a gen_server call -- MUST stay outside the transaction), routed to
+%% rel_id_server for the environment or graphdb_project's own counter for a
+%% project, and normalises each add_relationship to the explicit
 %% (TemplateSpec, AVPSpec) form. retire/unretire need no resources.
 %% Prepared add_relationship shape:
 %%   {add_relationship, IdPair, S, C, T, R, TemplateSpec, AVPSpec}
-prepare({add_relationship, S, C, T, R}) ->
-	{add_relationship, rel_id_server:get_id_pair(), S, C, T, R,
-		default, {[], []}};
-prepare({add_relationship, S, C, T, R, Template}) ->
-	{add_relationship, rel_id_server:get_id_pair(), S, C, T, R,
-		Template, {[], []}};
-prepare({add_relationship, S, C, T, R, Template, AVPSpec}) ->
-	{add_relationship, rel_id_server:get_id_pair(), S, C, T, R,
-		Template, AVPSpec};
-prepare({retire_node, _Nref} = M) ->
+prepare(Home, {add_relationship, S, C, T, R}) ->
+	{add_relationship, alloc_rel_id_pair(Home), S, C, T, R, default, {[], []}};
+prepare(Home, {add_relationship, S, C, T, R, Template}) ->
+	{add_relationship, alloc_rel_id_pair(Home), S, C, T, R, Template, {[], []}};
+prepare(Home, {add_relationship, S, C, T, R, Template, AVPSpec}) ->
+	{add_relationship, alloc_rel_id_pair(Home), S, C, T, R, Template, AVPSpec};
+prepare(_Home, {retire_node, _Nref} = M) ->
 	M;
-prepare({unretire_node, _Nref} = M) ->
+prepare(_Home, {unretire_node, _Nref} = M) ->
 	M;
-prepare({update_node_avps, _Nref, _AVPs} = M) ->
+prepare(_Home, {update_node_avps, _Nref, _AVPs} = M) ->
 	M;
-prepare({remove_relationship, _S, _C, _T} = M) ->
+prepare(_Home, {remove_relationship, _S, _C, _T} = M) ->
 	M;
-prepare({remove_relationship, _S, _C, _T, _Template} = M) ->
+prepare(_Home, {remove_relationship, _S, _C, _T, _Template} = M) ->
 	M;
-prepare({update_relationship, _S, _C, _T, _U} = M) ->
+prepare(_Home, {update_relationship, _S, _C, _T, _U} = M) ->
 	M;
-prepare({update_relationship, _S, _C, _T, _Template, _U} = M) ->
+prepare(_Home, {update_relationship, _S, _C, _T, _Template, _U} = M) ->
 	M;
-prepare({update_relationship_both, _S, _C, _T, _Pair} = M) ->
+prepare(_Home, {update_relationship_both, _S, _C, _T, _Pair} = M) ->
 	M;
-prepare({update_relationship_both, _S, _C, _T, _Template, _Pair} = M) ->
+prepare(_Home, {update_relationship_both, _S, _C, _T, _Template, _Pair} = M) ->
 	M.
+
+%% Duplicated 2-clause Home-dispatch helper (same YAGNI precedent as
+%% is_retired/2's per-module duplication) -- graphdb_instance has its own
+%% copy inline in do_add_relationship/8.
+alloc_rel_id_pair(environment) -> rel_id_server:get_id_pair();
+alloc_rel_id_pair(Project)     -> graphdb_project:next_rel_id_pair(Project).
 
 %% Phase 3 dispatch. Runs INSIDE the transaction: no gen_server calls, no
 %% transaction/1, no rel-id allocation here (all done in phase 2). Each
 %% tier-1 primitive returns ok or calls mnesia:abort/1.
-dispatch({add_relationship, IdPair, S, C, T, R, TemplateSpec, AVPSpec},
+dispatch(Home, {add_relationship, IdPair, S, C, T, R, TemplateSpec, AVPSpec},
 		TkAttr, RetAttr) ->
-	graphdb_instance:add_relationship_in_txn(IdPair, S, C, T, R, TemplateSpec,
-		AVPSpec, TkAttr, RetAttr);
-dispatch({retire_node, Nref}, _TkAttr, RetAttr) ->
-	set_retired_(environment, Nref, true, RetAttr);
-dispatch({unretire_node, Nref}, _TkAttr, RetAttr) ->
-	set_retired_(environment, Nref, false, RetAttr);
-dispatch({update_node_avps, Nref, AVPs}, _TkAttr, RetAttr) ->
-	update_node_avps_in_txn(environment, Nref, AVPs, RetAttr);
-dispatch({remove_relationship, S, C, T}, _TkAttr, _RetAttr) ->
-	graphdb_instance:remove_relationship_in_txn(S, C, T, any);
-dispatch({remove_relationship, S, C, T, Template}, _TkAttr, _RetAttr) ->
-	graphdb_instance:remove_relationship_in_txn(S, C, T, Template);
-dispatch({update_relationship, S, C, T, U}, _TkAttr, _RetAttr) ->
-	graphdb_instance:update_relationship_avps_in_txn(S, C, T, any, U);
-dispatch({update_relationship, S, C, T, Template, U}, _TkAttr, _RetAttr) ->
-	graphdb_instance:update_relationship_avps_in_txn(S, C, T, Template, U);
-dispatch({update_relationship_both, S, C, T, {Fwd, Rev}}, _TkAttr, _RetAttr) ->
-	graphdb_instance:update_relationship_both_in_txn(S, C, T, any, Fwd, Rev);
-dispatch({update_relationship_both, S, C, T, Template, {Fwd, Rev}}, _TkAttr,
+	graphdb_instance:add_relationship_in_txn(Home, IdPair, S, C, T, R,
+		TemplateSpec, AVPSpec, TkAttr, RetAttr);
+dispatch(Home, {retire_node, Nref}, _TkAttr, RetAttr) ->
+	set_retired_(Home, Nref, true, RetAttr);
+dispatch(Home, {unretire_node, Nref}, _TkAttr, RetAttr) ->
+	set_retired_(Home, Nref, false, RetAttr);
+dispatch(Home, {update_node_avps, Nref, AVPs}, _TkAttr, RetAttr) ->
+	update_node_avps_in_txn(Home, Nref, AVPs, RetAttr);
+dispatch(Home, {remove_relationship, S, C, T}, _TkAttr, _RetAttr) ->
+	graphdb_instance:remove_relationship_in_txn(Home, S, C, T, any);
+dispatch(Home, {remove_relationship, S, C, T, Template}, _TkAttr, _RetAttr) ->
+	graphdb_instance:remove_relationship_in_txn(Home, S, C, T, Template);
+dispatch(Home, {update_relationship, S, C, T, U}, _TkAttr, _RetAttr) ->
+	graphdb_instance:update_relationship_avps_in_txn(Home, S, C, T, any, U);
+dispatch(Home, {update_relationship, S, C, T, Template, U}, _TkAttr, _RetAttr) ->
+	graphdb_instance:update_relationship_avps_in_txn(Home, S, C, T, Template,
+		U);
+dispatch(Home, {update_relationship_both, S, C, T, {Fwd, Rev}}, _TkAttr,
 		_RetAttr) ->
-	graphdb_instance:update_relationship_both_in_txn(S, C, T, Template, Fwd,
-		Rev).
+	graphdb_instance:update_relationship_both_in_txn(Home, S, C, T, any, Fwd,
+		Rev);
+dispatch(Home, {update_relationship_both, S, C, T, Template, {Fwd, Rev}},
+		_TkAttr, _RetAttr) ->
+	graphdb_instance:update_relationship_both_in_txn(Home, S, C, T, Template,
+		Fwd, Rev).
 
 
 %%-----------------------------------------------------------------------------

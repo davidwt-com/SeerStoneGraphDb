@@ -141,7 +141,10 @@
 	get_node_2_does_not_leak_into_environment_table/1,
 	retire_node_2_retires_a_project_instance/1,
 	update_node_avps_3_edits_a_project_instance/1,
-	delete_node_2_reports_not_implemented/1
+	delete_node_2_reports_not_implemented/1,
+	%% mutate/2 (SP2 T11)
+	mutate_2_batches_within_one_project/1,
+	mutate_1_still_rejects_permanent_tier/1
 ]).
 
 
@@ -252,7 +255,9 @@ groups() ->
 			get_node_2_does_not_leak_into_environment_table,
 			retire_node_2_retires_a_project_instance,
 			update_node_avps_3_edits_a_project_instance,
-			delete_node_2_reports_not_implemented
+			delete_node_2_reports_not_implemented,
+			mutate_2_batches_within_one_project,
+			mutate_1_still_rejects_permanent_tier
 		]}
 	].
 
@@ -347,7 +352,9 @@ init_per_testcase(TC, Config) when
 		TC =:= get_node_2_does_not_leak_into_environment_table;
 		TC =:= retire_node_2_retires_a_project_instance;
 		TC =:= update_node_avps_3_edits_a_project_instance;
-		TC =:= delete_node_2_reports_not_implemented ->
+		TC =:= delete_node_2_reports_not_implemented;
+		TC =:= mutate_2_batches_within_one_project;
+		TC =:= mutate_1_still_rejects_permanent_tier ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
@@ -1183,6 +1190,32 @@ mutate_permanent_tier_guard(_Config) ->
 		   (_) -> false end, AVPs)).
 
 %%-----------------------------------------------------------------------------
+%% mutate/2 (SP2 T11): a Project-aware batch runs add_relationship against
+%% Project's own tables -- the two instances and the relationship it creates
+%% are readable back through the Project-taking get_node/2 twin.
+%%-----------------------------------------------------------------------------
+mutate_2_batches_within_one_project(_Config) ->
+	Project = proj(),
+	{ok, Root, _} = graphdb_instance:create_instance(Project, "Root",
+		widget_class(), root_instance(Project)),
+	{ok, A, _} = graphdb_instance:create_instance(Project, "A", widget_class(),
+		Root),
+	{ok, B, _} = graphdb_instance:create_instance(Project, "B", widget_class(),
+		Root),
+	{Char, Recip} = connects_to_attrs(),
+	{ok, [ok]} = graphdb_mgr:mutate(Project,
+		[{add_relationship, A, Char, B, Recip}]),
+	{ok, #node{}} = graphdb_mgr:get_node(Project, A).
+
+%%-----------------------------------------------------------------------------
+%% mutate/1's behaviour is unchanged by the mutate/2 Home-threading refactor:
+%% it still refuses the permanent tier via the environment-shaped tier_guard.
+%%-----------------------------------------------------------------------------
+mutate_1_still_rejects_permanent_tier(_Config) ->
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_mgr:mutate([{retire_node, ?NREF_ROOT}])).
+
+%%-----------------------------------------------------------------------------
 %% mutate accepts the 6-element add_relationship form with an explicit
 %% template nref; the Template AVP on the written arc is that template.
 %%-----------------------------------------------------------------------------
@@ -1647,6 +1680,26 @@ ensure_colour_attribute() ->
 			AttrNref;
 		AttrNref ->
 			AttrNref
+	end.
+
+%%---------------------------------------------------------------------
+%% connects_to_attrs() -> {CharNref, RecipNref}
+%%
+%% Throwaway environment-scoped reciprocal connection-attribute pair for
+%% mutate/2's add_relationship test, memoised per test-case process.
+%% Follows the same pattern as add_relationship_delegates/1's inline
+%% create_relationship_attribute_pair call.
+%%---------------------------------------------------------------------
+connects_to_attrs() ->
+	case get(t11_connects_to_attrs) of
+		undefined ->
+			{ok, {CharNref, RecipNref}} =
+				graphdb_attr:create_relationship_attribute_pair("T11ConnectsTo",
+					"T11ConnectedBy", instance),
+			put(t11_connects_to_attrs, {CharNref, RecipNref}),
+			{CharNref, RecipNref};
+		Pair ->
+			Pair
 	end.
 
 %% find_avp(AVPs, AttrNref) -> {ok, Value} | not_found
