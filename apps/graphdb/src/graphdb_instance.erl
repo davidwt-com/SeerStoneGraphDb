@@ -204,8 +204,8 @@ start_link() ->
 %%   - instance→class membership arc pair (char=29/30)
 %%   - compositional parent→child arc pair (char=28/27)
 %%-----------------------------------------------------------------------------
-create_instance(Session, Name, ClassNref, ParentNref) ->
-	create_instance(Session, Name, ClassNref, ParentNref, fun report_only/1).
+create_instance(Project, Name, ClassNref, ParentNref) ->
+	create_instance(Project, Name, ClassNref, ParentNref, fun report_only/1).
 
 %%-----------------------------------------------------------------------------
 %% create_instance(Name, ClassNref, ParentNref, ConnResolver) ->
@@ -216,9 +216,9 @@ create_instance(Session, Name, ClassNref, ParentNref) ->
 %% outcome and nothing is connected.  /4 supplies the built-in default
 %% conflict resolver.
 %%-----------------------------------------------------------------------------
-create_instance(Session, Name, ClassNref, ParentNref, ConnResolver)
+create_instance(Project, Name, ClassNref, ParentNref, ConnResolver)
 		when is_function(ConnResolver, 1) ->
-	create_instance(Session, Name, ClassNref, ParentNref, ConnResolver,
+	create_instance(Project, Name, ClassNref, ParentNref, ConnResolver,
 					graphdb_rules:default_conflict_resolver()).
 
 %%-----------------------------------------------------------------------------
@@ -229,12 +229,12 @@ create_instance(Session, Name, ClassNref, ParentNref, ConnResolver)
 %% in the CALLER's process (where seeded_nrefs/0 is safe) and applied per
 %% cascade level for composition rules and per plan node for connection rules.
 %%-----------------------------------------------------------------------------
-create_instance(Session, Name, ClassNref, ParentNref, ConnResolver,
+create_instance(Project, Name, ClassNref, ParentNref, ConnResolver,
 		ConflictResolver)
 		when is_function(ConnResolver, 1), is_function(ConflictResolver, 1) ->
-	with_session(Session, fun() ->
+	with_project(Project, fun(P) ->
 		gen_server:call(?MODULE,
-			{create_instance, Name, ClassNref, ParentNref, ConnResolver,
+			{create_instance, P, Name, ClassNref, ParentNref, ConnResolver,
 			 ConflictResolver})
 	end).
 
@@ -256,10 +256,10 @@ report_only(_Ctx) -> defer.
 %% its default template removed; the caller must then use /5 to provide
 %% an explicit template.
 %%-----------------------------------------------------------------------------
-add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
-	with_session(Session, fun() ->
+add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+	with_project(Project, fun(P) ->
 		gen_server:call(?MODULE,
-			{add_relationship, SourceNref, CharNref, TargetNref,
+			{add_relationship, P, SourceNref, CharNref, TargetNref,
 				ReciprocalNref, default, {[], []}})
 	end).
 
@@ -276,11 +276,11 @@ add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
 %% whose parent class is in the taxonomic ancestry of the source's
 %% class or the target's class.
 %%-----------------------------------------------------------------------------
-add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
+add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref) when is_integer(TemplateNref) ->
-	with_session(Session, fun() ->
+	with_project(Project, fun(P) ->
 		gen_server:call(?MODULE,
-			{add_relationship, SourceNref, CharNref, TargetNref,
+			{add_relationship, P, SourceNref, CharNref, TargetNref,
 				ReciprocalNref, TemplateNref, {[], []}})
 	end).
 
@@ -297,12 +297,12 @@ add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
 %% The Template AVP (#{attribute => 31, value => TemplateNref}) is
 %% prepended to each direction's user-supplied AVP list.
 %%-----------------------------------------------------------------------------
-add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
+add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref, {FwdAVPs, RevAVPs} = AVPSpec)
 		when is_integer(TemplateNref), is_list(FwdAVPs), is_list(RevAVPs) ->
-	with_session(Session, fun() ->
+	with_project(Project, fun(P) ->
 		gen_server:call(?MODULE,
-			{add_relationship, SourceNref, CharNref, TargetNref,
+			{add_relationship, P, SourceNref, CharNref, TargetNref,
 				ReciprocalNref, TemplateNref, AVPSpec})
 	end).
 
@@ -371,10 +371,10 @@ class_memberships(InstanceNref) ->
 %% a class already present returns ok without writing.  Validates that
 %% the subject is an instance and the target is a class.
 %%-----------------------------------------------------------------------------
-add_class_membership(Session, InstanceNref, ClassNref) ->
-	with_session(Session, fun() ->
+add_class_membership(Project, InstanceNref, ClassNref) ->
+	with_project(Project, fun(P) ->
 		gen_server:call(?MODULE,
-			{add_class_membership, InstanceNref, ClassNref})
+			{add_class_membership, P, InstanceNref, ClassNref})
 	end).
 
 
@@ -1472,18 +1472,18 @@ remove_relationship_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec) ->
 %% narrows by an explicit template.  Plain functions owning one
 %% graphdb_mgr:transaction/1 in the caller's process (no gen_server state).
 %%-----------------------------------------------------------------------------
-remove_relationship(Session, SourceNref, CharNref, TargetNref) ->
-	with_session(Session, fun() ->
+remove_relationship(Project, SourceNref, CharNref, TargetNref) ->
+	with_project(Project, fun(P) ->
 		txn_ok(fun() ->
-			remove_relationship_in_txn(SourceNref, CharNref, TargetNref, any)
+			remove_relationship_in_txn(P, SourceNref, CharNref, TargetNref, any)
 		end)
 	end).
 
-remove_relationship(Session, SourceNref, CharNref, TargetNref, TemplateNref)
+remove_relationship(Project, SourceNref, CharNref, TargetNref, TemplateNref)
 		when is_integer(TemplateNref) ->
-	with_session(Session, fun() ->
+	with_project(Project, fun(P) ->
 		txn_ok(fun() ->
-			remove_relationship_in_txn(SourceNref, CharNref, TargetNref,
+			remove_relationship_in_txn(P, SourceNref, CharNref, TargetNref,
 				TemplateNref)
 		end)
 	end).
@@ -1495,13 +1495,12 @@ txn_ok(Fun) ->
 		{error, _} = Err -> Err
 	end.
 
-%% Gate a project operation on a valid project session (SP1).  A missing or
-%% malformed session short-circuits with {error, invalid_session}; a valid
-%% one runs Fun.  The session is required but otherwise inert against today's
-%% single store (SP2 gives it physical routing).
-with_session(Session, Fun) ->
-	case graphdb_project:require_session(Session) of
-		ok               -> Fun();
+%% Gate a project operation on a valid Project handle. A missing or
+%% malformed handle short-circuits with {error, invalid_project}; a valid
+%% one runs Fun(Project). SP2: Fun now receives Project so it can route.
+with_project(Project, Fun) when is_function(Fun, 1) ->
+	case graphdb_project:require_project(Project) of
+		ok               -> Fun(Project);
 		{error, _} = Err -> Err
 	end.
 
@@ -1548,15 +1547,15 @@ has_template_update(Updates) ->
 %% (S, C, T).  Validates the update grammar client-side (slice B), then owns
 %% one transaction.
 %%-----------------------------------------------------------------------------
-update_relationship(Session, SourceNref, CharNref, TargetNref, Updates) ->
-	with_session(Session, fun() ->
-		do_update_relationship(SourceNref, CharNref, TargetNref, any, Updates)
+update_relationship(Project, SourceNref, CharNref, TargetNref, Updates) ->
+	with_project(Project, fun(P) ->
+		do_update_relationship(P, SourceNref, CharNref, TargetNref, any, Updates)
 	end).
 
-update_relationship(Session, SourceNref, CharNref, TargetNref, TemplateNref,
+update_relationship(Project, SourceNref, CharNref, TargetNref, TemplateNref,
 		Updates) when is_integer(TemplateNref) ->
-	with_session(Session, fun() ->
-		do_update_relationship(SourceNref, CharNref, TargetNref, TemplateNref,
+	with_project(Project, fun(P) ->
+		do_update_relationship(P, SourceNref, CharNref, TargetNref, TemplateNref,
 			Updates)
 	end).
 
@@ -1619,16 +1618,16 @@ update_relationship_both_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
 %% transaction.  The two update lists are independent (forward need not mirror
 %% reverse).  Both lists are validated client-side (slice B grammar).
 %%-----------------------------------------------------------------------------
-update_relationship_both(Session, SourceNref, CharNref, TargetNref,
+update_relationship_both(Project, SourceNref, CharNref, TargetNref,
 		{Fwd, Rev}) ->
-	with_session(Session, fun() ->
-		do_update_both(SourceNref, CharNref, TargetNref, any, Fwd, Rev)
+	with_project(Project, fun(P) ->
+		do_update_both(P, SourceNref, CharNref, TargetNref, any, Fwd, Rev)
 	end).
 
-update_relationship_both(Session, SourceNref, CharNref, TargetNref, TemplateNref,
+update_relationship_both(Project, SourceNref, CharNref, TargetNref, TemplateNref,
 		{Fwd, Rev}) when is_integer(TemplateNref) ->
-	with_session(Session, fun() ->
-		do_update_both(SourceNref, CharNref, TargetNref, TemplateNref, Fwd, Rev)
+	with_project(Project, fun(P) ->
+		do_update_both(P, SourceNref, CharNref, TargetNref, TemplateNref, Fwd, Rev)
 	end).
 
 do_update_both(SourceNref, CharNref, TargetNref, TemplateSpec, Fwd, Rev) ->
