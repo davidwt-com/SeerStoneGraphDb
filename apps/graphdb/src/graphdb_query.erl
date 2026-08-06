@@ -101,6 +101,7 @@
 -export([
     parse_query/1,
     new_session/0,
+    new_session/1,
     refresh/1,
     execute_query/1,
     execute_query/2,
@@ -135,6 +136,16 @@ parse_query(Term) -> Term.
 new_session() ->
     #{snapshot_at => os:timestamp(),
       cache       => #{}}.
+
+%% new_session(Project) -> Session
+%%
+%% Same as new_session/0 but binds the session to a Project, so bare-nref
+%% reads (session_read_node/2, session_read_arcs/4) resolve Home per nref
+%% via resolve_home/2 instead of assuming the environment table.
+new_session(Project) ->
+    #{snapshot_at => os:timestamp(),
+      cache       => #{},
+      project     => Project}.
 
 refresh(Session) when is_map(Session) ->
     Session#{snapshot_at := os:timestamp(),
@@ -262,20 +273,63 @@ dispatch(_Query, Session) ->
     {{error, not_implemented}, Session}.
 
 %%---------------------------------------------------------------------
+%% resolve_home(Session, Nref) -> environment | Project
+%%
+%% Determines which store an Nref belongs to when no relationship
+%% context is available. Every session_read_node/session_read_arcs call
+%% in this module is a bare-nref, no-characterization-context read
+%% (#q_get_node{}, #q_describe{}, #q_find_path{}'s endpoints, and every
+%% arc-discovered nref during BFS/#q_instances_of{} traversal) -- the
+%% query language's records carry no target_kind/characterization
+%% alongside the nref, unlike graphdb_instance's connection-arc
+%% primitives, so this can't reuse graphdb_ns:target_namespace/2
+%% directly (it needs a TargetKind this module never has in hand).
+%%
+%% Resolution: try the session's bound Project first (if any); a
+%% genuine ambiguity (the key exists in BOTH tables) is logged, and the
+%% project's copy wins on the theory that a session opened against a
+%% project is evidence of caller intent. This is deliberately
+%% intent-following, not exhaustive-and-arbitrary: it is the one place
+%% in SP2 where "try both, pick a winner" was chosen over the
+%% home-relative determinism used everywhere else, because the query
+%% language's entry points give no characterization context to
+%% determine Home outright.
+%%---------------------------------------------------------------------
+resolve_home(#{project := Project}, Nref) when Project =/= undefined ->
+    case mnesia:dirty_read(graphdb_ns:node_table(Project), Nref) of
+        [_] ->
+            case mnesia:dirty_read(nodes, Nref) of
+                [_] ->
+                    logger:warning(
+                        "graphdb_query: nref ~p exists in both project ~p "
+                        "and the environment -- resolving to the project",
+                        [Nref, maps:get(anchor, Project)]);
+                [] ->
+                    ok
+            end,
+            Project;
+        [] ->
+            environment
+    end;
+resolve_home(_Session, _Nref) ->
+    environment.
+
+%%---------------------------------------------------------------------
 %% session_read_node(Session, Nref) -> {Node | not_found, Session1}
 %%
-%% Read-through cache: a hit returns immediately; a miss reads Mnesia
-%% and (if the node exists) populates the cache before returning. Misses
-%% that hit Mnesia and find nothing are NOT cached — caching a negative
-%% result would require threading the session on error replies, which
-%% the current /2 API does not do.
+%% Read-through cache: a hit returns immediately; a miss resolves Home
+%% via resolve_home/2, reads Mnesia, and (if the node exists) populates
+%% the cache before returning. Misses that hit Mnesia and find nothing
+%% are NOT cached — caching a negative result would require threading
+%% the session on error replies, which the current /2 API does not do.
 %%
 %% Cache key shape: {node, Nref}.
 %%---------------------------------------------------------------------
 session_read_node(#{cache := Cache} = Session, Nref) ->
     case maps:get({node, Nref}, Cache, miss) of
         miss ->
-            case mnesia:dirty_read(nodes, Nref) of
+            Home = resolve_home(Session, Nref),
+            case mnesia:dirty_read(graphdb_ns:node_table(Home), Nref) of
                 [Node] ->
                     Cache1 = Cache#{{node, Nref} => Node},
                     {Node, Session#{cache := Cache1}};
@@ -298,23 +352,24 @@ session_read_arcs(#{cache := Cache} = Session, Nref, Dir, Kinds) ->
     Key = {arcs, Nref, Dir, Kinds},
     case maps:get(Key, Cache, miss) of
         miss ->
-            Arcs = read_arcs(Nref, Dir, Kinds),
+            Home = resolve_home(Session, Nref),
+            Arcs = read_arcs(Home, Nref, Dir, Kinds),
             Cache1 = Cache#{Key => Arcs},
             {Arcs, Session#{cache := Cache1}};
         Cached ->
             {Cached, Session}
     end.
 
-read_arcs(Nref, outgoing, Kinds) ->
-    Raw = mnesia:dirty_index_read(relationships, Nref,
+read_arcs(Home, Nref, outgoing, Kinds) ->
+    Raw = mnesia:dirty_index_read(graphdb_ns:rel_table(Home), Nref,
                                   #relationship.source_nref),
     filter_kinds(Raw, Kinds);
-read_arcs(Nref, incoming, Kinds) ->
-    Raw = mnesia:dirty_index_read(relationships, Nref,
+read_arcs(Home, Nref, incoming, Kinds) ->
+    Raw = mnesia:dirty_index_read(graphdb_ns:rel_table(Home), Nref,
                                   #relationship.target_nref),
     filter_kinds(Raw, Kinds);
-read_arcs(Nref, both, Kinds) ->
-    read_arcs(Nref, outgoing, Kinds) ++ read_arcs(Nref, incoming, Kinds).
+read_arcs(Home, Nref, both, Kinds) ->
+    read_arcs(Home, Nref, outgoing, Kinds) ++ read_arcs(Home, Nref, incoming, Kinds).
 
 filter_kinds(Arcs, all) -> Arcs;
 filter_kinds(Arcs, Kinds) when is_list(Kinds) ->
@@ -419,6 +474,12 @@ describe_class(#node{nref = N, parents = Parents,
 %% via 4-priority inheritance (Task 0's resolve_value/2 returns
 %% {ok, Value, Source}), and BOTH outgoing and incoming connection
 %% arcs (per-direction characterization and AVPs differ).
+%%
+%% Home is resolved once, via resolve_home/2 against the described
+%% instance's own nref N, and threaded into the two Project-taking
+%% graphdb_instance calls (compositional_ancestors/2, resolve_value/3)
+%% below -- both operate on N's own compositional/attribute space, so
+%% they share N's Home.
 %%---------------------------------------------------------------------
 describe_instance(#node{nref = N, parents = Parents, classes = Classes,
                         attribute_value_pairs = AVPs} = Node, LangSpec,
@@ -427,7 +488,8 @@ describe_instance(#node{nref = N, parents = Parents, classes = Classes,
         [P | _] -> P;
         []      -> undefined
     end,
-    {ok, CompAncestorNodes} = graphdb_instance:compositional_ancestors(N),
+    Home = resolve_home(Session, N),
+    {ok, CompAncestorNodes} = graphdb_instance:compositional_ancestors(Home, N),
     CompAncestors = [Nd#node.nref || Nd <- CompAncestorNodes],
     %% class_ancestors is the transitive closure of "is-a" from the
     %% instance's classes, INCLUDING the direct classes themselves so
@@ -438,7 +500,7 @@ describe_instance(#node{nref = N, parents = Parents, classes = Classes,
             {ok, AncNodes} = graphdb_class:ancestors(C),
             [Nd#node.nref || Nd <- AncNodes]
         end, Classes)),
-    Resolved = resolved_attributes(Node),
+    Resolved = resolved_attributes(Node, Home),
     {OutArcs, Session1} = session_read_arcs(Session, N, outgoing,
                                             [connection]),
     {InArcs,  Session2} = session_read_arcs(Session1, N, incoming,
@@ -474,20 +536,22 @@ describe_instance(#node{nref = N, parents = Parents, classes = Classes,
     {{ok, Result}, Session3}.
 
 %%---------------------------------------------------------------------
-%% resolved_attributes(Node) -> #{AttrNref => #{value, source}}
+%% resolved_attributes(Node, Home) -> #{AttrNref => #{value, source}}
 %%
 %% Walks every class's full QC list and resolves each via
-%% graphdb_instance:resolve_value/2, which returns
-%% {ok, Value, Source} (Task 0).
+%% graphdb_instance:resolve_value/3, which returns
+%% {ok, Value, Source} (Task 0). Home is the instance's own resolved
+%% store (environment | Project), as determined by the caller via
+%% resolve_home/2.
 %%---------------------------------------------------------------------
-resolved_attributes(#node{nref = N, classes = Classes}) ->
+resolved_attributes(#node{nref = N, classes = Classes}, Home) ->
     QCAttrs = lists:usort(lists:flatmap(
         fun(C) ->
             {ok, QCs} = graphdb_class:inherited_qcs(C),
             [A || {A, _Value} <- QCs]
         end, Classes)),
     lists:foldl(fun(Q, Acc) ->
-        case graphdb_instance:resolve_value(N, Q) of
+        case graphdb_instance:resolve_value(Home, N, Q) of
             {ok, Value, Source} -> Acc#{Q => #{value  => Value,
                                                source => Source}};
             not_found            -> Acc
