@@ -17,3 +17,4 @@ rebar3
 CLAUDE.local.md
 resume
 ttb_last_config
+.worktrees/
