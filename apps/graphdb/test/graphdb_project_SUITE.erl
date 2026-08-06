@@ -71,6 +71,7 @@
 	open_returns_project_handle/1,
 	open_rejects_non_project/1,
 	open_rejects_project_without_store/1,
+	open_rejects_project_with_partial_tables/1,
 	require_project_accepts_valid_handle/1,
 	require_project_rejects_malformed_term/1,
 	next_nref_starts_at_one/1,
@@ -94,6 +95,7 @@ all() ->
 	 open_returns_project_handle,
 	 open_rejects_non_project,
 	 open_rejects_project_without_store,
+	 open_rejects_project_with_partial_tables,
 	 require_project_accepts_valid_handle,
 	 require_project_rejects_malformed_term,
 	 next_nref_starts_at_one,
@@ -269,6 +271,42 @@ open_rejects_project_without_store(_Config) ->
 			              reciprocal = ?ARC_CAT_CHILD, avps = []}, write)
 	end,
 	{ok, ok} = graphdb_mgr:transaction(F),
+	?assert(graphdb_project:is_project(Nref)),
+	?assertEqual({error, no_store}, graphdb_project:open(Nref)).
+
+%%-----------------------------------------------------------------------------
+%% open/1 reports {error, no_store} when only a subset of the three tables
+%% exist -- e.g. ensure_tables/1 failed partway through, leaving nodes_<A>
+%% created but relationships_<A>/counters_<A> absent. tables_exist/1 must
+%% check all three, not just the nodes table.
+%%-----------------------------------------------------------------------------
+open_rejects_project_with_partial_tables(_Config) ->
+	Nref = graphdb_nref:get_next(),
+	{Id1, Id2} = rel_id_server:get_id_pair(),
+	Node = #node{nref = Nref, kind = instance, parents = [?NREF_PROJECTS],
+	             attribute_value_pairs = []},
+	F = fun() ->
+		ok = mnesia:write(nodes, Node, write),
+		ok = mnesia:write(relationships,
+			#relationship{id = Id1, kind = composition,
+			              source_nref = ?NREF_PROJECTS,
+			              characterization = ?ARC_CAT_CHILD,
+			              target_nref = Nref, reciprocal = ?ARC_CAT_PARENT,
+			              avps = []}, write),
+		ok = mnesia:write(relationships,
+			#relationship{id = Id2, kind = composition,
+			              source_nref = Nref,
+			              characterization = ?ARC_CAT_PARENT,
+			              target_nref = ?NREF_PROJECTS,
+			              reciprocal = ?ARC_CAT_CHILD, avps = []}, write)
+	end,
+	{ok, ok} = graphdb_mgr:transaction(F),
+	NodesTable = list_to_atom("nodes_" ++ integer_to_list(Nref)),
+	{atomic, ok} = mnesia:create_table(NodesTable, [
+		{record_name, node},
+		{attributes, record_info(fields, node)},
+		{disc_copies, [node()]}
+	]),
 	?assert(graphdb_project:is_project(Nref)),
 	?assertEqual({error, no_store}, graphdb_project:open(Nref)).
 

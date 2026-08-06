@@ -226,7 +226,9 @@ open(ProjectNref) ->
 	end.
 
 tables_exist(Anchor) ->
-	lists:member(nodes_table(Anchor), mnesia:system_info(tables)).
+	Tables = mnesia:system_info(tables),
+	lists:all(fun(T) -> lists:member(T, Tables) end,
+		[nodes_table(Anchor), rels_table(Anchor), counters_table(Anchor)]).
 
 
 %%---------------------------------------------------------------------
