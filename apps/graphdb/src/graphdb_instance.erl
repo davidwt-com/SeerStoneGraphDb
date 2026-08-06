@@ -477,12 +477,13 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Creators
 %%-----------------------------------------------------------------------------
-handle_call({create_instance, Name, ClassNref, ParentNref, Resolver,
+handle_call({create_instance, Project, Name, ClassNref, ParentNref, Resolver,
 			 ConflictResolver}, _From,
 		#state{instantiable_nref = InstAttr, retired_nref = RetAttr} = State) ->
 	Ctx = #{inst_attr => InstAttr, ret_attr => RetAttr, on_path => [],
 			resolver => Resolver, conflict_resolver => ConflictResolver,
-			root_parent => ParentNref, root_source => undefined},
+			project => Project, root_parent => ParentNref,
+			root_source => undefined},
 	{reply, do_create_instance(Name, ClassNref, ParentNref, Ctx), State};
 
 handle_call({add_relationship, S, C, T, R, TemplateSpec, AVPSpec},
@@ -655,9 +656,10 @@ class_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 do_create_instance(Name, ClassNref, ParentNref, Ctx) ->
 	InstAttr = maps:get(inst_attr, Ctx),
 	RetAttr  = maps:get(ret_attr, Ctx),
+	Project  = maps:get(project, Ctx),
 	case do_validate_class(ClassNref, InstAttr, RetAttr) of
 		ok ->
-			case do_validate_parent(ParentNref, RetAttr) of
+			case do_validate_parent(Project, ParentNref, RetAttr) of
 				ok ->
 					fire_create(Name, ClassNref, ParentNref, Ctx);
 				{error, _} = Err ->
@@ -724,9 +726,10 @@ bind_root_source(Ctx, RootNref) ->
 %% (the post-commit auto-connection write list — empty in this task).
 %%-----------------------------------------------------------------------------
 execute(RootName, _RootClass, RootParent, Ctx, PlanTree) ->
+	Project = maps:get(project, Ctx),
 	%% Annotate the plan tree with allocated nrefs (root uses caller's Name).
-	InstPlan = allocate_plan(PlanTree#{name => RootName}),
-	{Writes, CompOutcomes} = plan_writes(InstPlan, RootParent),
+	InstPlan = allocate_plan(PlanTree#{name => RootName}, Project),
+	{Writes, CompOutcomes} = plan_writes(InstPlan, RootParent, Project),
 	RootNref = maps:get(nref, InstPlan),
 	Ctx1 = bind_root_source(Ctx, RootNref),
 	case resolve_connections(InstPlan, Ctx1) of
@@ -1037,47 +1040,49 @@ fire_auto_connection(#{rule := Rule, deploy := Deploy, spec := Spec,
 	Acc1.
 
 %%-----------------------------------------------------------------------------
-%% allocate_plan(PlanNode) -> InstPlanNode (same tree + nref per node)
+%% allocate_plan(PlanNode, Project) -> InstPlanNode (same tree + nref per node)
 %%
-%% Depth-first pre-order walk: allocates one nref per node OUTSIDE the
-%% Mnesia transaction.
+%% Depth-first pre-order walk: allocates one nref per node from Project's
+%% own counter, OUTSIDE the Mnesia transaction.
 %%-----------------------------------------------------------------------------
-allocate_plan(#{mandatory_children := Kids} = Node) ->
-	Nref = graphdb_nref:get_next(),
+allocate_plan(#{mandatory_children := Kids} = Node, Project) ->
+	Nref = graphdb_project:next_nref(Project),
 	Node#{nref => Nref,
-		  mandatory_children => [allocate_plan(K) || K <- Kids]}.
+		  mandatory_children => [allocate_plan(K, Project) || K <- Kids]}.
 
 %%-----------------------------------------------------------------------------
-%% plan_writes(InstPlan, RootParent) -> {Writes, Outcomes}
+%% plan_writes(InstPlan, RootParent, Project) -> {Writes, Outcomes}
 %%
 %% Pre-order DFS over the instantiated plan tree.  The root emits only its
 %% own five records.  Each mandated descendant emits its records plus one
 %% `fired` outcome under its rule, indexed 1..N within that rule.
 %%-----------------------------------------------------------------------------
 plan_writes(#{nref := RootNref, class := Class, name := Name,
-			  mandatory_children := Kids}, RootParent) ->
-	Acc0 = {instance_records(RootNref, Class, Name, RootParent), []},
-	write_children(Kids, RootNref, Acc0).
+			  mandatory_children := Kids}, RootParent, Project) ->
+	Acc0 = {instance_records(RootNref, Class, Name, RootParent, Project), []},
+	write_children(Kids, RootNref, Acc0, Project).
 
 %%-----------------------------------------------------------------------------
-%% write_children(Siblings, OwnerNref, {Writes, Outcomes}) -> {Writes, Outcomes}
+%% write_children(Siblings, OwnerNref, {Writes, Outcomes}, Project) ->
+%%     {Writes, Outcomes}
 %%
 %% Numbers siblings within their mandating rule (1-based), emits each
 %% child's records + fired outcome (with real `deploy` map), then recurses
 %% into the child's own mandatory children.
 %%-----------------------------------------------------------------------------
-write_children(Siblings, OwnerNref, Acc) ->
+write_children(Siblings, OwnerNref, Acc, Project) ->
 	{_Counts, Result} =
 		lists:foldl(
 			fun(#{nref := CNref, class := CClass, name := CName,
 				  rule := Rule, deploy := Deploy,
 				  mandatory_children := GKids}, {Counts, {W, O}}) ->
 				Idx = maps:get(rule_key(Rule), Counts, 0) + 1,
-				W1 = W ++ instance_records(CNref, CClass, CName, OwnerNref),
+				W1 = W ++ instance_records(CNref, CClass, CName, OwnerNref,
+					Project),
 				O1 = add_outcome(O, Rule, Deploy,
 						#{owner => OwnerNref, index => Idx,
 						  status => fired, child => CNref}),
-				{W2, O2} = write_children(GKids, CNref, {W1, O1}),
+				{W2, O2} = write_children(GKids, CNref, {W1, O1}, Project),
 				{Counts#{rule_key(Rule) => Idx}, {W2, O2}}
 			end, {#{}, Acc}, Siblings),
 	Result.
@@ -1085,16 +1090,42 @@ write_children(Siblings, OwnerNref, Acc) ->
 rule_key(#node{nref = N}) -> N.
 
 %%-----------------------------------------------------------------------------
-%% instance_records(Nref, ClassNref, Name, ParentNref) -> [{Tab, Rec}]
+%% instance_records(Nref, ClassNref, Name, ParentNref, Project) -> [{Tab, Rec}]
 %%
-%% Builds the five Mnesia records for one instance node.  Rel-IDs are
-%% allocated here (outside the transaction by the allocate_plan caller
-%% chain; this function is called from plan_writes/write_children which
-%% are invoked in execute/5 before the transaction).
+%% Builds the five Mnesia records for one instance node. Rel-IDs come from
+%% Project's own counter (allocated here, outside the transaction, same as
+%% before -- only the source changed from rel_id_server to
+%% graphdb_project:next_rel_id_pair/1). Node record and both composition rows
+%% tag their table via graphdb_ns:node_table/rel_table; the instantiation
+%% pair's class-side row (C2I) still writes to Project's own relationships
+%% table -- the row lives wherever its SOURCE lives (source_nref = ClassNref
+%% would suggest environment, but per the design's arc-shape table the
+%% class->instance membership row's source_nref routes environment while its
+%% home store is still recorded with the instance -- see Task 5's
+%% add_relationship_in_txn for the general rule; membership rows are written
+%% here directly rather than through that general primitive, and both rows
+%% of this specific arc pair are written to the SAME table as the instance
+%% they describe, matching how SP1/pre-SP2 always wrote them together).
+%%
+%% Design note: the class->instance membership row (C2I, whose source_nref is
+%% the environment ClassNref) is written to the PROJECT's relationships
+%% table, not split across two stores. This is a deliberate, narrow
+%% exception to "route by source's home": SP2 keeps both directions of one
+%% arc-write co-located with the instance they describe so a project remains
+%% a genuinely single relocatable unit (design §2's stated goal) -- a
+%% project's full membership history lives with it. Reads of this row still
+%% resolve correctly under the home-relative rule because a reader who
+%% already knows the row is a char=30 reciprocal reaches it via target_nref
+%% from the project side, never by scanning the environment's relationships
+%% table by source_nref=ClassNref for this purpose. add_relationship_in_txn
+%% (Task 5) does NOT follow this exception -- it is the general
+%% connection-arc primitive and routes each row by its own endpoints.
 %%-----------------------------------------------------------------------------
-instance_records(Nref, ClassNref, Name, ParentNref) ->
-	{MembId1, MembId2} = rel_id_server:get_id_pair(),
-	{CompId1, CompId2} = rel_id_server:get_id_pair(),
+instance_records(Nref, ClassNref, Name, ParentNref, Project) ->
+	{MembId1, MembId2} = graphdb_project:next_rel_id_pair(Project),
+	{CompId1, CompId2} = graphdb_project:next_rel_id_pair(Project),
+	NodesTab = graphdb_ns:node_table(Project),
+	RelsTab  = graphdb_ns:rel_table(Project),
 	NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
 	Node = #node{nref = Nref, kind = instance, parents = [ParentNref],
 				 classes = [ClassNref], attribute_value_pairs = [NameAVP]},
@@ -1114,8 +1145,8 @@ instance_records(Nref, ClassNref, Name, ParentNref) ->
 	C2P = #relationship{id = CompId2, kind = composition, source_nref = Nref,
 		characterization = ?ARC_INST_PARENT, target_nref = ParentNref,
 		reciprocal = ?ARC_INST_CHILD, avps = []},
-	[{nodes, Node}, {relationships, I2C}, {relationships, C2I},
-	 {relationships, P2C}, {relationships, C2P}].
+	[{NodesTab, Node}, {RelsTab, I2C}, {RelsTab, C2I},
+	 {RelsTab, P2C}, {RelsTab, C2P}].
 
 %%-----------------------------------------------------------------------------
 %% fire_auto(InstPlan, Ctx) -> report()
@@ -1318,13 +1349,15 @@ is_retired(AVPs, RetAttr) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_validate_parent(ParentNref, RetAttr) -> ok | {error, term()}
+%% do_validate_parent(Project, ParentNref, RetAttr) -> ok | {error, term()}
 %%
 %% Validates that ParentNref references an existing node and is not
-%% retired (retired => true AVP under RetAttr).
+%% retired (retired => true AVP under RetAttr).  The compositional parent is
+%% always another instance in the same project (design §6, "node.parents ...
+%% home-relative"), so this reads Project's own nodes table.
 %%-----------------------------------------------------------------------------
-do_validate_parent(ParentNref, RetAttr) ->
-	case mnesia:dirty_read(nodes, ParentNref) of
+do_validate_parent(Project, ParentNref, RetAttr) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), ParentNref) of
 		[#node{attribute_value_pairs = AVPs}] ->
 			case is_retired(AVPs, RetAttr) of
 				true  -> {error, {parent_retired, ParentNref}};
