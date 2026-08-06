@@ -130,7 +130,7 @@
 		add_relationship/7,
 		add_class_membership/3,
 		%% Tier-1 in-transaction primitive (write-path seam)
-		add_relationship_in_txn/9,
+		add_relationship_in_txn/10,
 		remove_relationship/4,
 		remove_relationship/5,
 		remove_relationship_in_txn/4,
@@ -486,10 +486,10 @@ handle_call({create_instance, Project, Name, ClassNref, ParentNref, Resolver,
 			root_source => undefined},
 	{reply, do_create_instance(Name, ClassNref, ParentNref, Ctx), State};
 
-handle_call({add_relationship, S, C, T, R, TemplateSpec, AVPSpec},
+handle_call({add_relationship, Home, S, C, T, R, TemplateSpec, AVPSpec},
 		_From, State) ->
 	{reply,
-		do_add_relationship(S, C, T, R, TemplateSpec, AVPSpec, State),
+		do_add_relationship(Home, S, C, T, R, TemplateSpec, AVPSpec, State),
 		State};
 
 handle_call({add_class_membership, InstanceNref, ClassNref}, _From,
@@ -1368,29 +1368,33 @@ do_validate_parent(Project, ParentNref, RetAttr) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+%% do_add_relationship(Home, SourceNref, CharNref, TargetNref, ReciprocalNref,
 %%                     TemplateSpec, AVPSpec, State) -> ok | {error, term()}
 %%
 %% Validates endpoints, resolves class membership and template scope, then
 %% writes the two directed connection rows -- all in one graphdb_mgr:transaction/1
 %% (TOCTOU-isolated).  The rel-id pair is allocated up-front, outside the
-%% transaction: get_id_pair is a gen_server call and must never run inside an
-%% mnesia fun.  A validation abort orphans that pair -- harmless (allocate-
-%% outside-transaction doctrine).  Phase order: validate endpoints ->
-%% resolve classes -> resolve template -> validate scope -> write.
+%% transaction: get_id_pair/next_rel_id_pair is a gen_server call and must
+%% never run inside an mnesia fun.  A validation abort orphans that pair --
+%% harmless (allocate-outside-transaction doctrine).  Phase order: validate
+%% endpoints -> resolve classes -> resolve template -> validate scope -> write.
 %%-----------------------------------------------------------------------------
-do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+do_add_relationship(Home, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateSpec, AVPSpec, State) ->
 	TkAttr  = State#state.target_kind_avp_nref,
 	RetAttr = State#state.retired_nref,
-	%% Allocate the rel-id pair up-front, OUTSIDE the transaction: get_id_pair
-	%% is a gen_server call and must never run inside an mnesia fun.  A
-	%% validation abort inside the primitive orphans this pair -- harmless
-	%% (allocate-outside-transaction doctrine).
-	IdPair = rel_id_server:get_id_pair(),
+	%% Allocate the rel-id pair up-front, OUTSIDE the transaction:
+	%% get_id_pair/next_rel_id_pair is a gen_server call and must never run
+	%% inside an mnesia fun.  A validation abort inside the primitive orphans
+	%% this pair -- harmless (allocate-outside-transaction doctrine).
+	IdPair = case Home of
+		environment -> rel_id_server:get_id_pair();
+		_           -> graphdb_project:next_rel_id_pair(Home)
+	end,
 	case graphdb_mgr:transaction(fun() ->
-			add_relationship_in_txn(IdPair, SourceNref, CharNref, TargetNref,
-				ReciprocalNref, TemplateSpec, AVPSpec, TkAttr, RetAttr)
+			add_relationship_in_txn(Home, IdPair, SourceNref, CharNref,
+				TargetNref, ReciprocalNref, TemplateSpec, AVPSpec, TkAttr,
+				RetAttr)
 		end) of
 		{ok, ok}         -> ok;
 		{error, _} = Err -> Err
@@ -1398,30 +1402,33 @@ do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 
 
 %%-----------------------------------------------------------------------------
-%% add_relationship_in_txn(IdPair, Source, Char, Target, Reciprocal,
+%% add_relationship_in_txn(Home, IdPair, Source, Char, Target, Reciprocal,
 %%     TemplateSpec, AVPSpec, TkAttr, RetAttr) -> ok
 %%
 %% Tier-1 write-path primitive.  Must run inside an active mnesia transaction;
 %% never opens its own.  Validates endpoints, resolves source/target class and
 %% template scope, then writes the two directed connection rows -- all with
 %% bare mnesia ops, signalling any domain failure via mnesia:abort/1.  The
-%% rel-id pair must be allocated by the caller (get_id_pair is a gen_server
-%% call and must never run inside an mnesia fun).  Composes into a caller's
-%% single transaction (the write-path seam's tier-1 contract); used by both
-%% do_add_relationship/7 (tier-2) and graphdb_mgr:mutate/1 (tier-3).
-%% Phase order: validate endpoints -> resolve classes -> resolve template ->
-%% validate scope -> write.
+%% rel-id pair must be allocated by the caller (get_id_pair/next_rel_id_pair
+%% is a gen_server call and must never run inside an mnesia fun).  Composes
+%% into a caller's single transaction (the write-path seam's tier-1
+%% contract); used by both do_add_relationship/8 (tier-2) and
+%% graphdb_mgr:mutate/1,2 (tier-3).  Home routes SourceNref/TargetNref
+%% (via graphdb_ns:node_table/1, rel_table/1); CharNref/ReciprocalNref always
+%% read from the literal environment (they are always environment attribute
+%% nrefs).  Phase order: validate endpoints -> resolve classes -> resolve
+%% template -> validate scope -> write.
 %%-----------------------------------------------------------------------------
-add_relationship_in_txn({_Id1, _Id2} = IdPair, SourceNref, CharNref,
+add_relationship_in_txn(Home, {_Id1, _Id2} = IdPair, SourceNref, CharNref,
 		TargetNref, ReciprocalNref, TemplateSpec, AVPSpec, TkAttr, RetAttr) ->
-	ok = validate_arc_endpoints_in_txn(SourceNref, CharNref, TargetNref,
+	ok = validate_arc_endpoints_in_txn(Home, SourceNref, CharNref, TargetNref,
 		ReciprocalNref, TkAttr, RetAttr),
 	{SourceClass, TargetClass} =
-		resolve_arc_classes_in_txn(SourceNref, TargetNref),
+		resolve_arc_classes_in_txn(Home, SourceNref, TargetNref),
 	TemplateNref = resolve_template_in_txn(TemplateSpec, SourceClass),
 	ok = graphdb_class:validate_template_scope_in_txn(TemplateNref,
 		SourceClass, TargetClass),
-	Rows = build_connection_rows(IdPair, SourceNref, CharNref, TargetNref,
+	Rows = build_connection_rows(Home, IdPair, SourceNref, CharNref, TargetNref,
 		ReciprocalNref, TemplateNref, AVPSpec),
 	lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
 		Rows).
@@ -1677,17 +1684,20 @@ do_update_both(SourceNref, CharNref, TargetNref, TemplateSpec, Fwd, Rev) ->
 
 
 %%-----------------------------------------------------------------------------
-%% validate_arc_endpoints_in_txn(Source, Char, Target, Reciprocal, TkAttr,
-%%     RetAttr) -> ok    (aborts the enclosing transaction on any violation)
+%% validate_arc_endpoints_in_txn(Home, Source, Char, Target, Reciprocal,
+%%     TkAttr, RetAttr) -> ok  (aborts the enclosing transaction on violation)
 %%
 %% In-transaction endpoint validation.  Assumes it runs inside an active mnesia
 %% activity; reads the four nodes with bare mnesia:read and signals every
 %% violation via mnesia:abort/1 (same Reason terms as the prior own-txn form).
+%% Source/Target route through Home; Char/Recip always read from the literal
+%% environment `nodes` table (characterization/reciprocal are always
+%% environment attribute nrefs).
 %%-----------------------------------------------------------------------------
-validate_arc_endpoints_in_txn(SourceNref, CharNref, TargetNref, ReciprocalNref,
-		TkAttr, RetAttr) ->
-	Source = mnesia:read(nodes, SourceNref),
-	Target = mnesia:read(nodes, TargetNref),
+validate_arc_endpoints_in_txn(Home, SourceNref, CharNref, TargetNref,
+		ReciprocalNref, TkAttr, RetAttr) ->
+	Source = mnesia:read(graphdb_ns:node_table(Home), SourceNref),
+	Target = mnesia:read(graphdb_ns:node_table(Home), TargetNref),
 	Char   = mnesia:read(nodes, CharNref),
 	Recip  = mnesia:read(nodes, ReciprocalNref),
 	case {Source, Target, Char, Recip} of
@@ -1749,19 +1759,19 @@ check_target_kind(#node{attribute_value_pairs = AVPs}, ActualKind, TkAttr) ->
 
 
 %%-----------------------------------------------------------------------------
-%% resolve_arc_classes_in_txn(SourceNref, TargetNref) ->
+%% resolve_arc_classes_in_txn(Home, SourceNref, TargetNref) ->
 %%     {SourceClass, TargetClass}    (aborts on a missing class)
 %%
 %% In-transaction class resolution.  class_of_in_txn returns only {ok,_} |
 %% not_found inside a txn (a read error aborts the txn directly), so the
 %% no-class arms abort with the same Reason terms the prior form returned.
 %%-----------------------------------------------------------------------------
-resolve_arc_classes_in_txn(SourceNref, TargetNref) ->
-	SourceClass = case class_of_in_txn(SourceNref) of
+resolve_arc_classes_in_txn(Home, SourceNref, TargetNref) ->
+	SourceClass = case class_of_in_txn(Home, SourceNref) of
 		{ok, SC}  -> SC;
 		not_found -> mnesia:abort({source_has_no_class, SourceNref})
 	end,
-	TargetClass = case class_of_in_txn(TargetNref) of
+	TargetClass = case class_of_in_txn(Home, TargetNref) of
 		{ok, TC}  -> TC;
 		not_found -> mnesia:abort({target_has_no_class, TargetNref})
 	end,
@@ -1783,28 +1793,37 @@ resolve_template_in_txn(TemplateNref, _SourceClass)
 
 
 %%-----------------------------------------------------------------------------
-%% build_connection_rows(S, C, T, R, TemplateNref, {FwdAVPs, RevAVPs})
-%%   -> [{relationships, #relationship{}}]
+%% build_connection_rows(Home, S, C, T, R, TemplateNref, {FwdAVPs, RevAVPs})
+%%   -> [{RelsTable, #relationship{}}]
 %%
 %% Builds the two directed connection rows (Template AVP at index 0).  Rel-ids
 %% are allocated here, OUTSIDE any transaction.  No write -- the caller
 %% decides which transaction the rows land in (mandatory connections ride the
 %% composition root txn; auto connections are written post-commit).
 %%-----------------------------------------------------------------------------
-build_connection_rows(SourceNref, CharNref, TargetNref, ReciprocalNref,
+build_connection_rows(Home, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref, AVPSpec) ->
-	IdPair = rel_id_server:get_id_pair(),
-	build_connection_rows(IdPair, SourceNref, CharNref, TargetNref,
+	IdPair = case Home of
+		environment -> rel_id_server:get_id_pair();
+		_           -> graphdb_project:next_rel_id_pair(Home)
+	end,
+	build_connection_rows(Home, IdPair, SourceNref, CharNref, TargetNref,
 		ReciprocalNref, TemplateNref, AVPSpec).
 
-%% build_connection_rows({Id1, Id2}, S, C, T, R, TemplateNref, {FwdAVPs,RevAVPs})
-%%   -> [{relationships, #relationship{}}]
+%% build_connection_rows(Home, {Id1, Id2}, S, C, T, R, TemplateNref,
+%%     {FwdAVPs, RevAVPs}) -> [{RelsTable, #relationship{}}]
 %%
 %% Pure builder: no allocation.  The caller supplies the rel-id pair (allocated
 %% up-front, outside any transaction) so the rows can be built inside a caller's
-%% transaction.  Template AVP rides index 0 of each direction.
-build_connection_rows({Id1, Id2}, SourceNref, CharNref, TargetNref,
+%% transaction.  Template AVP rides index 0 of each direction.  Both rows land
+%% in the SAME RelsTab: Source/Target are always both-project or
+%% both-environment for a connection arc between two instances of the same
+%% Home (connection rules never cross project boundaries per SP1's
+%% proxy-indirection contract, and this module never builds a connection row
+%% between an instance and an environment node).
+build_connection_rows(Home, {Id1, Id2}, SourceNref, CharNref, TargetNref,
 		ReciprocalNref, TemplateNref, {FwdAVPs, RevAVPs}) ->
+	RelsTab = graphdb_ns:rel_table(Home),
 	TemplateAVP = #{attribute => ?ARC_TEMPLATE, value => TemplateNref},
 	Fwd = #relationship{
 		id = Id1, kind = connection,
@@ -1822,17 +1841,16 @@ build_connection_rows({Id1, Id2}, SourceNref, CharNref, TargetNref,
 		reciprocal = CharNref,
 		avps = [TemplateAVP | RevAVPs]
 	},
-	[{relationships, Fwd}, {relationships, Rev}].
+	[{RelsTab, Fwd}, {RelsTab, Rev}].
 
-%% write_connection_arcs(S, C, T, R, TemplateNref, {FwdAVPs, RevAVPs}) ->
+%% write_connection_arcs(Home, S, C, T, R, TemplateNref, {FwdAVPs, RevAVPs}) ->
 %%     ok | {error, term()}
 %%
 %% Builds the two connection rows and writes them in their OWN transaction.
-%% Used by add_relationship/4,5,6 and by the post-commit auto-connection pass.
 %%-----------------------------------------------------------------------------
-write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
+write_connection_arcs(Home, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref, AVPSpec) ->
-	Rows = build_connection_rows(SourceNref, CharNref, TargetNref,
+	Rows = build_connection_rows(Home, SourceNref, CharNref, TargetNref,
 								 ReciprocalNref, TemplateNref, AVPSpec),
 	Txn = fun() ->
 		lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
@@ -1940,14 +1958,15 @@ do_class_of(InstanceNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% class_of_in_txn(InstanceNref) -> {ok, ClassNref} | not_found
+%% class_of_in_txn(Home, InstanceNref) -> {ok, ClassNref} | not_found
 %%
 %% Tier-1 in-transaction twin of do_class_of/1.  Assumes it runs inside an
-%% active mnesia activity; uses a bare index_read.  do_class_of/1 keeps its
-%% own transaction for its public class_of caller.
+%% active mnesia activity; uses a bare index_read against Home's relationship
+%% table.  do_class_of/1 keeps its own transaction for its public class_of
+%% caller.
 %%-----------------------------------------------------------------------------
-class_of_in_txn(InstanceNref) ->
-	Rels = mnesia:index_read(relationships, InstanceNref,
+class_of_in_txn(Home, InstanceNref) ->
+	Rels = mnesia:index_read(graphdb_ns:rel_table(Home), InstanceNref,
 		#relationship.source_nref),
 	case lists:search(
 			fun(R) ->
