@@ -838,8 +838,9 @@ resolve_rules([{Rule, Deploy, Spec} | Rest], SourceNref, Ctx, Acc) ->
 %%-----------------------------------------------------------------------------
 connect_targets(mandatory, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
 		{Rows, Auto, Rep}) ->
+	Project = maps:get(project, Ctx),
 	TClass = maps:get(target_class, Spec),
-	case partition_targets(List, TClass, SourceNref) of
+	case partition_targets(List, TClass, SourceNref, Project) of
 		{error, Reason} ->
 			%% an invalid target on a committed mandatory rule aborts the create
 			{error, {invalid_connection_target, Reason},
@@ -854,7 +855,8 @@ connect_targets(mandatory, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
 					ToWrite = cap(Valid, Max),
 					Template = maps:get(template, Deploy),
 					{NewRows, NewOuts} =
-						mandatory_rows(ToWrite, SourceNref, Spec, Template),
+						mandatory_rows(ToWrite, SourceNref, Spec, Template,
+							Project),
 					Rep1 = lists:foldl(
 						fun(O, R) -> add_outcome(R, Rule, Deploy, O) end,
 						Rep, NewOuts),
@@ -865,8 +867,9 @@ connect_targets(mandatory, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
 
 connect_targets(auto, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
 		{Rows, Auto, Rep}) ->
+	Project = maps:get(project, Ctx),
 	TClass = maps:get(target_class, Spec),
-	{Valid, Invalid} = split_valid(List, TClass, SourceNref),
+	{Valid, Invalid} = split_valid(List, TClass, SourceNref, Project),
 	%% auto does NOT enforce the floor -- Min is ignored; only Max caps.
 	{_Min, Max} = maps:get(multiplicity, Deploy, {1, 1}),
 	ToConnect = cap(Valid, Max),
@@ -882,30 +885,31 @@ connect_targets(auto, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
 	%% valid targets are queued for the post-commit writer
 	AutoEntry = #{rule => Rule, deploy => Deploy, spec => Spec,
 				  source => SourceNref, template => maps:get(template, Deploy),
-				  targets => ToConnect},
+				  targets => ToConnect, project => Project},
 	resolve_rules(Rest, SourceNref, Ctx, {Rows, Auto ++ [AutoEntry], Rep1}).
 
-%% split_valid(List, TClass, SourceNref) ->
+%% split_valid(List, TClass, SourceNref, Project) ->
 %%     {Valid :: [Target], Invalid :: [{Target, Reason}]}
 %% For AUTO: partition rather than abort -- invalids are reported, valids written.
-split_valid(List, TClass, SourceNref) ->
+split_valid(List, TClass, SourceNref, Project) ->
 	lists:foldr(
 		fun(T, {Vs, Is}) ->
-			case validate_target(T, TClass, SourceNref) of
+			case validate_target(T, TClass, SourceNref, Project) of
 				ok              -> {[T | Vs], Is};
 				{error, Reason} -> {Vs, [{T, Reason} | Is]}
 			end
 		end, {[], []}, List).
 
-%% partition_targets(List, TargetClass, SourceNref) -> {ok, [Target]} | {error, R}
+%% partition_targets(List, TargetClass, SourceNref, Project) ->
+%%     {ok, [Target]} | {error, R}
 %% For a MANDATORY rule: the first invalid target aborts with its reason; an
 %% all-valid list returns the (order-preserved) valid targets.
-partition_targets([], _TClass, _SourceNref) ->
+partition_targets([], _TClass, _SourceNref, _Project) ->
 	{ok, []};
-partition_targets([T | Rest], TClass, SourceNref) ->
-	case validate_target(T, TClass, SourceNref) of
+partition_targets([T | Rest], TClass, SourceNref, Project) ->
+	case validate_target(T, TClass, SourceNref, Project) of
 		ok ->
-			case partition_targets(Rest, TClass, SourceNref) of
+			case partition_targets(Rest, TClass, SourceNref, Project) of
 				{ok, Vs}         -> {ok, [T | Vs]};
 				{error, _} = Err -> Err
 			end;
@@ -917,18 +921,18 @@ partition_targets([T | Rest], TClass, SourceNref) ->
 cap(List, unbounded) -> List;
 cap(List, Max)       -> lists:sublist(List, Max).
 
-%% mandatory_rows(Targets, SourceNref, Spec, Template) -> {Rows, Outcomes}
+%% mandatory_rows(Targets, SourceNref, Spec, Template, Project) -> {Rows, Outcomes}
 %% Builds the connection rows for each target plus a (tentative) `connected`
 %% outcome indexed 1..N.  Outcomes are returned to the report only on commit.
-mandatory_rows(Targets, SourceNref, Spec, Template) ->
+mandatory_rows(Targets, SourceNref, Spec, Template, Project) ->
 	Char   = maps:get(characterization, Spec),
 	Recip  = maps:get(reciprocal, Spec),
 	TClass = maps:get(target_class, Spec),
 	{Rows, Outs, _} = lists:foldl(
 		fun(T, {RAcc, OAcc, I}) ->
 			TNref = target_nref(T),
-			Rows0 = build_connection_rows(SourceNref, Char, TNref, Recip,
-										  Template, target_avps(T)),
+			Rows0 = build_connection_rows(Project, SourceNref, Char, TNref,
+										  Recip, Template, target_avps(T)),
 			Out = #{source => SourceNref, index => I, status => connected,
 					target => TNref, characterization => Char,
 					target_class => TClass},
@@ -950,16 +954,16 @@ conn_fail(Reason, CulpritRule, Spec, RepAcc) ->
 		  target_class => maps:get(target_class, Spec)}).
 
 %%-----------------------------------------------------------------------------
-%% validate_target(Target, TargetClass, SourceNref) -> ok | {error, Reason}
+%% validate_target(Target, TargetClass, SourceNref, Project) -> ok | {error, Reason}
 %%
 %% Target is a bare nref or {Nref, {Fwd, Rev}}.  Valid iff the nref exists, is a
 %% kind=instance node, and is an instance of TargetClass or a subclass of it.
 %% No self-check is needed: the source is uncommitted at RESOLVE, so a readable
 %% instance is necessarily distinct from it.
 %%-----------------------------------------------------------------------------
-validate_target(Target, TargetClass, _SourceNref) ->
+validate_target(Target, TargetClass, _SourceNref, Project) ->
 	Nref = target_nref(Target),
-	case mnesia:dirty_read(nodes, Nref) of
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), Nref) of
 		[#node{kind = instance, classes = Classes}] ->
 			case lists:any(
 					fun(C) -> graphdb_class:class_in_ancestry(TargetClass, C) end,
@@ -1017,15 +1021,16 @@ fire_connections(AutoConnPlan) ->
 %% fire_auto_connection(AutoEntry, Acc) -> report()
 fire_auto_connection(#{rule := Rule, deploy := Deploy, spec := Spec,
 					   source := SourceNref, template := Template,
-					   targets := Targets}, Acc) ->
+					   targets := Targets, project := Project}, Acc) ->
 	Char   = maps:get(characterization, Spec),
 	Recip  = maps:get(reciprocal, Spec),
 	TClass = maps:get(target_class, Spec),
 	{_I, Acc1} = lists:foldl(
 		fun(T, {I, A}) ->
 			TNref = target_nref(T),
-			Outcome = case write_connection_arcs(SourceNref, Char, TNref, Recip,
-												 Template, target_avps(T)) of
+			Outcome = case write_connection_arcs(Project, SourceNref, Char,
+												 TNref, Recip, Template,
+												 target_avps(T)) of
 				ok ->
 					#{source => SourceNref, index => I, status => connected,
 					  target => TNref, characterization => Char,
