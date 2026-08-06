@@ -74,26 +74,80 @@ correct from day one.
 
 Every structural (graph-traversable) nref field resolves to exactly one of
 `{environment, current-project}`. The namespace is determined by the field's
-**role**, plus the arc-label's `target_kind` for the single polymorphic field
-(`target_nref`).
+**role**, **relative to the home store of the record being read**, plus the
+arc label's `target_kind` for the two polymorphic endpoint fields
+(`source_nref`, `target_nref`).
+
+### Home-relative routing — amendment (2026-08-02, SP2 brainstorm)
+
+The original map routed `target_nref` by `target_kind` alone and `source_nref`
+to "the row's home DB". Both are wrong in cases that only become visible once
+project tables physically exist:
+
+- **`kind = instance` does not imply project residency.** Three instance nodes
+  live in the *environment*: the project anchor under `Projects` (nref 5),
+  language instance nodes under `Languages` (nref 4), and rule instance nodes
+  (instances of the rule meta-classes). Routing `instance → project-local`
+  unconditionally misroutes all three.
+- **`source_nref` is not always the row's home.** The class→instance membership
+  row (`characterization = 30`) is written in the **project** table, but its
+  `source_nref` is an environment class nref. Under a per-project allocator
+  from 1 this is a live collision hazard: an index read on `source_nref` can
+  match a project instance and an environment class sharing the same integer.
+
+The corrected rule — **each endpoint field routes by the arc label pointing at
+it, interpreted relative to the row's home store**:
+
+```erlang
+namespace_of(target_nref) = target_namespace(Home, target_kind(Characterization))
+namespace_of(source_nref) = target_namespace(Home, target_kind(Reciprocal))
+
+%% environment home => every reference resolves environment
+%% project home     => instance                    => that project
+%%                     category | attribute | class => environment
+```
+
+`characterization` and `reciprocal` remain environment-always, unchanged.
+Every relationship writer populates `reciprocal` (no row ships with it
+`undefined`), so deriving `source_nref`'s namespace from it is total.
+
+Checked against every arc shape in the system:
+
+| Row shape                                            | `source_nref` | `target_nref` |
+| ---------------------------------------------------- | ------------- | ------------- |
+| membership `src=Inst, char=29, tgt=Class, recip=30`  | project       | environment   |
+| membership `src=Class, char=30, tgt=Inst, recip=29`  | environment   | project       |
+| composition `src=Inst, char=28, tgt=Inst, recip=27`  | project       | project       |
+| any environment-home row (anchor, language, rule, …) | environment   | environment   |
+
+The same correction applies to `node.parents`: compositional parents are
+project-local **only in a project-home node**. The environment-resident project
+anchor's compositional parent is `Projects` (nref 5), an environment nref.
+
+**Residency and interpretation are one rule seen from two sides:** *residency
+follows the API path* (a write carrying a `Project` handle lands in that
+project's tables; an environment op lands in the environment tables), and
+*interpretation follows the row's home* (when reading a record, its references
+resolve relative to the store it came from). Neither side requires a record
+change or a new `kind` atom.
 
 ### Field-role namespace map
 
-| Field                                                        | Namespace                                                                                                             |
-| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `node.nref`                                                  | the node's own DB — environment node → environment; instance → project-local                                          |
-| `node.classes`                                               | environment (instances point at environment class nodes)                                                              |
-| `node.parents` — compositional                               | project-local (instance part-of instance)                                                                             |
-| `node.parents` — taxonomy                                    | environment (class / attribute is-a)                                                                                  |
-| `relationship.characterization`                              | environment (arc label) — always                                                                                      |
-| `relationship.reciprocal`                                    | environment (arc label) — always                                                                                      |
-| `relationship.target_nref`                                   | **routed** by the arc-label's `target_kind`: `instance` → project-local; `category`/`attribute`/`class` → environment |
-| `relationship.source_nref`                                   | the row's home DB                                                                                                     |
-| AVP `attribute` keys                                         | environment — always                                                                                                  |
-| AVP values that are nrefs (e.g. template, `reciprocal_nref`) | environment, per the attribute's definition                                                                           |
+| Field                                                        | Namespace                                                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `node.nref`                                                  | the store it was read from — environment table → environment; project table → that project |
+| `node.classes`                                               | environment — always (instances point at environment class nodes)                          |
+| `node.parents` — compositional                               | home-relative: project-home → that project; environment-home → environment                 |
+| `node.parents` — taxonomy                                    | environment (class / attribute is-a)                                                       |
+| `relationship.characterization`                              | environment (arc label) — always                                                           |
+| `relationship.reciprocal`                                    | environment (arc label) — always                                                           |
+| `relationship.target_nref`                                   | `target_namespace(Home, target_kind(Characterization))` — see the amendment above          |
+| `relationship.source_nref`                                   | `target_namespace(Home, target_kind(Reciprocal))` — see the amendment above                |
+| AVP `attribute` keys                                         | environment — always                                                                       |
+| AVP values that are nrefs (e.g. template, `reciprocal_nref`) | environment, per the attribute's definition                                                |
 
-This table is authoritative. The resolution seam (§7) is the code expression
-of it.
+This table is authoritative. The resolution seam (§7) is the code expression of
+it; `graphdb_ns` gains the home-store parameter in SP2.
 
 ## 4. Cross-project links are indirected, never structural
 

@@ -468,9 +468,14 @@ At the API/code layer only, no `node`/`relationship` record changes:
 
 ### SP2+ — turning project scope on
 
-- **Physical project store (SP2)** — separate Mnesia table set / schema per
-  project; per-project allocator from 1; the resolution seam gains real
-  env-vs-project routing; the session binds to physical storage.
+- **Physical project store (SP2)** — DESIGNED, not yet implemented; see
+  `docs/designs/sp2-physical-project-store-design.md`. Per-project
+  `nodes_<A>` / `relationships_<A>` / `counters_<A>` tables on a single
+  Mnesia node; per-project allocator from 1 via in-store dirty counters;
+  `graphdb_ns` gains the home-store parameter and becomes the live router;
+  SP1's `Session` parameter is renamed `Project` and becomes load-bearing.
+  Instance reads and the query session take a `Project` (forced — a bare
+  nref is meaningless once allocation starts at 1).
 - **Distribution & residency (SP3)** — projects on separate nodes / locations;
   environment reachability or replication at each location; proxy dereference.
 - **Migration (SP4)** — move existing instances out of the shared environment
@@ -487,6 +492,33 @@ recurse transitively into a conferred class's rules — which reframes
 multi-class creation from an API-signature problem into a gather-
 transitivity problem. A class-list / signature-widening framing was
 considered and rejected; see `docs/designs/f4-phase-b4-connection-firing-design.md` §7.
+
+---
+
+## Client session
+
+A concept named but deliberately not yet designed.
+
+`Session` is intended as a higher-level, per-user or per-client container
+for the state needed to disambiguate that client's operations — a primary
+project, a primary language, and whatever else later proves to need
+disambiguation.
+
+The intent is that a `Session` is used only at a high level and is
+decomposed there into the concrete handles the lower-level functions take:
+functions that touch a store receive a `Project`; functions that need a
+specific language receive that language. Nothing below the top layer sees a
+`Session`.
+
+No design work has been done, and none should be inferred from the name.
+The container's content is driven by consumers that do not exist yet, so
+its shape is deliberately left open. The existing `graphdb_query` session
+is the closest thing in the tree today and is the natural candidate for
+`Session` to absorb whenever this is picked up.
+
+Note that the parameter SP1 shipped under the name `Session` was in fact a
+project handle; SP2 renames it `Project` and frees the name for this
+concept.
 
 ---
 
