@@ -109,6 +109,7 @@
 		start_link/0,
 		%% Read operations
 		get_node/1,
+		get_node/2,
 		get_relationships/1,
 		get_relationships/2,
 		%% Write operations (delegate to workers)
@@ -117,13 +118,17 @@
 		create_instance/4,
 		add_relationship/5,
 		delete_node/1,
+		delete_node/2,
 		retire_node/1,
+		retire_node/2,
 		unretire_node/1,
+		unretire_node/2,
 		update_node_avps/2,
+		update_node_avps/3,
 		%% Batch write (tier-3 entry point)
 		mutate/1,
 		%% Tier-1 in-txn write primitive (composed by mutate/1)
-		update_node_avps_in_txn/3,
+		update_node_avps_in_txn/4,
 		%% Transaction helper (write-path seam)
 		transaction/1,
 		%% Cache invariant audit / repair
@@ -172,6 +177,17 @@ start_link() ->
 %%-----------------------------------------------------------------------------
 get_node(Nref) ->
 	gen_server:call(?MODULE, {get_node, Nref}).
+
+
+%%-----------------------------------------------------------------------------
+%% get_node(Project, Nref) -> {ok, #node{}} | {error, not_found | term()}
+%%
+%% Reads a single node from Project's own nodes table. Unlike get_node/1,
+%% no retired-marker check -- SP1/SP2 have not extended the retired-read
+%% guard to the project write path; project reads return the raw node.
+%%-----------------------------------------------------------------------------
+get_node(Project, Nref) ->
+	gen_server:call(?MODULE, {get_node, Project, Nref}).
 
 
 %%-----------------------------------------------------------------------------
@@ -268,6 +284,14 @@ delete_node(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
+%% delete_node(Project, Nref) -> ok | {error, term()}
+%% Project-scoped twin of delete_node/1. Actual deletion not yet implemented.
+%%-----------------------------------------------------------------------------
+delete_node(Project, Nref) ->
+	gen_server:call(?MODULE, {delete_node, Project, Nref}).
+
+
+%%-----------------------------------------------------------------------------
 %% retire_node(Nref) -> ok | {error, Reason}
 %% Soft-retires a runtime node (sets the boolean `retired` marker AVP).
 %% Idempotent. Refuses the permanent tier (Nref < ?NREF_START).
@@ -279,6 +303,20 @@ retire_node(Nref) ->
 %% Clears the `retired` marker. Idempotent.
 unretire_node(Nref) ->
 	gen_server:call(?MODULE, {unretire_node, Nref}).
+
+
+%%-----------------------------------------------------------------------------
+%% retire_node(Project, Nref) -> ok | {error, Reason}
+%% unretire_node(Project, Nref) -> ok | {error, Reason}
+%%
+%% Project-scoped twins. No permanent-tier guard: a project's allocator has
+%% no permanent tier (design §4) -- every project nref is mutable.
+%%-----------------------------------------------------------------------------
+retire_node(Project, Nref) ->
+	gen_server:call(?MODULE, {retire_node, Project, Nref}).
+
+unretire_node(Project, Nref) ->
+	gen_server:call(?MODULE, {unretire_node, Project, Nref}).
 
 
 %%-----------------------------------------------------------------------------
@@ -296,6 +334,20 @@ update_node_avps(Nref, AVPs) ->
 	case validate_avp_updates(AVPs) of
 		ok ->
 			gen_server:call(?MODULE, {update_node_avps, Nref, AVPs});
+		{error, _} = Err ->
+			Err
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% update_node_avps(Project, Nref, AVPs) -> ok | {error, term()}
+%% Project-scoped twin of update_node_avps/2.
+%%-----------------------------------------------------------------------------
+-spec update_node_avps(map(), integer(), [map()]) -> ok | {error, term()}.
+update_node_avps(Project, Nref, AVPs) ->
+	case validate_avp_updates(AVPs) of
+		ok ->
+			gen_server:call(?MODULE, {update_node_avps, Project, Nref, AVPs});
 		{error, _} = Err ->
 			Err
 	end.
@@ -478,11 +530,11 @@ dispatch({add_relationship, IdPair, S, C, T, R, TemplateSpec, AVPSpec},
 	graphdb_instance:add_relationship_in_txn(IdPair, S, C, T, R, TemplateSpec,
 		AVPSpec, TkAttr, RetAttr);
 dispatch({retire_node, Nref}, _TkAttr, RetAttr) ->
-	set_retired_(Nref, true, RetAttr);
+	set_retired_(environment, Nref, true, RetAttr);
 dispatch({unretire_node, Nref}, _TkAttr, RetAttr) ->
-	set_retired_(Nref, false, RetAttr);
+	set_retired_(environment, Nref, false, RetAttr);
 dispatch({update_node_avps, Nref, AVPs}, _TkAttr, RetAttr) ->
-	update_node_avps_in_txn(Nref, AVPs, RetAttr);
+	update_node_avps_in_txn(environment, Nref, AVPs, RetAttr);
 dispatch({remove_relationship, S, C, T}, _TkAttr, _RetAttr) ->
 	graphdb_instance:remove_relationship_in_txn(S, C, T, any);
 dispatch({remove_relationship, S, C, T, Template}, _TkAttr, _RetAttr) ->
@@ -591,6 +643,9 @@ handle_call({get_node, Nref}, _From, State0) ->
 			{reply, Err, State0}
 	end;
 
+handle_call({get_node, Project, Nref}, _From, State) ->
+	{reply, do_get_node(Project, Nref), State};
+
 handle_call({get_relationships, Nref, Direction}, _From, State) ->
 	{reply, do_get_relationships(Nref, Direction), State};
 
@@ -627,6 +682,13 @@ handle_call({unretire_node, Nref}, _From, State0) ->
 	{Reply, State} = set_retired(Nref, false, State0),
 	{reply, Reply, State};
 
+handle_call({retire_node, Project, Nref}, _From, State0) ->
+	{Reply, State} = set_retired(Project, Nref, true, State0),
+	{reply, Reply, State};
+handle_call({unretire_node, Project, Nref}, _From, State0) ->
+	{Reply, State} = set_retired(Project, Nref, false, State0),
+	{reply, Reply, State};
+
 handle_call({delete_node, Nref}, _From, State) ->
 	case check_category_guard(Nref) of
 		{error, _} = Err ->
@@ -638,12 +700,29 @@ handle_call({delete_node, Nref}, _From, State) ->
 			{reply, {error, not_implemented}, State}
 	end;
 
+handle_call({delete_node, Project, Nref}, _From, State) ->
+	case check_category_guard(Project, Nref) of
+		{error, _} = Err ->
+			{reply, Err, State};
+		ok ->
+			{reply, {error, not_implemented}, State}
+	end;
+
 handle_call({update_node_avps, Nref, AVPs}, _From, State) ->
 	case check_category_guard(Nref) of
 		{error, _} = Err ->
 			{reply, Err, State};
 		ok ->
 			{Reply, State1} = do_update_node_avps(Nref, AVPs, State),
+			{reply, Reply, State1}
+	end;
+
+handle_call({update_node_avps, Project, Nref, AVPs}, _From, State) ->
+	case check_category_guard(Project, Nref) of
+		{error, _} = Err ->
+			{reply, Err, State};
+		ok ->
+			{Reply, State1} = do_update_node_avps(Project, Nref, AVPs, State),
 			{reply, Reply, State1}
 	end;
 
@@ -695,6 +774,16 @@ do_get_node(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
+%% do_get_node(Home, Nref) -> {ok, #node{}} | {error, not_found}
+%%-----------------------------------------------------------------------------
+do_get_node(Home, Nref) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Home), Nref) of
+		[Node] -> {ok, Node};
+		[]     -> {error, not_found}
+	end.
+
+
+%%-----------------------------------------------------------------------------
 %% do_get_relationships(Nref, Direction) ->
 %%     {ok, [#relationship{}]} | {error, term()}
 %%
@@ -740,6 +829,20 @@ check_category_guard(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
+%% check_category_guard(Home, Nref) -> ok | {error, ...}
+%%-----------------------------------------------------------------------------
+check_category_guard(Home, Nref) ->
+	case do_get_node(Home, Nref) of
+		{ok, #node{kind = category}} ->
+			{error, category_nodes_are_immutable};
+		{ok, _} ->
+			ok;
+		{error, _} = Err ->
+			Err
+	end.
+
+
+%%-----------------------------------------------------------------------------
 %% set_retired(Nref, Bool, State) -> {ok | {error, Reason}, State'}
 %%
 %% Tier-2 wrapper. Static arithmetic guard refuses the whole permanent tier
@@ -752,7 +855,20 @@ set_retired(Nref, _Bool, State) when Nref < ?NREF_START ->
 set_retired(Nref, Bool, State0) ->
 	{RetAttr, State} = ensure_retired_nref(State0),
 	Reply = case graphdb_mgr:transaction(
-				fun() -> set_retired_(Nref, Bool, RetAttr) end) of
+				fun() -> set_retired_(environment, Nref, Bool, RetAttr) end) of
+		{ok, ok}     -> ok;
+		{error, _}=E -> E
+	end,
+	{Reply, State}.
+
+%%-----------------------------------------------------------------------------
+%% set_retired(Project, Nref, Bool, State) -> {ok | {error, Reason}, State'}
+%% No permanent-tier guard for a project (see moduledoc above retire_node/2).
+%%-----------------------------------------------------------------------------
+set_retired(Project, Nref, Bool, State0) ->
+	{RetAttr, State} = ensure_retired_nref(State0),
+	Reply = case graphdb_mgr:transaction(
+				fun() -> set_retired_(Project, Nref, Bool, RetAttr) end) of
 		{ok, ok}     -> ok;
 		{error, _}=E -> E
 	end,
@@ -772,18 +888,19 @@ ensure_retired_nref(#state{retired_nref = RetAttr} = State) ->
 	{RetAttr, State}.
 
 %%-----------------------------------------------------------------------------
-%% set_retired_(Nref, Bool, RetAttr) -> ok
+%% set_retired_(Home, Nref, Bool, RetAttr) -> ok
 %% Tier-1 primitive. Must run inside an active mnesia transaction. Reads the
 %% node under a write lock, rewrites its AVP list so the `retired` marker
 %% reflects Bool, writes it back. Aborts with not_found if absent.
 %%-----------------------------------------------------------------------------
-set_retired_(Nref, Bool, RetAttr) ->
-	case mnesia:read(nodes, Nref, write) of
+set_retired_(Home, Nref, Bool, RetAttr) ->
+	NodesTab = graphdb_ns:node_table(Home),
+	case mnesia:read(NodesTab, Nref, write) of
 		[]     -> mnesia:abort(not_found);
 		[Node] ->
 			AVPs0 = Node#node.attribute_value_pairs,
 			AVPs1 = set_marker(AVPs0, RetAttr, Bool),
-			mnesia:write(nodes,
+			mnesia:write(NodesTab,
 				Node#node{attribute_value_pairs = AVPs1}, write)
 	end.
 
@@ -802,14 +919,27 @@ do_update_node_avps(Nref, _AVPs, State) when Nref < ?NREF_START ->
 do_update_node_avps(Nref, AVPs, State0) ->
 	{RetAttr, State} = ensure_retired_nref(State0),
 	Reply = case graphdb_mgr:transaction(
-				fun() -> update_node_avps_in_txn(Nref, AVPs, RetAttr) end) of
+				fun() -> update_node_avps_in_txn(environment, Nref, AVPs, RetAttr) end) of
 		{ok, ok}     -> ok;
 		{error, _}=E -> E
 	end,
 	{Reply, State}.
 
 %%-----------------------------------------------------------------------------
-%% update_node_avps_in_txn(Nref, AVPs, RetAttr) -> ok
+%% do_update_node_avps(Project, Nref, AVPs, State) -> {ok | {error, Reason}, State'}
+%% No permanent-tier guard for a project.
+%%-----------------------------------------------------------------------------
+do_update_node_avps(Project, Nref, AVPs, State0) ->
+	{RetAttr, State} = ensure_retired_nref(State0),
+	Reply = case graphdb_mgr:transaction(
+				fun() -> update_node_avps_in_txn(Project, Nref, AVPs, RetAttr) end) of
+		{ok, ok}     -> ok;
+		{error, _}=E -> E
+	end,
+	{Reply, State}.
+
+%%-----------------------------------------------------------------------------
+%% update_node_avps_in_txn(Home, Nref, AVPs, RetAttr) -> ok
 %% Tier-1 primitive. Must run inside an active mnesia transaction. Reads the
 %% node under a write lock; aborts not_found if absent. Aborts use_retire_api
 %% if any update targets the seeded `retired` attribute. Aborts
@@ -817,8 +947,9 @@ do_update_node_avps(Nref, AVPs, State0) ->
 %% Applies the merge and writes the node back. RetAttr is resolved by the
 %% caller OUTSIDE the transaction (load-bearing: no gen_server call in-txn).
 %%-----------------------------------------------------------------------------
-update_node_avps_in_txn(Nref, AVPs, RetAttr) ->
-	case mnesia:read(nodes, Nref, write) of
+update_node_avps_in_txn(Home, Nref, AVPs, RetAttr) ->
+	NodesTab = graphdb_ns:node_table(Home),
+	case mnesia:read(NodesTab, Nref, write) of
 		[] ->
 			mnesia:abort(not_found);
 		[Node] ->
@@ -826,7 +957,7 @@ update_node_avps_in_txn(Nref, AVPs, RetAttr) ->
 			ok = guard_instance_only(Node#node.attribute_value_pairs, AVPs),
 			ok = guard_attribute_existence(AVPs),
 			New = apply_avp_updates(Node#node.attribute_value_pairs, AVPs),
-			mnesia:write(nodes, Node#node{attribute_value_pairs = New}, write)
+			mnesia:write(NodesTab, Node#node{attribute_value_pairs = New}, write)
 	end.
 
 %% Abort if any update (upsert or delete) targets the seeded `retired` attr.

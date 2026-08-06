@@ -135,7 +135,13 @@
 	mutate_rejects_instance_only/1,
 	mutate_remove_relationship/1,
 	mutate_update_relationship/1,
-	mutate_mixed_rollback/1
+	mutate_mixed_rollback/1,
+	%% Project-taking twins (SP2 T10)
+	get_node_2_reads_project_instance/1,
+	get_node_2_does_not_leak_into_environment_table/1,
+	retire_node_2_retires_a_project_instance/1,
+	update_node_avps_3_edits_a_project_instance/1,
+	delete_node_2_reports_not_implemented/1
 ]).
 
 
@@ -150,7 +156,8 @@ all() ->
 	[{group, init_tests}, {group, read_ops},
 	 {group, category_guard}, {group, write_delegation},
 	 {group, cache_audit}, {group, transaction_seam},
-	 {group, soft_retire}, {group, mutate}, {group, update_avps}].
+	 {group, soft_retire}, {group, mutate}, {group, update_avps},
+	 {group, project_twins}].
 
 groups() ->
 	[
@@ -239,6 +246,13 @@ groups() ->
 			update_node_avps_atomic_rollback,
 			update_node_avps_rejects_instance_only,
 			update_node_avps_delete_instance_only_ok
+		]},
+		{project_twins, [], [
+			get_node_2_reads_project_instance,
+			get_node_2_does_not_leak_into_environment_table,
+			retire_node_2_retires_a_project_instance,
+			update_node_avps_3_edits_a_project_instance,
+			delete_node_2_reports_not_implemented
 		]}
 	].
 
@@ -328,7 +342,12 @@ init_per_testcase(TC, Config) when
 		TC =:= mutate_rejects_instance_only;
 		TC =:= mutate_remove_relationship;
 		TC =:= mutate_update_relationship;
-		TC =:= mutate_mixed_rollback ->
+		TC =:= mutate_mixed_rollback;
+		TC =:= get_node_2_reads_project_instance;
+		TC =:= get_node_2_does_not_leak_into_environment_table;
+		TC =:= retire_node_2_retires_a_project_instance;
+		TC =:= update_node_avps_3_edits_a_project_instance;
+		TC =:= delete_node_2_reports_not_implemented ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
@@ -1534,6 +1553,106 @@ mutate_mixed_rollback(_Config) ->
 	?assertEqual(1, mutate_conn_count(B, Recip, A)),
 	ok = graphdb_mgr:verify_caches().
 
+%%=============================================================================
+%% Project-taking twins (SP2 T10): get_node/2, retire_node/2,
+%% update_node_avps/3, delete_node/2.
+%%
+%% proj() is stubbed locally here (Task 12 has not landed yet in this
+%% execution order) -- copies the canonical helper from the plan's Task 14
+%% Step 1 code block verbatim. Task 12/14 will remove this local copy.
+%%=============================================================================
+
+get_node_2_reads_project_instance(_Config) ->
+	Project = proj(),
+	{ok, Nref, _Report} = graphdb_instance:create_instance(Project, "Widget",
+		widget_class(), root_instance(Project)),
+	{ok, #node{nref = Nref, kind = instance}} =
+		graphdb_mgr:get_node(Project, Nref).
+
+get_node_2_does_not_leak_into_environment_table(_Config) ->
+	Project = proj(),
+	%% Project instance nref 1 must not resolve to the environment's nref 1
+	%% (Root, a category node).
+	{ok, 1, _Report} = graphdb_instance:create_instance(Project, "First",
+		widget_class(), root_instance(Project)),
+	{ok, #node{kind = instance}} = graphdb_mgr:get_node(Project, 1),
+	{ok, #node{kind = category}} = graphdb_mgr:get_node(?NREF_ROOT).
+
+retire_node_2_retires_a_project_instance(_Config) ->
+	Project = proj(),
+	{ok, Nref, _Report} = graphdb_instance:create_instance(Project, "Widget",
+		widget_class(), root_instance(Project)),
+	ok = graphdb_mgr:retire_node(Project, Nref),
+	{ok, Node} = graphdb_mgr:get_node(Project, Nref),
+	?assert(graphdb_mgr:has_true_avp(Node)).
+
+update_node_avps_3_edits_a_project_instance(_Config) ->
+	Project = proj(),
+	{ok, Nref, _Report} = graphdb_instance:create_instance(Project, "Widget",
+		widget_class(), root_instance(Project)),
+	Colour = ensure_colour_attribute(),
+	ok = graphdb_mgr:update_node_avps(Project, Nref,
+		[#{attribute => Colour, value => "blue"}]),
+	{ok, #node{attribute_value_pairs = AVPs}} =
+		graphdb_mgr:get_node(Project, Nref),
+	?assertEqual({ok, "blue"}, find_avp(AVPs, Colour)).
+
+delete_node_2_reports_not_implemented(_Config) ->
+	Project = proj(),
+	{ok, Nref, _Report} = graphdb_instance:create_instance(Project, "Widget",
+		widget_class(), root_instance(Project)),
+	?assertEqual({error, not_implemented}, graphdb_mgr:delete_node(Project, Nref)).
+
+%%---------------------------------------------------------------------
+%% widget_class() -> ClassNref
+%%
+%% Throwaway environment-scoped class for the project-twin tests. Classes
+%% live in the environment regardless of which project instantiates them.
+%%---------------------------------------------------------------------
+widget_class() ->
+	{ok, ClassNref} = graphdb_class:create_class("T10Widget", 3),
+	ClassNref.
+
+%%---------------------------------------------------------------------
+%% root_instance(Project) -> Nref
+%%
+%% Seeds a throwaway compositional-root instance directly into Project's
+%% own (initially empty) nodes table, bypassing create_instance's parent
+%% validation (do_validate_parent/3 requires the parent to already exist,
+%% and a fresh project store has nothing yet to point at).
+%%---------------------------------------------------------------------
+root_instance(Project) ->
+	Nref = graphdb_project:next_nref(Project),
+	Node = #node{nref = Nref, kind = instance, attribute_value_pairs = []},
+	ok = mnesia:dirty_write(graphdb_ns:node_table(Project), Node),
+	Nref.
+
+%%---------------------------------------------------------------------
+%% ensure_colour_attribute() -> AttrNref
+%%
+%% Throwaway environment-scoped literal attribute, memoised per test-case
+%% process.
+%%---------------------------------------------------------------------
+ensure_colour_attribute() ->
+	case get(t10_colour_attr) of
+		undefined ->
+			{ok, AttrNref} =
+				graphdb_attr:create_literal_attribute("T10Colour", string),
+			put(t10_colour_attr, AttrNref),
+			AttrNref;
+		AttrNref ->
+			AttrNref
+	end.
+
+%% find_avp(AVPs, AttrNref) -> {ok, Value} | not_found
+%% Searches an AVP list for an entry whose attribute key equals AttrNref;
+%% returns {ok, Value} on the first match, not_found if absent.
+find_avp(AVPs, A) ->
+	case lists:search(fun(#{attribute := X}) -> X =:= A end, AVPs) of
+		{value, #{value := V}} -> {ok, V};
+		false                  -> not_found
+	end.
+
 %%---------------------------------------------------------------------
 %% sess() -> Session
 %%
@@ -1550,4 +1669,27 @@ sess() ->
 			S;
 		S ->
 			S
+	end.
+
+%%---------------------------------------------------------------------
+%% proj() -> Project
+%%
+%% SP2 test helper: returns a project handle, memoised per test-case
+%% process. Registers a project under Projects (nref 5) on first use and
+%% opens it; subsequent calls in the same process reuse it.
+%%
+%% Stubbed locally here per Task 10's brief -- Task 12 has not landed yet
+%% in this execution order (proj()/sess() consolidation is Task 14). This
+%% is a verbatim copy of the plan's Task 14 Step 1 canonical helper; Task
+%% 12/14 will remove this local duplicate.
+%%---------------------------------------------------------------------
+proj() ->
+	case get(sp2_project) of
+		undefined ->
+			{ok, P} = graphdb_project:register_project("SP2 test project"),
+			{ok, Project} = graphdb_project:open(P),
+			put(sp2_project, Project),
+			Project;
+		Project ->
+			Project
 	end.
