@@ -173,7 +173,7 @@ seeded_nrefs() ->
 %% optional template_nref) lives on the node; rule deployment (Template,
 %% mode, multiplicity) lives on the applies_to connection arc from the
 %% owning (parent) class to the rule instance.  Scope environment writes to
-%% the shared ontology; {project, _} is not yet supported.
+%% the shared ontology; {project, Project} is not yet supported.
 %%-----------------------------------------------------------------------------
 create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult) ->
 	create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult,
@@ -203,7 +203,7 @@ create_composition_rule(Scope, Name, ParentClass, ChildClass, Mode, Mult,
 %% node; rule deployment (Template, mode, multiplicity) lives on the applies_to
 %% connection arc from the owning (source) class to the rule instance.  Recip is
 %% the reverse arc label: the arc as seen from the target back.  Scope
-%% environment writes to the shared ontology; {project, _} is not supported.
+%% environment writes to the shared ontology; {project, Project} is not supported.
 %%-----------------------------------------------------------------------------
 create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
 					   Mode, Mult) ->
@@ -221,7 +221,7 @@ create_connection_rule(Scope, Name, SourceClass, Char, Recip, TargetClass,
 %%
 %% Returns the full rule instance node iff RuleNref names a kind=instance
 %% node whose class membership includes CompositionRule or ConnectionRule.
-%% Scope environment reads the shared ontology; {project, _} -> not_found.
+%% Scope environment reads the shared ontology; {project, Project} -> not_found.
 %%-----------------------------------------------------------------------------
 get_rule(Scope, RuleNref) ->
 	gen_server:call(?MODULE, {get_rule, Scope, RuleNref}).
@@ -230,7 +230,7 @@ get_rule(Scope, RuleNref) ->
 %% rules_for_class(Scope, ClassNref) -> {ok, [#node{}]}
 %%
 %% All rules (both kinds) attached to ClassNref -- i.e. the targets of the
-%% applies_to connection arcs out of ClassNref.  {project, _} -> {ok, []}.
+%% applies_to connection arcs out of ClassNref.  {project, Project} -> {ok, []}.
 %% DIRECT attachments only: rules attached to ClassNref's taxonomy
 %% ancestors are NOT included.  Ancestor-walking (effective_rules_for_class)
 %% is a later-phase addition.
@@ -243,7 +243,7 @@ rules_for_class(Scope, ClassNref) ->
 %% connection_rules_for_class(Scope, ClassNref)  -> {ok, [#node{}]}
 %%
 %% Attached rules of ClassNref filtered to the CompositionRule (resp.
-%% ConnectionRule) meta-class.  {project, _} -> {ok, []}.
+%% ConnectionRule) meta-class.  {project, Project} -> {ok, []}.
 %%-----------------------------------------------------------------------------
 composition_rules_for_class(Scope, ClassNref) ->
 	gen_server:call(?MODULE, {rules_for_class_kind, Scope, ClassNref,
@@ -263,7 +263,7 @@ connection_rules_for_class(Scope, ClassNref) ->
 %% first), each rule paired with that attachment's deployment map
 %% (#{mode, multiplicity, template}).  Both rule kinds are returned; callers
 %% filter inline.  Levels contributing no rules are omitted.
-%% {project, _} -> {ok, []}.
+%% {project, Project} -> {ok, []}.
 %%
 %% Does NOT resolve override/shadow/conflict -- every level's rules are
 %% present.  Resolution is the firing engine's job.
@@ -284,7 +284,7 @@ effective_rules_for_class(Scope, ClassNref) ->
 %% connection-firing engine consumes this during create_instance.  Additive -- a
 %% rule reached from two ancestors appears twice; horizontal precedence is
 %% applied at firing time by the conflict resolver, not here.
-%% {project, _} -> {ok, []}.
+%% {project, Project} -> {ok, []}.
 %%-----------------------------------------------------------------------------
 effective_connection_rules(Scope, ClassNref) ->
 	gen_server:call(?MODULE, {effective_connection_rules, Scope, ClassNref}).
@@ -293,7 +293,7 @@ effective_connection_rules(Scope, ClassNref) ->
 %% list_rules(Scope) -> {ok, [#node{}]}
 %%
 %% Every rule instance in the ontology: the instances of both meta-classes.
-%% {project, _} -> {ok, []}.
+%% {project, Project} -> {ok, []}.
 %%-----------------------------------------------------------------------------
 list_rules(Scope) ->
 	gen_server:call(?MODULE, {list_rules, Scope}).
@@ -320,7 +320,7 @@ list_rules(Scope) ->
 %%   {class_not_instantiable, ChildClassNref} --
 %%       a mandatory rule's child_class is abstract
 %%
-%% Scope {project, _} returns a leaf plan immediately (no rule lookup).
+%% Scope {project, Project} returns a leaf plan immediately (no rule lookup).
 %%-----------------------------------------------------------------------------
 plan_composition_firing(Scope, ClassNref) ->
 	gen_server:call(?MODULE, {plan_composition_firing, Scope, ClassNref}).
