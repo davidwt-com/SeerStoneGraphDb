@@ -133,16 +133,16 @@
 		add_relationship_in_txn/10,
 		remove_relationship/4,
 		remove_relationship/5,
-		remove_relationship_in_txn/4,
-		resolve_forward_connection/4,
+		remove_relationship_in_txn/5,
+		resolve_forward_connection/5,
 		template_of/1,
 		update_relationship/5,
 		update_relationship/6,
-		update_relationship_avps_in_txn/5,
+		update_relationship_avps_in_txn/6,
 		has_template_update/1,
 		update_relationship_both/5,
 		update_relationship_both/6,
-		update_relationship_both_in_txn/6,
+		update_relationship_both_in_txn/7,
 		%% Lookups
 		get_instance/1,
 		children/1,
@@ -1440,17 +1440,20 @@ add_relationship_in_txn(Home, {_Id1, _Id2} = IdPair, SourceNref, CharNref,
 
 
 %%-----------------------------------------------------------------------------
-%% resolve_forward_connection(SourceNref, CharNref, TargetNref, TemplateSpec)
-%%   -> {ok, #relationship{}} | not_found | {ambiguous, [TemplateNref]}
+%% resolve_forward_connection(Home, SourceNref, CharNref, TargetNref,
+%%     TemplateSpec) -> {ok, #relationship{}} | not_found
+%%                      | {ambiguous, [TemplateNref]}
 %%
 %% Tier-1 in-transaction helper.  Finds the directed connection row(s) whose
 %% (source, characterization, target) match, narrowed by TemplateSpec
 %% (`any` = ignore template; an integer = match that template AVP).  Classifies
 %% none / exactly-one / many; the ambiguous case carries each matching row's
 %% template so a /3 caller can re-issue as /4.  Reads only; never aborts.
+%% SourceNref routes through Home's relationships table (SP2); CharNref and
+%% TargetNref are only compared in-memory against already-read rows.
 %%-----------------------------------------------------------------------------
-resolve_forward_connection(SourceNref, CharNref, TargetNref, TemplateSpec) ->
-	Rows = mnesia:index_read(relationships, SourceNref,
+resolve_forward_connection(Home, SourceNref, CharNref, TargetNref, TemplateSpec) ->
+	Rows = mnesia:index_read(graphdb_ns:rel_table(Home), SourceNref,
 		#relationship.source_nref),
 	Matches = [R || R <- Rows,
 		R#relationship.kind =:= connection,
@@ -1476,8 +1479,8 @@ template_of(#relationship{avps = AVPs}) ->
 	end.
 
 %%-----------------------------------------------------------------------------
-%% remove_relationship_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec)
-%%   -> ok    (aborts the enclosing transaction on any failure)
+%% remove_relationship_in_txn(Home, SourceNref, CharNref, TargetNref,
+%%     TemplateSpec) -> ok    (aborts the enclosing transaction on any failure)
 %%
 %% Tier-1 primitive.  Must run inside an active mnesia transaction; never opens
 %% its own.  Resolves the forward row (relationship_not_found /
@@ -1485,10 +1488,11 @@ template_of(#relationship{avps = AVPs}) ->
 %% (T, R, S) under the same concrete template, and deletes both rows.  A
 %% missing partner is an integrity violation -- aborts {dangling_half_edge, Id}
 %% rather than deleting a half-edge.  Used by remove_relationship/3,4 (tier-2)
-%% and graphdb_mgr:mutate/1 (tier-3).
+%% and graphdb_mgr:mutate/1 (tier-3).  Both rows live in Home's relationships
+%% table (SP2).
 %%-----------------------------------------------------------------------------
-remove_relationship_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec) ->
-	case resolve_forward_connection(SourceNref, CharNref, TargetNref,
+remove_relationship_in_txn(Home, SourceNref, CharNref, TargetNref, TemplateSpec) ->
+	case resolve_forward_connection(Home, SourceNref, CharNref, TargetNref,
 			TemplateSpec) of
 		not_found ->
 			mnesia:abort(relationship_not_found);
@@ -1497,11 +1501,12 @@ remove_relationship_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec) ->
 		{ok, Fwd} ->
 			Recip = Fwd#relationship.reciprocal,
 			Tmpl  = template_of(Fwd),
-			case resolve_forward_connection(TargetNref, Recip, SourceNref,
+			case resolve_forward_connection(Home, TargetNref, Recip, SourceNref,
 					Tmpl) of
 				{ok, Rev} ->
-					ok = mnesia:delete_object(relationships, Fwd, write),
-					ok = mnesia:delete_object(relationships, Rev, write);
+					RelsTab = graphdb_ns:rel_table(Home),
+					ok = mnesia:delete_object(RelsTab, Fwd, write),
+					ok = mnesia:delete_object(RelsTab, Rev, write);
 				_ ->
 					mnesia:abort({dangling_half_edge, Fwd#relationship.id})
 			end
@@ -1550,7 +1555,7 @@ with_project(Project, Fun) when is_function(Fun, 1) ->
 	end.
 
 %%-----------------------------------------------------------------------------
-%% update_relationship_avps_in_txn(S, C, T, TemplateSpec, Updates) -> ok
+%% update_relationship_avps_in_txn(Home, S, C, T, TemplateSpec, Updates) -> ok
 %%   (aborts the enclosing transaction on any failure)
 %%
 %% Tier-1 primitive: edits the AVPs of the SINGLE directed connection row named
@@ -1558,16 +1563,16 @@ with_project(Project, Fun) when is_function(Fun, 1) ->
 %% apply_avp_updates/2 (merge/upsert/delete).  The ?ARC_TEMPLATE scope AVP is
 %% protected -- any update targeting it aborts.  Same not-found / ambiguity
 %% arms as remove.  The Template AVP at index 0 survives because no update may
-%% reference it.
+%% reference it.  The row lives in Home's relationships table (SP2).
 %%-----------------------------------------------------------------------------
-update_relationship_avps_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
-		Updates) ->
+update_relationship_avps_in_txn(Home, SourceNref, CharNref, TargetNref,
+		TemplateSpec, Updates) ->
 	case has_template_update(Updates) of
 		true ->
 			mnesia:abort({protected_relationship_avp, ?ARC_TEMPLATE});
 		false ->
-			case resolve_forward_connection(SourceNref, CharNref, TargetNref,
-					TemplateSpec) of
+			case resolve_forward_connection(Home, SourceNref, CharNref,
+					TargetNref, TemplateSpec) of
 				not_found ->
 					mnesia:abort(relationship_not_found);
 				{ambiguous, Templates} ->
@@ -1575,7 +1580,7 @@ update_relationship_avps_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
 				{ok, Row} ->
 					New = graphdb_mgr:apply_avp_updates(
 						Row#relationship.avps, Updates),
-					mnesia:write(relationships,
+					mnesia:write(graphdb_ns:rel_table(Home),
 						Row#relationship{avps = New}, write)
 			end
 	end.
@@ -1604,12 +1609,12 @@ update_relationship(Project, SourceNref, CharNref, TargetNref, TemplateNref,
 			Updates)
 	end).
 
-do_update_relationship(SourceNref, CharNref, TargetNref, TemplateSpec,
+do_update_relationship(Home, SourceNref, CharNref, TargetNref, TemplateSpec,
 		Updates) ->
 	case graphdb_mgr:validate_avp_updates(Updates) of
 		ok ->
 			txn_ok(fun() ->
-				update_relationship_avps_in_txn(SourceNref, CharNref,
+				update_relationship_avps_in_txn(Home, SourceNref, CharNref,
 					TargetNref, TemplateSpec, Updates)
 			end);
 		{error, _} = Err ->
@@ -1617,18 +1622,19 @@ do_update_relationship(SourceNref, CharNref, TargetNref, TemplateSpec,
 	end.
 
 %%-----------------------------------------------------------------------------
-%% update_relationship_both_in_txn(S, C, T, TemplateSpec, FwdUpdates,
+%% update_relationship_both_in_txn(Home, S, C, T, TemplateSpec, FwdUpdates,
 %%   RevUpdates) -> ok    (aborts the enclosing transaction on any failure)
 %%
 %% Tier-1 composite: resolves the forward row to discover the reciprocal label
 %% and the concrete template, then edits both directed rows -- FwdUpdates on
 %% (S, C, T), RevUpdates on (T, R, S) -- EACH through the single-edge primitive
-%% (update_relationship_avps_in_txn/5).  Reused by the tier-2 wrappers and by
-%% graphdb_mgr:mutate/1.  The two directions' updates are independent.
+%% (update_relationship_avps_in_txn/6).  Reused by the tier-2 wrappers and by
+%% graphdb_mgr:mutate/1.  The two directions' updates are independent.  Both
+%% rows live in Home's relationships table (SP2).
 %%-----------------------------------------------------------------------------
-update_relationship_both_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
-		FwdUpdates, RevUpdates) ->
-	case resolve_forward_connection(SourceNref, CharNref, TargetNref,
+update_relationship_both_in_txn(Home, SourceNref, CharNref, TargetNref,
+		TemplateSpec, FwdUpdates, RevUpdates) ->
+	case resolve_forward_connection(Home, SourceNref, CharNref, TargetNref,
 			TemplateSpec) of
 		not_found ->
 			mnesia:abort(relationship_not_found);
@@ -1641,13 +1647,13 @@ update_relationship_both_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
 			%% so a corrupt half-edge surfaces {dangling_half_edge, Id} (the
 			%% same arm as remove) rather than a misleading relationship_not_found
 			%% from the second single-edge edit.
-			case resolve_forward_connection(TargetNref, Recip, SourceNref,
+			case resolve_forward_connection(Home, TargetNref, Recip, SourceNref,
 					Tmpl) of
 				{ok, _Rev} ->
-					ok = update_relationship_avps_in_txn(SourceNref, CharNref,
-						TargetNref, Tmpl, FwdUpdates),
-					ok = update_relationship_avps_in_txn(TargetNref, Recip,
-						SourceNref, Tmpl, RevUpdates);
+					ok = update_relationship_avps_in_txn(Home, SourceNref,
+						CharNref, TargetNref, Tmpl, FwdUpdates),
+					ok = update_relationship_avps_in_txn(Home, TargetNref,
+						Recip, SourceNref, Tmpl, RevUpdates);
 				_ ->
 					mnesia:abort({dangling_half_edge, Fwd#relationship.id})
 			end
@@ -1675,12 +1681,12 @@ update_relationship_both(Project, SourceNref, CharNref, TargetNref, TemplateNref
 		do_update_both(P, SourceNref, CharNref, TargetNref, TemplateNref, Fwd, Rev)
 	end).
 
-do_update_both(SourceNref, CharNref, TargetNref, TemplateSpec, Fwd, Rev) ->
+do_update_both(Home, SourceNref, CharNref, TargetNref, TemplateSpec, Fwd, Rev) ->
 	case {graphdb_mgr:validate_avp_updates(Fwd),
 		  graphdb_mgr:validate_avp_updates(Rev)} of
 		{ok, ok} ->
 			txn_ok(fun() ->
-				update_relationship_both_in_txn(SourceNref, CharNref,
+				update_relationship_both_in_txn(Home, SourceNref, CharNref,
 					TargetNref, TemplateSpec, Fwd, Rev)
 			end);
 		{{error, _} = Err, _} -> Err;
