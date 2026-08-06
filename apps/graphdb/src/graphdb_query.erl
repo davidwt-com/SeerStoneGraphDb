@@ -605,13 +605,23 @@ avp_value_of(AVPs, AttrNref) ->
 %% LangSpec = default, uses base-language English. For
 %% {language, LangNref}, looks up the registered chain.  Nrefs that
 %% resolve to no label are simply omitted from the map.
+%%
+%% Nrefs passed in here can be a mix of always-environment nrefs
+%% (classes, attributes, arc labels) and instance nrefs that may
+%% legitimately live in a bound Project (describe_instance's AllNrefs
+%% set) -- kind detection (name_attr_for_node/2) is Home-routed per
+%% nref via resolve_home/2 so a collision resolves to the same store
+%% describe_instance itself would read from. The graphdb_language
+%% overlay stays environment-bound regardless (see resolve_one_label/3)
+%% -- labels are a shared, language-registration-driven layer, not
+%% per-project data.
 %%---------------------------------------------------------------------
 resolve_labels(Nrefs, LangSpec, Session) ->
     Chain = label_chain(LangSpec),
     Map = lists:foldl(fun
         (undefined, Acc) -> Acc;
         (N, Acc) when is_integer(N) ->
-            case resolve_one_label(N, Chain) of
+            case resolve_one_label(Session, N, Chain) of
                 undefined -> Acc;
                 Label     -> Acc#{N => Label}
             end
@@ -633,24 +643,30 @@ lookup_chain_for_nref(LangNref) ->
     _ = LangNref,
     [en].
 
-resolve_one_label(Nref, Chain) ->
-    NameAttr = name_attr_for_node(Nref),
+resolve_one_label(Session, Nref, Chain) ->
+    NameAttr = name_attr_for_node(Session, Nref),
+    %% The language overlay itself is environment-bound (labels are
+    %% registered against the shared language layer, not per-project) --
+    %% only the kind-detection read above is Home-routed.
     case graphdb_language:resolve_label(Nref, NameAttr, Chain, environment) of
         {ok, Label} -> Label;
         not_found   -> undefined
     end.
 
 %%---------------------------------------------------------------------
-%% name_attr_for_node(Nref) -> integer()
+%% name_attr_for_node(Session, Nref) -> integer()
 %%
 %% Returns the appropriate NAME_ATTR_* for the node based on its kind.
-%% Reads through dirty_read for kind detection.  The catch-all
-%% returns NAME_ATTR_CATEGORY as a safe default — templates and other
-%% unknown kinds will simply fail to resolve, which the caller handles
-%% by omitting them from the label map.
+%% Resolves Home via resolve_home/2 (the nref may be a project instance
+%% colliding in key with an environment nref) then reads through
+%% dirty_read for kind detection.  The catch-all returns
+%% NAME_ATTR_CATEGORY as a safe default — templates and other unknown
+%% kinds will simply fail to resolve, which the caller handles by
+%% omitting them from the label map.
 %%---------------------------------------------------------------------
-name_attr_for_node(Nref) ->
-    case mnesia:dirty_read(nodes, Nref) of
+name_attr_for_node(Session, Nref) ->
+    Home = resolve_home(Session, Nref),
+    case mnesia:dirty_read(graphdb_ns:node_table(Home), Nref) of
         [#node{kind = category}]  -> ?NAME_ATTR_CATEGORY;
         [#node{kind = attribute}] -> ?NAME_ATTR_ATTRIBUTE;
         [#node{kind = class}]     -> ?NAME_ATTR_CLASS;
@@ -738,7 +754,7 @@ expand_arcs(To, From, PathHere,
         To ->
             {Acc, V, {found, NewPath}, S};
         _ ->
-            case maps:is_key(T, V) orelse is_scaffold_node(T) of
+            case maps:is_key(T, V) orelse is_scaffold_node(S, T) of
                 true ->
                     expand_arcs(To, From, PathHere, Rest, V, Acc,
                                 Found, S);
@@ -751,7 +767,7 @@ expand_arcs(To, From, PathHere,
     end.
 
 %%---------------------------------------------------------------------
-%% is_scaffold_node(Nref) -> boolean()
+%% is_scaffold_node(Session, Nref) -> boolean()
 %%
 %% Category nodes are structural scaffold (nrefs 1-5) -- never
 %% traversed by graph queries.  Matches the semantics already encoded
@@ -759,9 +775,18 @@ expand_arcs(To, From, PathHere,
 %% taxonomy walk.  Without this filter, two classes sharing only
 %% NREF_CLASSES as a parent would be considered taxonomically
 %% connected, which contradicts both the design and existing helpers.
+%%
+%% Home-routed via resolve_home/2: a project instance can legitimately
+%% collide in key with an environment scaffold nref (1-5). Without this,
+%% BFS would silently skip a real project-instance hop as if it were
+%% scaffold, producing a wrong path result with no error. When the
+%% collision resolves to the project, the project's node is read (never
+%% kind=category there), so is_scaffold_node correctly returns false and
+%% the real instance hop is traversed.
 %%---------------------------------------------------------------------
-is_scaffold_node(Nref) ->
-    case mnesia:dirty_read(nodes, Nref) of
+is_scaffold_node(Session, Nref) ->
+    Home = resolve_home(Session, Nref),
+    case mnesia:dirty_read(graphdb_ns:node_table(Home), Nref) of
         [#node{kind = category}] -> true;
         _                        -> false
     end.

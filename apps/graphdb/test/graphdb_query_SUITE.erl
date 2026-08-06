@@ -23,6 +23,19 @@
 -define(DIR_PREFIX, "query_").
 
 %%---------------------------------------------------------------------
+%% Record definition (matches graphdb_query.erl's own local #node{} —
+%% needed here only by root_instance/1, which writes a raw #node{} into
+%% a project's nodes table directly, bypassing create_instance).
+%%---------------------------------------------------------------------
+-record(node, {
+    nref,
+    kind,
+    parents               = [],
+    classes               = [],
+    attribute_value_pairs
+}).
+
+%%---------------------------------------------------------------------
 %% Common Test callbacks
 %%---------------------------------------------------------------------
 -export([
@@ -90,7 +103,12 @@
     q6_arc_kind_filter/1,
     q6_find_path_3_public_api/1,
     %% resume / snapshot_expired
-    resume_against_refreshed_session_fails/1
+    resume_against_refreshed_session_fails/1,
+    %% SP2 T12 — session binds a Project; resolve_home/2
+    new_session_1_binds_a_project/1,
+    q_get_node_reads_a_project_instance/1,
+    q_get_node_still_reads_environment_when_project_bound/1,
+    resolve_home_prefers_project_and_logs_on_collision/1
 ]).
 
 suite() ->
@@ -100,7 +118,7 @@ all() ->
     [{group, skeleton}, {group, q1_get_node}, {group, q1b_get_arcs},
      {group, q2_describe_attribute}, {group, q3_describe_class},
      {group, q4_describe_instance}, {group, q5_list_instances_of},
-     {group, q6_find_path}].
+     {group, q6_find_path}, {group, sp2_project_session}].
 
 groups() ->
     [{skeleton, [], [
@@ -161,6 +179,12 @@ groups() ->
         q6_arc_kind_filter,
         q6_find_path_3_public_api,
         resume_against_refreshed_session_fails
+     ]},
+     {sp2_project_session, [], [
+        new_session_1_binds_a_project,
+        q_get_node_reads_a_project_instance,
+        q_get_node_still_reads_environment_when_project_bound,
+        resolve_home_prefers_project_and_logs_on_collision
      ]}].
 
 
@@ -743,6 +767,48 @@ resume_against_refreshed_session_fails(_Config) ->
     ?assertEqual({error, snapshot_expired},
                  graphdb_query:resume(Cont, S2)).
 
+
+%%=====================================================================
+%% SP2 T12 — session binds a Project; resolve_home/2
+%%=====================================================================
+
+new_session_1_binds_a_project(_Config) ->
+    Project = proj(),
+    Session = graphdb_query:new_session(Project),
+    ?assertEqual(Project, maps:get(project, Session)).
+
+q_get_node_reads_a_project_instance(_Config) ->
+    Project = proj(),
+    {ok, Nref, _Report} = graphdb_instance:create_instance(Project, "Widget",
+        widget_class(), root_instance(Project)),
+    Session = graphdb_query:new_session(Project),
+    {ok, #{nref := Nref, kind := instance}, _Session1} =
+        graphdb_query:execute_query(#q_get_node{nref = Nref}, Session).
+
+q_get_node_still_reads_environment_when_project_bound(_Config) ->
+    Project = proj(),
+    Session = graphdb_query:new_session(Project),
+    {ok, #{nref := ?NREF_ROOT, kind := category}, _Session1} =
+        graphdb_query:execute_query(#q_get_node{nref = ?NREF_ROOT}, Session).
+
+resolve_home_prefers_project_and_logs_on_collision(_Config) ->
+    Project = proj(),
+    %% root_instance/1 seeds a compositional-root instance directly at the
+    %% project's first allocated nref -- for a freshly-registered project
+    %% the counter allocator starts at 1 (graphdb_project:next_nref/1), so
+    %% this instance's nref genuinely collides in KEY (not identity) with
+    %% the environment's Root category node, which is also nref 1.
+    %% Bind to whatever root_instance/1 actually returns rather than
+    %% asserting against the literal 1 -- create_instance/create-order
+    %% quirks aside, resolve_home/2's contract is about the returned nref,
+    %% not about a specific integer.
+    ProjRootNref = root_instance(Project),
+    Session = graphdb_query:new_session(Project),
+    {ok, #{nref := FoundNref, kind := instance}, _Session1} =
+        graphdb_query:execute_query(#q_get_node{nref = ProjRootNref}, Session),
+    ?assertEqual(ProjRootNref, FoundNref).
+
+
 %%---------------------------------------------------------------------
 %% sess() -> Session
 %%
@@ -760,3 +826,49 @@ sess() ->
 		S ->
 			S
 	end.
+
+%%---------------------------------------------------------------------
+%% proj() -> Project
+%%
+%% SP2 T12 test helper: returns a Project handle (#{anchor, nodes, rels,
+%% counters}), memoised per test-case process. Stubbed locally here per
+%% Task 10's precedent (graphdb_mgr_SUITE.erl) -- Task 14/15 owns the
+%% suite-wide sess()->proj() migration and will consolidate this.
+%%---------------------------------------------------------------------
+proj() ->
+    case get(sp2_project) of
+        undefined ->
+            {ok, P} = graphdb_project:register_project("SP2 test project"),
+            {ok, Project} = graphdb_project:open(P),
+            put(sp2_project, Project),
+            Project;
+        Project ->
+            Project
+    end.
+
+%%---------------------------------------------------------------------
+%% widget_class() -> ClassNref
+%%
+%% Throwaway environment-scoped class for the SP2 T12 session tests.
+%% Classes live in the environment regardless of which project
+%% instantiates them.
+%%---------------------------------------------------------------------
+widget_class() ->
+    {ok, ClassNref} = graphdb_class:create_class("T12Widget", 3),
+    ClassNref.
+
+%%---------------------------------------------------------------------
+%% root_instance(Project) -> Nref
+%%
+%% Seeds a throwaway compositional-root instance directly into Project's
+%% own (initially empty) nodes table, bypassing create_instance's parent
+%% validation (do_validate_parent/3 requires the parent to already exist,
+%% and a fresh project store has nothing yet to point at). For a freshly
+%% registered project, next_nref/1's first call returns 1 -- callers must
+%% never assume this and should bind/assert on the returned Nref.
+%%---------------------------------------------------------------------
+root_instance(Project) ->
+    Nref = graphdb_project:next_nref(Project),
+    Node = #node{nref = Nref, kind = instance, attribute_value_pairs = []},
+    ok = mnesia:dirty_write(graphdb_ns:node_table(Project), Node),
+    Nref.
