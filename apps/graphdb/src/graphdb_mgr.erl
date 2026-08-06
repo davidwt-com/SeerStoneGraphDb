@@ -185,9 +185,14 @@ get_node(Nref) ->
 %% Reads a single node from Project's own nodes table. Unlike get_node/1,
 %% no retired-marker check -- SP1/SP2 have not extended the retired-read
 %% guard to the project write path; project reads return the raw node.
+%% Gated on a well-formed Project handle (graphdb_project:require_project/1)
+%% BEFORE the gen_server:call, so a malformed handle never reaches the
+%% singleton -- mirrors graphdb_instance:with_project/2.
 %%-----------------------------------------------------------------------------
 get_node(Project, Nref) ->
-	gen_server:call(?MODULE, {get_node, Project, Nref}).
+	with_project(Project, fun(P) ->
+		gen_server:call(?MODULE, {get_node, P, Nref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -286,9 +291,12 @@ delete_node(Nref) ->
 %%-----------------------------------------------------------------------------
 %% delete_node(Project, Nref) -> ok | {error, term()}
 %% Project-scoped twin of delete_node/1. Actual deletion not yet implemented.
+%% Gated on a well-formed Project handle before the gen_server:call.
 %%-----------------------------------------------------------------------------
 delete_node(Project, Nref) ->
-	gen_server:call(?MODULE, {delete_node, Project, Nref}).
+	with_project(Project, fun(P) ->
+		gen_server:call(?MODULE, {delete_node, P, Nref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -310,13 +318,18 @@ unretire_node(Nref) ->
 %% unretire_node(Project, Nref) -> ok | {error, Reason}
 %%
 %% Project-scoped twins. No permanent-tier guard: a project's allocator has
-%% no permanent tier (design §4) -- every project nref is mutable.
+%% no permanent tier (design §4) -- every project nref is mutable. Gated on
+%% a well-formed Project handle before the gen_server:call.
 %%-----------------------------------------------------------------------------
 retire_node(Project, Nref) ->
-	gen_server:call(?MODULE, {retire_node, Project, Nref}).
+	with_project(Project, fun(P) ->
+		gen_server:call(?MODULE, {retire_node, P, Nref})
+	end).
 
 unretire_node(Project, Nref) ->
-	gen_server:call(?MODULE, {unretire_node, Project, Nref}).
+	with_project(Project, fun(P) ->
+		gen_server:call(?MODULE, {unretire_node, P, Nref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -341,13 +354,16 @@ update_node_avps(Nref, AVPs) ->
 
 %%-----------------------------------------------------------------------------
 %% update_node_avps(Project, Nref, AVPs) -> ok | {error, term()}
-%% Project-scoped twin of update_node_avps/2.
+%% Project-scoped twin of update_node_avps/2. Gated on a well-formed Project
+%% handle before the gen_server:call, after client-side AVP validation.
 %%-----------------------------------------------------------------------------
 -spec update_node_avps(map(), integer(), [map()]) -> ok | {error, term()}.
 update_node_avps(Project, Nref, AVPs) ->
 	case validate_avp_updates(AVPs) of
 		ok ->
-			gen_server:call(?MODULE, {update_node_avps, Project, Nref, AVPs});
+			with_project(Project, fun(P) ->
+				gen_server:call(?MODULE, {update_node_avps, P, Nref, AVPs})
+			end);
 		{error, _} = Err ->
 			Err
 	end.
@@ -749,6 +765,23 @@ code_change(_OldVsn, State, _Extra) ->
 %%=============================================================================
 %% Internal Functions
 %%=============================================================================
+
+%%-----------------------------------------------------------------------------
+%% with_project(Project, Fun) -> term()
+%%
+%% Gate a project operation on a valid Project handle. A missing or
+%% malformed handle short-circuits with {error, invalid_project} -- BEFORE
+%% any gen_server:call, so a bad handle never reaches (and never crashes)
+%% the graphdb_mgr singleton via graphdb_ns:node_table/1's bare 2-clause
+%% match. A valid handle runs Fun(Project). Mirrors
+%% graphdb_instance:with_project/2 (same contract, same name, private to
+%% each module).
+%%-----------------------------------------------------------------------------
+with_project(Project, Fun) when is_function(Fun, 1) ->
+	case graphdb_project:require_project(Project) of
+		ok               -> Fun(Project);
+		{error, _} = Err -> Err
+	end.
 
 %%-----------------------------------------------------------------------------
 %% validate_direction(Direction) -> ok | {error, {invalid_direction, term()}}

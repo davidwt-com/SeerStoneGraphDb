@@ -1571,11 +1571,16 @@ get_node_2_reads_project_instance(_Config) ->
 
 get_node_2_does_not_leak_into_environment_table(_Config) ->
 	Project = proj(),
-	%% Project instance nref 1 must not resolve to the environment's nref 1
-	%% (Root, a category node).
-	{ok, 1, _Report} = graphdb_instance:create_instance(Project, "First",
+	%% A project instance's nref must not resolve to whatever node carries
+	%% that same integer in the environment's own nodes table -- get_node/2
+	%% reads must stay scoped to Project's own table (never fall through
+	%% to, or collide with, the environment's nref space). Nref is bound to
+	%% whatever the project allocator actually returns rather than assumed
+	%% to be 1 -- root_instance/1 draws the project's first nref for its
+	%% seeded root, so the real instance created below does not land on 1.
+	{ok, Nref, _Report} = graphdb_instance:create_instance(Project, "First",
 		widget_class(), root_instance(Project)),
-	{ok, #node{kind = instance}} = graphdb_mgr:get_node(Project, 1),
+	{ok, #node{kind = instance}} = graphdb_mgr:get_node(Project, Nref),
 	{ok, #node{kind = category}} = graphdb_mgr:get_node(?NREF_ROOT).
 
 retire_node_2_retires_a_project_instance(_Config) ->
@@ -1583,8 +1588,8 @@ retire_node_2_retires_a_project_instance(_Config) ->
 	{ok, Nref, _Report} = graphdb_instance:create_instance(Project, "Widget",
 		widget_class(), root_instance(Project)),
 	ok = graphdb_mgr:retire_node(Project, Nref),
-	{ok, Node} = graphdb_mgr:get_node(Project, Nref),
-	?assert(graphdb_mgr:has_true_avp(Node)).
+	{ok, #node{attribute_value_pairs = AVPs}} = graphdb_mgr:get_node(Project, Nref),
+	?assert(lists:any(fun(#{value := true}) -> true; (_) -> false end, AVPs)).
 
 update_node_avps_3_edits_a_project_instance(_Config) ->
 	Project = proj(),
