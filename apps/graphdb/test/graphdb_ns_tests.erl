@@ -1,8 +1,7 @@
 -module(graphdb_ns_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--define(PROJECT, #{anchor => 42, nodes => nodes_42,
-                    rels => relationships_42, counters => counters_42}).
+-define(PROJECT, #{anchor => 42, nodes => nodes_42, rels => relationships_42, counters => counters_42}).
 
 namespace_of_environment_roles_test() ->
 	[ ?assertEqual(environment, graphdb_ns:namespace_of(Home, R))
