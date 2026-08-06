@@ -144,13 +144,13 @@
 		update_relationship_both/6,
 		update_relationship_both_in_txn/7,
 		%% Lookups
-		get_instance/1,
-		children/1,
-		compositional_ancestors/1,
-		class_of/1,
-		class_memberships/1,
+		get_instance/2,
+		children/2,
+		compositional_ancestors/2,
+		class_of/2,
+		class_memberships/2,
 		%% Inheritance
-		resolve_value/2,
+		resolve_value/3,
 		%% Proxy recognizer
 		remote_reference_class/0,
 		is_proxy/1,
@@ -308,58 +308,58 @@ add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref,
 
 
 %%-----------------------------------------------------------------------------
-%% get_instance(Nref) -> {ok, #node{}} | {error, not_found | not_an_instance}
+%% get_instance(Project, Nref) -> {ok, #node{}} | {error, not_found | not_an_instance}
 %%-----------------------------------------------------------------------------
-get_instance(Nref) ->
-	gen_server:call(?MODULE, {get_instance, Nref}).
+get_instance(Project, Nref) ->
+	gen_server:call(?MODULE, {get_instance, Project, Nref}).
 
 
 %%-----------------------------------------------------------------------------
-%% children(Nref) -> {ok, [#node{}]} | {error, term()}
+%% children(Project, Nref) -> {ok, [#node{}]} | {error, term()}
 %%
 %% Returns all direct instance-kind children of the given node (uses
 %% Mnesia index on parent).
 %%-----------------------------------------------------------------------------
-children(Nref) ->
-	gen_server:call(?MODULE, {children, Nref}).
+children(Project, Nref) ->
+	gen_server:call(?MODULE, {children, Project, Nref}).
 
 
 %%-----------------------------------------------------------------------------
-%% compositional_ancestors(Nref) -> {ok, [#node{}]} | {error, term()}
+%% compositional_ancestors(Project, Nref) -> {ok, [#node{}]} | {error, term()}
 %%
 %% Returns the ancestor chain of the given instance, starting from its
 %% immediate parent up through the compositional hierarchy.  Stops at
 %% a non-instance node or the end of the chain.  Returns nearest-first.
 %%-----------------------------------------------------------------------------
-compositional_ancestors(Nref) ->
-	gen_server:call(?MODULE, {compositional_ancestors, Nref}).
+compositional_ancestors(Project, Nref) ->
+	gen_server:call(?MODULE, {compositional_ancestors, Project, Nref}).
 
 
 %%-----------------------------------------------------------------------------
-%% class_of(InstanceNref) ->
+%% class_of(Project, InstanceNref) ->
 %%     {ok, ClassNref} | not_found | {error, term()}
 %%
 %% Resolves the class membership of an instance via the membership arc
 %% (characterization=29).  Returns the class nref, or `not_found` if
 %% the instance has no class membership arc.  When an instance belongs
-%% to multiple classes (see `class_memberships/1`), returns whichever
+%% to multiple classes (see `class_memberships/2`), returns whichever
 %% Mnesia surfaces first; callers needing the full set must use
-%% `class_memberships/1`.
+%% `class_memberships/2`.
 %%-----------------------------------------------------------------------------
-class_of(InstanceNref) ->
-	gen_server:call(?MODULE, {class_of, InstanceNref}).
+class_of(Project, InstanceNref) ->
+	gen_server:call(?MODULE, {class_of, Project, InstanceNref}).
 
 
 %%-----------------------------------------------------------------------------
-%% class_memberships(InstanceNref) ->
+%% class_memberships(Project, InstanceNref) ->
 %%     {ok, [ClassNref]} | {error, term()}
 %%
 %% Returns every class the instance belongs to.  Read from the
 %% `node.classes` cache (kept consistent with the 29-characterized
 %% outgoing arcs by the cache invariant — see `graphdb_mgr:verify_caches/0`).
 %%-----------------------------------------------------------------------------
-class_memberships(InstanceNref) ->
-	gen_server:call(?MODULE, {class_memberships, InstanceNref}).
+class_memberships(Project, InstanceNref) ->
+	gen_server:call(?MODULE, {class_memberships, Project, InstanceNref}).
 
 
 %%-----------------------------------------------------------------------------
@@ -379,7 +379,7 @@ add_class_membership(Project, InstanceNref, ClassNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% resolve_value(InstanceNref, AttrNref) ->
+%% resolve_value(Project, InstanceNref, AttrNref) ->
 %%     {ok, Value, Source} | not_found | {error, term()}
 %%
 %% Full inheritance resolution following priority order:
@@ -395,8 +395,8 @@ add_class_membership(Project, InstanceNref, ClassNref) ->
 %% compositional-ancestor instance node.  For Priority 4, NodeNref is
 %% the directly-connected node (one level deep).
 %%-----------------------------------------------------------------------------
-resolve_value(InstanceNref, AttrNref) ->
-	gen_server:call(?MODULE, {resolve_value, InstanceNref, AttrNref}).
+resolve_value(Project, InstanceNref, AttrNref) ->
+	gen_server:call(?MODULE, {resolve_value, Project, InstanceNref, AttrNref}).
 
 
 %%-----------------------------------------------------------------------------
@@ -500,26 +500,26 @@ handle_call({add_class_membership, InstanceNref, ClassNref}, _From,
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Lookups
 %%-----------------------------------------------------------------------------
-handle_call({get_instance, Nref}, _From, State) ->
-	{reply, do_get_instance(Nref), State};
+handle_call({get_instance, Project, Nref}, _From, State) ->
+	{reply, do_get_instance(Project, Nref), State};
 
-handle_call({children, Nref}, _From, State) ->
-	{reply, do_children(Nref), State};
+handle_call({children, Project, Nref}, _From, State) ->
+	{reply, do_children(Project, Nref), State};
 
-handle_call({compositional_ancestors, Nref}, _From, State) ->
-	{reply, do_compositional_ancestors(Nref), State};
+handle_call({compositional_ancestors, Project, Nref}, _From, State) ->
+	{reply, do_compositional_ancestors(Project, Nref), State};
 
-handle_call({class_of, Nref}, _From, State) ->
-	{reply, do_class_of(Nref), State};
+handle_call({class_of, Project, Nref}, _From, State) ->
+	{reply, do_class_of(Project, Nref), State};
 
-handle_call({class_memberships, Nref}, _From, State) ->
-	{reply, do_class_memberships(Nref), State};
+handle_call({class_memberships, Project, Nref}, _From, State) ->
+	{reply, do_class_memberships(Project, Nref), State};
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Inheritance
 %%-----------------------------------------------------------------------------
-handle_call({resolve_value, InstNref, AttrNref}, _From, State) ->
-	{reply, do_resolve_value(InstNref, AttrNref), State};
+handle_call({resolve_value, Project, InstNref, AttrNref}, _From, State) ->
+	{reply, do_resolve_value(Project, InstNref, AttrNref), State};
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Proxy accessor
@@ -1881,9 +1881,15 @@ write_connection_arcs(Home, SourceNref, CharNref, TargetNref, ReciprocalNref,
 %% a class, not retired, and instantiable), then atomically writes the
 %% 29/30 arc pair and appends ClassNref to the instance's classes cache.
 %% Idempotent.
+%%
+%% Not yet Project-routed (Task 9's scope) -- do_write_class_membership/2
+%% below still writes the literal `nodes`/`relationships` tables, so this
+%% passes the literal `environment` Home to do_get_instance/2 to match:
+%% graphdb_ns:node_table(environment) resolves to the same `nodes` atom,
+%% so behaviour is unchanged pending Task 9's full routing of this path.
 %%-----------------------------------------------------------------------------
 do_add_class_membership(InstanceNref, ClassNref, InstAttr, RetAttr) ->
-	case do_get_instance(InstanceNref) of
+	case do_get_instance(environment, InstanceNref) of
 		{ok, _} ->
 			case do_validate_class(ClassNref, InstAttr, RetAttr) of
 				ok               -> do_write_class_membership(InstanceNref,
@@ -1934,26 +1940,26 @@ do_write_class_membership(InstanceNref, ClassNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_class_memberships(InstanceNref) ->
+%% do_class_memberships(Project, InstanceNref) ->
 %%     {ok, [ClassNref]} | {error, term()}
 %%
 %% Reads the instance's `classes` cache (authoritative-equivalent to the
 %% 29-characterized outgoing arcs by the cache invariant).
 %%-----------------------------------------------------------------------------
-do_class_memberships(InstanceNref) ->
-	case do_get_instance(InstanceNref) of
+do_class_memberships(Project, InstanceNref) ->
+	case do_get_instance(Project, InstanceNref) of
 		{ok, #node{classes = Classes}} -> {ok, Classes};
 		{error, _} = Err               -> Err
 	end.
 
 
 %%-----------------------------------------------------------------------------
-%% do_class_of(InstanceNref) ->
+%% do_class_of(Project, InstanceNref) ->
 %%     {ok, ClassNref} | not_found | {error, term()}
 %%-----------------------------------------------------------------------------
-do_class_of(InstanceNref) ->
+do_class_of(Project, InstanceNref) ->
 	F = fun() ->
-		Rels = mnesia:index_read(relationships, InstanceNref,
+		Rels = mnesia:index_read(graphdb_ns:rel_table(Project), InstanceNref,
 			#relationship.source_nref),
 		lists:search(
 			fun(R) ->
@@ -1989,11 +1995,11 @@ class_of_in_txn(Home, InstanceNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_get_instance(Nref) ->
+%% do_get_instance(Project, Nref) ->
 %%     {ok, #node{}} | {error, not_found | not_an_instance | term()}
 %%-----------------------------------------------------------------------------
-do_get_instance(Nref) ->
-	case mnesia:dirty_read(nodes, Nref) of
+do_get_instance(Project, Nref) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), Nref) of
 		[#node{kind = instance} = Node] -> {ok, Node};
 		[_Other]                        -> {error, not_an_instance};
 		[]                              -> {error, not_found}
@@ -2001,13 +2007,13 @@ do_get_instance(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_children(Nref) -> {ok, [#node{}]} | {error, term()}
+%% do_children(Project, Nref) -> {ok, [#node{}]} | {error, term()}
 %%
 %% Returns all direct instance-kind children of the given node.
 %%-----------------------------------------------------------------------------
-do_children(Nref) ->
+do_children(Project, Nref) ->
 	F = fun() ->
-		Children = downward_children_by_arc(Nref, ?ARC_INST_CHILD,
+		Children = downward_children_by_arc(Project, Nref, ?ARC_INST_CHILD,
 			composition),
 		[N || N <- Children, N#node.kind =:= instance]
 	end,
@@ -2015,28 +2021,28 @@ do_children(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_compositional_ancestors(Nref) -> {ok, [#node{}]} | {error, term()}
+%% do_compositional_ancestors(Project, Nref) -> {ok, [#node{}]} | {error, term()}
 %%
 %% Walks the parent chain from the instance's parent.  Collects only
 %% instance-kind ancestors.  Stops at a non-instance node or missing
 %% node.  Returns nearest-first order.
 %%-----------------------------------------------------------------------------
-do_compositional_ancestors(Nref) ->
-	case mnesia:dirty_read(nodes, Nref) of
+do_compositional_ancestors(Project, Nref) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), Nref) of
 		[#node{kind = instance, parents = Parents}] ->
-			do_walk_ancestors(head_parent(Parents), []);
+			do_walk_ancestors(Project, head_parent(Parents), []);
 		[_] ->
 			{error, not_an_instance};
 		[] ->
 			{error, not_found}
 	end.
 
-do_walk_ancestors(undefined, Acc) ->
+do_walk_ancestors(_Project, undefined, Acc) ->
 	{ok, lists:reverse(Acc)};
-do_walk_ancestors(Nref, Acc) ->
-	case mnesia:dirty_read(nodes, Nref) of
+do_walk_ancestors(Project, Nref, Acc) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), Nref) of
 		[#node{kind = instance, parents = Parents} = Node] ->
-			do_walk_ancestors(head_parent(Parents), [Node | Acc]);
+			do_walk_ancestors(Project, head_parent(Parents), [Node | Acc]);
 		[_] ->
 			%% Hit a non-instance node (e.g., category anchor) — stop
 			{ok, lists:reverse(Acc)};
@@ -2050,7 +2056,7 @@ do_walk_ancestors(Nref, Acc) ->
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
-%% do_resolve_value(InstNref, AttrNref) ->
+%% do_resolve_value(Project, InstNref, AttrNref) ->
 %%     {ok, Value, Source} | not_found | {error, term()}
 %%
 %% Full four-level inheritance resolution.  Source identifies the
@@ -2060,40 +2066,53 @@ do_walk_ancestors(Nref, Acc) ->
 %%   - `{compositional, Nref}`  (Priority 3, the ancestor instance)
 %%   - `{connected,     Nref}`  (Priority 4, the directly-connected node)
 %%-----------------------------------------------------------------------------
-do_resolve_value(InstNref, AttrNref) ->
-	case do_get_instance(InstNref) of
+do_resolve_value(Project, InstNref, AttrNref) ->
+	case do_get_instance(Project, InstNref) of
 		{ok, Node} ->
 			%% Priority 1: Local values
 			case find_avp_value(Node#node.attribute_value_pairs, AttrNref) of
 				{ok, V} ->
 					{ok, V, local};
 				not_found ->
-					%% Priority 2: Class-level bound values
-					case resolve_from_class(InstNref, AttrNref) of
-						{ok, V, ClassNref} ->
-							{ok, V, {class, ClassNref}};
+					resolve_value_priority_2_and_below(Project, Node, AttrNref)
+			end;
+		{error, _} = Err ->
+			Err
+	end.
+
+%%-----------------------------------------------------------------------------
+%% resolve_value_priority_2_and_below(Project, Node, AttrNref) ->
+%%     {ok, Value, Source} | not_found | {error, term()}
+%%
+%% Priorities 2-4, threaded with Project for the home-relative reads
+%% (compositional ancestors and directly-connected nodes both live in
+%% Project; class-level lookups stay environment-bound inside
+%% resolve_from_class/3).
+%%-----------------------------------------------------------------------------
+resolve_value_priority_2_and_below(Project, Node, AttrNref) ->
+	InstNref = Node#node.nref,
+	%% Priority 2: Class-level bound values
+	case resolve_from_class(Project, InstNref, AttrNref) of
+		{ok, V, ClassNref} ->
+			{ok, V, {class, ClassNref}};
+		not_found ->
+			%% Priority 3: Compositional ancestors
+			case resolve_from_ancestors(Project,
+					head_parent(Node#node.parents),
+					AttrNref) of
+				{ok, V, AncNref} ->
+					{ok, V, {compositional, AncNref}};
+				not_found ->
+					%% Priority 4: Directly connected nodes
+					case resolve_from_connected(Project,
+						InstNref, AttrNref) of
+						{ok, V, ConnNref} ->
+							{ok, V, {connected, ConnNref}};
 						not_found ->
-							%% Priority 3: Compositional ancestors
-							case resolve_from_ancestors(
-									head_parent(Node#node.parents),
-									AttrNref) of
-								{ok, V, AncNref} ->
-									{ok, V, {compositional, AncNref}};
-								not_found ->
-									%% Priority 4: Directly connected nodes
-									case resolve_from_connected(
-										InstNref, AttrNref) of
-										{ok, V, ConnNref} ->
-											{ok, V, {connected, ConnNref}};
-										not_found ->
-											not_found
-									end;
-								{error, _} = Err ->
-									Err
-							end;
-						{error, _} = Err ->
-							Err
-					end
+							not_found
+					end;
+				{error, _} = Err ->
+					Err
 			end;
 		{error, _} = Err ->
 			Err
@@ -2101,12 +2120,14 @@ do_resolve_value(InstNref, AttrNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% resolve_from_class(InstNref, AttrNref) ->
+%% resolve_from_class(Project, InstNref, AttrNref) ->
 %%     {ok, Value, ClassNref} | not_found |
 %%     {error, {ambiguous_class_value, AttrNref, [{ClassNref, Value}]}}
 %%
 %% Reads every class membership and, for each one, walks the class node
-%% plus its taxonomy ancestors (nearest-first) for an AVP match.
+%% plus its taxonomy ancestors (nearest-first) for an AVP match.  Class
+%% membership is read from Project (`do_class_memberships/2`); the class
+%% nodes themselves are always environment (`graphdb_class:search_class_taxonomy/2`).
 %%
 %% - 0 hits across all memberships -> not_found (caller falls through
 %%   to Priority 3).
@@ -2119,8 +2140,8 @@ do_resolve_value(InstNref, AttrNref) ->
 %%   AttrNref, [{ClassNref, Value}]}}, where ClassNref is the class
 %%   where the value was actually found.
 %%-----------------------------------------------------------------------------
-resolve_from_class(InstNref, AttrNref) ->
-	case do_class_memberships(InstNref) of
+resolve_from_class(Project, InstNref, AttrNref) ->
+	case do_class_memberships(Project, InstNref) of
 		{ok, []} ->
 			not_found;
 		{ok, Classes} ->
@@ -2150,7 +2171,7 @@ classify_class_hits([{ClassNref, _} | _] = Hits, AttrNref) ->
 	end.
 
 %%-----------------------------------------------------------------------------
-%% resolve_from_ancestors(ParentNref, AttrNref) ->
+%% resolve_from_ancestors(Project, ParentNref, AttrNref) ->
 %%     {ok, Value, AncestorNref} | not_found | {error, term()}
 %%
 %% Walks up the compositional parent chain, checking each instance
@@ -2158,15 +2179,15 @@ classify_class_hits([{ClassNref, _} | _] = Hits, AttrNref) ->
 %% match is found, returns the nref of the ancestor instance that held
 %% the value.
 %%-----------------------------------------------------------------------------
-resolve_from_ancestors(undefined, _AttrNref) ->
+resolve_from_ancestors(_Project, undefined, _AttrNref) ->
 	not_found;
-resolve_from_ancestors(ParentNref, AttrNref) ->
-	case mnesia:dirty_read(nodes, ParentNref) of
+resolve_from_ancestors(Project, ParentNref, AttrNref) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), ParentNref) of
 		[#node{kind = instance, parents = GrandParents,
 				attribute_value_pairs = AVPs}] ->
 			case find_avp_value(AVPs, AttrNref) of
 				{ok, V}   -> {ok, V, ParentNref};
-				not_found -> resolve_from_ancestors(
+				not_found -> resolve_from_ancestors(Project,
 								head_parent(GrandParents), AttrNref)
 			end;
 		[_] ->
@@ -2188,24 +2209,25 @@ head_parent([P | _]) -> P.
 
 
 %%-----------------------------------------------------------------------------
-%% downward_children_by_arc(ParentNref, ChildArc, RelKind) -> [#node{}]
+%% downward_children_by_arc(Project, ParentNref, ChildArc, RelKind) -> [#node{}]
 %%
 %% Replaces the retired #node.parent secondary index.  Reads outgoing
 %% arcs from ParentNref of the given Kind/characterization and
 %% dereferences each target nref to a node record.  Must run inside an
 %% active mnesia transaction.
 %%-----------------------------------------------------------------------------
-downward_children_by_arc(ParentNref, ChildArc, RelKind) ->
-	Arcs = mnesia:index_read(relationships, ParentNref,
+downward_children_by_arc(Project, ParentNref, ChildArc, RelKind) ->
+	Arcs = mnesia:index_read(graphdb_ns:rel_table(Project), ParentNref,
 		#relationship.source_nref),
 	Nrefs = [A#relationship.target_nref || A <- Arcs,
 		A#relationship.kind =:= RelKind,
 		A#relationship.characterization =:= ChildArc],
-	lists:flatmap(fun(N) -> mnesia:read(nodes, N) end, Nrefs).
+	lists:flatmap(fun(N) -> mnesia:read(graphdb_ns:node_table(Project), N) end,
+		Nrefs).
 
 
 %%-----------------------------------------------------------------------------
-%% resolve_from_connected(InstNref, AttrNref) ->
+%% resolve_from_connected(Project, InstNref, AttrNref) ->
 %%     {ok, Value, NodeNref} | not_found
 %%
 %% Checks all directly connected nodes (one level deep).  Only
@@ -2215,9 +2237,9 @@ downward_children_by_arc(ParentNref, ChildArc, RelKind) ->
 %% connected node that held the AVP; the caller wraps it as
 %% {connected, NodeNref} for the Source tag.
 %%-----------------------------------------------------------------------------
-resolve_from_connected(InstNref, AttrNref) ->
+resolve_from_connected(Project, InstNref, AttrNref) ->
 	F = fun() ->
-		mnesia:index_read(relationships, InstNref,
+		mnesia:index_read(graphdb_ns:rel_table(Project), InstNref,
 			#relationship.source_nref)
 	end,
 	case graphdb_mgr:transaction(F) of
@@ -2225,30 +2247,30 @@ resolve_from_connected(InstNref, AttrNref) ->
 			TargetNrefs = lists:usort(
 				[R#relationship.target_nref
 					|| R <- Rels, R#relationship.kind =:= connection]),
-			search_targets(TargetNrefs, AttrNref);
+			search_targets(Project, TargetNrefs, AttrNref);
 		{error, _} ->
 			not_found
 	end.
 
 
 %%-----------------------------------------------------------------------------
-%% search_targets(Nrefs, AttrNref) ->
+%% search_targets(Project, Nrefs, AttrNref) ->
 %%     {ok, Value, NodeNref} | not_found
 %%
 %% Checks each target node's AVPs for the attribute.  Returns the
 %% first match together with the nref of the node that held the value.
 %%-----------------------------------------------------------------------------
-search_targets([], _AttrNref) ->
+search_targets(_Project, [], _AttrNref) ->
 	not_found;
-search_targets([Nref | Rest], AttrNref) ->
-	case mnesia:dirty_read(nodes, Nref) of
+search_targets(Project, [Nref | Rest], AttrNref) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), Nref) of
 		[#node{attribute_value_pairs = AVPs}] ->
 			case find_avp_value(AVPs, AttrNref) of
 				{ok, V}   -> {ok, V, Nref};
-				not_found -> search_targets(Rest, AttrNref)
+				not_found -> search_targets(Project, Rest, AttrNref)
 			end;
 		_ ->
-			search_targets(Rest, AttrNref)
+			search_targets(Project, Rest, AttrNref)
 	end.
 
 
