@@ -309,19 +309,29 @@ add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref,
 
 %%-----------------------------------------------------------------------------
 %% get_instance(Project, Nref) -> {ok, #node{}} | {error, not_found | not_an_instance}
+%%
+%% Gated by with_home/2 (SP2 review wave B): Project can be `environment`
+%% (graphdb_query's resolve_home/2 legitimately resolves a bare nref to the
+%% environment) or a well-formed Project handle -- either way the guard runs
+%% BEFORE the gen_server:call, so a malformed handle never reaches the
+%% singleton.  See with_home/2's own header for the full rationale.
 %%-----------------------------------------------------------------------------
 get_instance(Project, Nref) ->
-	gen_server:call(?MODULE, {get_instance, Project, Nref}).
+	with_home(Project, fun(P) ->
+		gen_server:call(?MODULE, {get_instance, P, Nref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
 %% children(Project, Nref) -> {ok, [#node{}]} | {error, term()}
 %%
 %% Returns all direct instance-kind children of the given node (uses
-%% Mnesia index on parent).
+%% Mnesia index on parent).  Gated by with_home/2 -- see get_instance/2.
 %%-----------------------------------------------------------------------------
 children(Project, Nref) ->
-	gen_server:call(?MODULE, {children, Project, Nref}).
+	with_home(Project, fun(P) ->
+		gen_server:call(?MODULE, {children, P, Nref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -330,9 +340,15 @@ children(Project, Nref) ->
 %% Returns the ancestor chain of the given instance, starting from its
 %% immediate parent up through the compositional hierarchy.  Stops at
 %% a non-instance node or the end of the chain.  Returns nearest-first.
+%% Gated by with_home/2 -- see get_instance/2.  graphdb_query threads
+%% resolve_home/2's result straight into this function, and that result can
+%% be the atom `environment`, so this MUST accept environment as well as a
+%% Project handle (plain with_project/2 would wrongly reject it).
 %%-----------------------------------------------------------------------------
 compositional_ancestors(Project, Nref) ->
-	gen_server:call(?MODULE, {compositional_ancestors, Project, Nref}).
+	with_home(Project, fun(P) ->
+		gen_server:call(?MODULE, {compositional_ancestors, P, Nref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -344,10 +360,12 @@ compositional_ancestors(Project, Nref) ->
 %% the instance has no class membership arc.  When an instance belongs
 %% to multiple classes (see `class_memberships/2`), returns whichever
 %% Mnesia surfaces first; callers needing the full set must use
-%% `class_memberships/2`.
+%% `class_memberships/2`.  Gated by with_home/2 -- see get_instance/2.
 %%-----------------------------------------------------------------------------
 class_of(Project, InstanceNref) ->
-	gen_server:call(?MODULE, {class_of, Project, InstanceNref}).
+	with_home(Project, fun(P) ->
+		gen_server:call(?MODULE, {class_of, P, InstanceNref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -357,9 +375,12 @@ class_of(Project, InstanceNref) ->
 %% Returns every class the instance belongs to.  Read from the
 %% `node.classes` cache (kept consistent with the 29-characterized
 %% outgoing arcs by the cache invariant — see `graphdb_mgr:verify_caches/0`).
+%% Gated by with_home/2 -- see get_instance/2.
 %%-----------------------------------------------------------------------------
 class_memberships(Project, InstanceNref) ->
-	gen_server:call(?MODULE, {class_memberships, Project, InstanceNref}).
+	with_home(Project, fun(P) ->
+		gen_server:call(?MODULE, {class_memberships, P, InstanceNref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -394,9 +415,15 @@ add_class_membership(Project, InstanceNref, ClassNref) ->
 %% direct class memberships).  For Priority 3, AncNref is the
 %% compositional-ancestor instance node.  For Priority 4, NodeNref is
 %% the directly-connected node (one level deep).
+%%
+%% Gated by with_home/2 -- see get_instance/2.  graphdb_query threads
+%% resolve_home/2's result straight into this function (same as
+%% compositional_ancestors/2 above), so this too MUST accept `environment`.
 %%-----------------------------------------------------------------------------
 resolve_value(Project, InstanceNref, AttrNref) ->
-	gen_server:call(?MODULE, {resolve_value, Project, InstanceNref, AttrNref}).
+	with_home(Project, fun(P) ->
+		gen_server:call(?MODULE, {resolve_value, P, InstanceNref, AttrNref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -1553,6 +1580,34 @@ with_project(Project, Fun) when is_function(Fun, 1) ->
 		ok               -> Fun(Project);
 		{error, _} = Err -> Err
 	end.
+
+%%-----------------------------------------------------------------------------
+%% with_home(Home, Fun) -> term()
+%%
+%% Read-path twin of with_project/2 (SP2 review wave B fix). The write path
+%% is Project-only, so with_project/2's require_project/1 gate is correct
+%% there. Reads are different: graphdb_query:resolve_home/2 is the only
+%% caller that hands this module a bare-nref-resolved Home, and its result
+%% can legitimately be the atom `environment` (an ordinary environment-
+%% resident nref) as well as a Project handle -- graphdb_project:
+%% require_project/1 REJECTS `environment` outright, so gating the six reads
+%% (get_instance/2, children/2, compositional_ancestors/2, class_of/2,
+%% class_memberships/2, resolve_value/3) with plain with_project/2 would
+%% break every graphdb_query call that resolves to the environment.
+%%
+%% with_home/2 accepts environment OR a well-formed Project map and rejects
+%% only genuine garbage (an unregistered nref, a bare atom that isn't
+%% `environment`, a malformed map, etc.) with {error, invalid_project} --
+%% BEFORE the gen_server:call, so a bad handle never reaches the singleton
+%% and trips graphdb_ns:node_table/1's bare two-clause match from inside the
+%% worker process (the exact hazard with_project/2 already guards against on
+%% the write path; see graphdb_mgr.erl's with_project/2 header for the same
+%% reasoning applied there).
+%%-----------------------------------------------------------------------------
+with_home(environment, Fun) when is_function(Fun, 1) ->
+	Fun(environment);
+with_home(Project, Fun) when is_function(Fun, 1) ->
+	with_project(Project, Fun).
 
 %%-----------------------------------------------------------------------------
 %% update_relationship_avps_in_txn(Home, S, C, T, TemplateSpec, Updates) -> ok

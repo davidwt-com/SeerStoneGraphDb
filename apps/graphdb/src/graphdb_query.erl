@@ -141,7 +141,12 @@ new_session() ->
 %%
 %% Same as new_session/0 but binds the session to a Project, so bare-nref
 %% reads (session_read_node/2, session_read_arcs/4) resolve Home per nref
-%% via resolve_home/2 instead of assuming the environment table.
+%% via resolve_home/2 instead of assuming the environment table.  The
+%% Project value is stored as-is, unvalidated -- new_session/1 is a plain
+%% data constructor, not an entry point that touches Mnesia or the
+%% singleton, so there is nothing unsafe about accepting garbage here.
+%% Validation happens at the two entry points that actually dispatch a
+%% session against the worker: execute_query/2 and resume/2, below.
 new_session(Project) ->
     #{snapshot_at => os:timestamp(),
       cache       => #{},
@@ -154,11 +159,46 @@ refresh(Session) when is_map(Session) ->
 execute_query(Query) ->
     gen_server:call(?MODULE, {execute_query_1, Query}).
 
+%% execute_query(Query, Session) -> {ok, _, _} | {partial, _, _, _} | {error, _}
+%%
+%% Gated on the caller side by validate_session_home/1 (SP2 review wave B
+%% Fix 2) BEFORE the gen_server:call, mirroring graphdb_instance:with_home/2
+%% / with_project/2's established pattern: a Session built via
+%% new_session/1 carries its `project` field completely unvalidated (see
+%% that function's header), and dispatch/2 runs SYNCHRONOUSLY inside this
+%% gen_server's own handle_call -- so a malformed Project field would reach
+%% resolve_home/2's mnesia:dirty_read(graphdb_ns:node_table(Project), _)
+%% and trip graphdb_ns:node_table/1's bare two-clause match FROM INSIDE the
+%% singleton's own process, killing it. Rejecting it here returns a clean
+%% {error, invalid_project} instead.
 execute_query(Query, Session) when is_map(Session) ->
-    gen_server:call(?MODULE, {execute_query_2, Query, Session}).
+    case validate_session_home(Session) of
+        ok               -> gen_server:call(?MODULE, {execute_query_2, Query, Session});
+        {error, _} = Err -> Err
+    end.
 
+%% resume(Cont, Session) -> {ok, _, _} | {partial, _, _, _} | {error, _}
+%%
+%% Same gate as execute_query/2 above -- resume/2 also dispatches Session
+%% straight into a handle_call that resolves bare nrefs via resolve_home/2.
 resume(Cont, Session) when is_map(Session) ->
-    gen_server:call(?MODULE, {resume, Cont, Session}).
+    case validate_session_home(Session) of
+        ok               -> gen_server:call(?MODULE, {resume, Cont, Session});
+        {error, _} = Err -> Err
+    end.
+
+%% validate_session_home(Session) -> ok | {error, invalid_project}
+%%
+%% A session with no `project` key (built via new_session/0) is always
+%% environment-bound -- ok. A session built via new_session/1 must carry
+%% either the atom `environment` or a well-formed Project handle;
+%% graphdb_project:require_project/1 is reused for the well-formedness
+%% check (same contract as graphdb_instance:with_home/2's write-side twin).
+validate_session_home(Session) ->
+    case maps:get(project, Session, environment) of
+        environment -> ok;
+        Project     -> graphdb_project:require_project(Project)
+    end.
 
 %% find_path/3 — public convenience matching the query task spec API.
 find_path(From, To, MaxDepth) ->
@@ -467,8 +507,11 @@ describe_attribute(#node{nref = N, parents = Parents,
     Children = [A#relationship.target_nref || A <- ChildArcs,
         A#relationship.characterization =:= ?ARC_ATTR_CHILD],
     AttrType = avp_value_of(AVPs, attribute_type_marker(Session1)),
-    {Labels, Session2} = resolve_labels([N, Parent | Children], LangSpec,
-                                        Session1),
+    %% N, Parent, and every taxonomy child are all attribute nrefs -- attribute
+    %% nodes are known-environment by construction (see resolve_labels_env/3),
+    %% so this bypasses resolve_home/2's ambiguous-nref guess entirely.
+    {Labels, Session2} = resolve_labels_env([N, Parent | Children], LangSpec,
+                                            Session1),
     Result = #{nref           => N,
                kind           => attribute,
                attribute_type => AttrType,
@@ -500,7 +543,10 @@ describe_class(#node{nref = N, parents = Parents,
     QCAttrs    = [A || {A, _Value} <- QCs],
     AllNrefs = lists:usort([N] ++ Superclasses ++ Ancestors
                            ++ Subclasses ++ QCAttrs),
-    {Labels, Session1} = resolve_labels(AllNrefs, LangSpec, Session),
+    %% N, every superclass/ancestor/subclass, and every QC attribute are all
+    %% class or attribute nrefs -- known-environment by construction (see
+    %% resolve_labels_env/3), so this bypasses resolve_home/2 entirely.
+    {Labels, Session1} = resolve_labels_env(AllNrefs, LangSpec, Session),
     Result = #{nref                       => N,
                kind                       => class,
                superclasses               => Superclasses,
@@ -558,15 +604,33 @@ describe_instance(#node{nref = N, parents = Parents, classes = Classes,
                   source           => A#relationship.source_nref,
                   template         => template_avp(A#relationship.avps)}
                 || A <- InArcs],
-    AllNrefs = lists:usort(
-        [N] ++ Classes ++ ClassAncestors
+    %% Split into known-environment nrefs (classes/class-ancestors/arc-label
+    %% characterizations -- always environment by field-role, per
+    %% graphdb_ns:namespace_of/2) and genuinely ambiguous ones (N itself,
+    %% the compositional parent/ancestors, and connection target/source --
+    %% all instance-space nrefs that may collide in key with an environment
+    %% nref, so they still need resolve_home/2's per-session guess). Routing
+    %% the first group directly to the environment table, instead of through
+    %% resolve_home/2, is the SP2 review wave B Fix 1: previously ALL of
+    %% AllNrefs went through resolve_home/2, so a project-bound session with
+    %% enough instances could silently misresolve a low environment nref
+    %% (e.g. an arc-label characterization) into the project's own table,
+    %% get back the wrong kind, and drop its label with no error.
+    EnvNrefs = lists:usort(
+        Classes ++ ClassAncestors
+        ++ [maps:get(characterization, M) || M <- Outgoing]
+        ++ [maps:get(characterization, M) || M <- Incoming]),
+    AmbiguousNrefs = lists:usort(
+        [N]
         ++ case CompositionalParent of undefined -> []; X -> [X] end
         ++ CompAncestors
-        ++ [maps:get(characterization, M) || M <- Outgoing]
-        ++ [maps:get(target,           M) || M <- Outgoing]
-        ++ [maps:get(characterization, M) || M <- Incoming]
-        ++ [maps:get(source,           M) || M <- Incoming]),
-    {Labels, Session3} = resolve_labels(AllNrefs, LangSpec, Session2),
+        ++ [maps:get(target, M) || M <- Outgoing]
+        ++ [maps:get(source, M) || M <- Incoming]),
+    {EnvLabels, Session3}       = resolve_labels_env(EnvNrefs, LangSpec,
+                                                      Session2),
+    {AmbiguousLabels, Session4} = resolve_labels(AmbiguousNrefs, LangSpec,
+                                                 Session3),
+    Labels = maps:merge(EnvLabels, AmbiguousLabels),
     Result = #{nref                    => N,
                kind                    => instance,
                classes                 => Classes,
@@ -578,7 +642,7 @@ describe_instance(#node{nref = N, parents = Parents, classes = Classes,
                incoming_connections    => Incoming,
                avps                    => AVPs,
                labels                  => Labels},
-    {{ok, Result}, Session3}.
+    {{ok, Result}, Session4}.
 
 %%---------------------------------------------------------------------
 %% resolved_attributes(Node, Home) -> #{AttrNref => #{value, source}}
@@ -645,28 +709,56 @@ avp_value_of(AVPs, AttrNref) ->
 
 %%---------------------------------------------------------------------
 %% resolve_labels(Nrefs, LangSpec, Session) -> {LabelMap, Session1}
+%% resolve_labels_env(Nrefs, LangSpec, Session) -> {LabelMap, Session1}
 %%
 %% Resolves a label for every nref via graphdb_language.  For
 %% LangSpec = default, uses base-language English. For
 %% {language, LangNref}, looks up the registered chain.  Nrefs that
 %% resolve to no label are simply omitted from the map.
 %%
-%% Nrefs passed in here can be a mix of always-environment nrefs
-%% (classes, attributes, arc labels) and instance nrefs that may
-%% legitimately live in a bound Project (describe_instance's AllNrefs
-%% set) -- kind detection (name_attr_for_node/2) is Home-routed per
-%% nref via resolve_home/2 so a collision resolves to the same store
-%% describe_instance itself would read from. The graphdb_language
-%% overlay stays environment-bound regardless (see resolve_one_label/3)
-%% -- labels are a shared, language-registration-driven layer, not
-%% per-project data.
+%% Two entry points, both thin wrappers around the shared /4 worker below,
+%% differing only in how each nref's kind is looked up for NAME_ATTR_*
+%% selection (SP2 review wave B Fix 1):
+%%
+%%   resolve_labels/3     -- for nrefs that are genuinely ambiguous bare
+%%                            nrefs with no context to disambiguate them
+%%                            (e.g. describe_instance's own nref, its
+%%                            compositional parent/ancestors, and connection
+%%                            target/source nrefs -- all instance-space,
+%%                            may legitimately live in a bound Project, and
+%%                            may collide in key with an environment nref).
+%%                            Kind detection routes through resolve_home/2,
+%%                            same as before.
+%%
+%%   resolve_labels_env/3 -- for nrefs that are known-environment BY
+%%                            CONSTRUCTION: arc-label characterizations,
+%%                            class nrefs, and attribute nrefs always
+%%                            resolve to the environment (see
+%%                            graphdb_ns:namespace_of/2's characterization/
+%%                            node_classes/taxonomy_parent clauses -- classes
+%%                            and attributes are never Project-resident).
+%%                            Kind detection reads the environment `nodes`
+%%                            table directly, with NO resolve_home/2 guess
+%%                            at all -- so a project-bound session can never
+%%                            misresolve one of these into the project's own
+%%                            table and silently drop its label.  Before
+%%                            this fix, describe_attribute/describe_class
+%%                            (100% known-environment nrefs) and half of
+%%                            describe_instance's AllNrefs went through
+%%                            resolve_home/2 unnecessarily/incorrectly.
 %%---------------------------------------------------------------------
 resolve_labels(Nrefs, LangSpec, Session) ->
+    resolve_labels_4(Nrefs, LangSpec, Session, ambiguous).
+
+resolve_labels_env(Nrefs, LangSpec, Session) ->
+    resolve_labels_4(Nrefs, LangSpec, Session, environment).
+
+resolve_labels_4(Nrefs, LangSpec, Session, HomeMode) ->
     Chain = label_chain(LangSpec),
     Map = lists:foldl(fun
         (undefined, Acc) -> Acc;
         (N, Acc) when is_integer(N) ->
-            case resolve_one_label(Session, N, Chain) of
+            case resolve_one_label(Session, N, Chain, HomeMode) of
                 undefined -> Acc;
                 Label     -> Acc#{N => Label}
             end
@@ -688,8 +780,8 @@ lookup_chain_for_nref(LangNref) ->
     _ = LangNref,
     [en].
 
-resolve_one_label(Session, Nref, Chain) ->
-    NameAttr = name_attr_for_node(Session, Nref),
+resolve_one_label(Session, Nref, Chain, HomeMode) ->
+    NameAttr = name_attr_for_node(Session, Nref, HomeMode),
     %% The language overlay itself is environment-bound (labels are
     %% registered against the shared language layer, not per-project) --
     %% only the kind-detection read above is Home-routed.
@@ -699,25 +791,32 @@ resolve_one_label(Session, Nref, Chain) ->
     end.
 
 %%---------------------------------------------------------------------
-%% name_attr_for_node(Session, Nref) -> integer()
+%% name_attr_for_node(Session, Nref, HomeMode) -> integer()
 %%
 %% Returns the appropriate NAME_ATTR_* for the node based on its kind.
-%% Resolves Home via resolve_home/2 (the nref may be a project instance
-%% colliding in key with an environment nref) then reads through
-%% dirty_read for kind detection.  The catch-all returns
-%% NAME_ATTR_CATEGORY as a safe default — templates and other unknown
-%% kinds will simply fail to resolve, which the caller handles by
-%% omitting them from the label map.
+%%
+%%   HomeMode = environment -- Nref is known-environment by construction
+%%              (see resolve_labels_env/3's header); reads the environment
+%%              `nodes` table directly, no resolve_home/2 guess.
+%%   HomeMode = ambiguous   -- Nref is a genuinely ambiguous bare nref (may
+%%              be a project instance colliding in key with an environment
+%%              nref); resolves Home via resolve_home/2 first, as before.
+%%
+%% The catch-all returns NAME_ATTR_CATEGORY as a safe default — templates
+%% and other unknown kinds will simply fail to resolve, which the caller
+%% handles by omitting them from the label map.
 %%---------------------------------------------------------------------
-name_attr_for_node(Session, Nref) ->
+name_attr_for_node(_Session, Nref, environment) ->
+    name_attr_of_kind(mnesia:dirty_read(nodes, Nref));
+name_attr_for_node(Session, Nref, ambiguous) ->
     Home = resolve_home(Session, Nref),
-    case mnesia:dirty_read(graphdb_ns:node_table(Home), Nref) of
-        [#node{kind = category}]  -> ?NAME_ATTR_CATEGORY;
-        [#node{kind = attribute}] -> ?NAME_ATTR_ATTRIBUTE;
-        [#node{kind = class}]     -> ?NAME_ATTR_CLASS;
-        [#node{kind = instance}]  -> ?NAME_ATTR_INSTANCE;
-        _                         -> ?NAME_ATTR_CATEGORY
-    end.
+    name_attr_of_kind(mnesia:dirty_read(graphdb_ns:node_table(Home), Nref)).
+
+name_attr_of_kind([#node{kind = category}])  -> ?NAME_ATTR_CATEGORY;
+name_attr_of_kind([#node{kind = attribute}]) -> ?NAME_ATTR_ATTRIBUTE;
+name_attr_of_kind([#node{kind = class}])     -> ?NAME_ATTR_CLASS;
+name_attr_of_kind([#node{kind = instance}])  -> ?NAME_ATTR_INSTANCE;
+name_attr_of_kind(_)                         -> ?NAME_ATTR_CATEGORY.
 
 %%---------------------------------------------------------------------
 %% all_subclasses(ClassNref) -> [integer()]

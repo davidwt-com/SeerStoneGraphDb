@@ -79,6 +79,7 @@
     q2_includes_labels_default_english/1,
     q2_not_found_returns_error/1,
     q2_rejects_non_attribute_nref/1,
+    q2_label_not_dropped_under_project_session/1,
     %% describe_class
     q3_describes_class_with_superclasses/1,
     q3_lists_subclasses/1,
@@ -108,7 +109,10 @@
     new_session_1_binds_a_project/1,
     q_get_node_reads_a_project_instance/1,
     q_get_node_still_reads_environment_when_project_bound/1,
-    resolve_home_prefers_project_and_logs_on_collision/1
+    resolve_home_prefers_project_and_logs_on_collision/1,
+    %% SP2 review wave B Fix 2 — malformed-handle read-path gating
+    execute_query_2_rejects_bad_session_project/1,
+    resume_rejects_bad_session_project/1
 ]).
 
 suite() ->
@@ -150,7 +154,8 @@ groups() ->
         q2_includes_parent_and_taxonomy,
         q2_includes_labels_default_english,
         q2_not_found_returns_error,
-        q2_rejects_non_attribute_nref
+        q2_rejects_non_attribute_nref,
+        q2_label_not_dropped_under_project_session
      ]},
      {q3_describe_class, [], [
         q3_describes_class_with_superclasses,
@@ -184,7 +189,9 @@ groups() ->
         new_session_1_binds_a_project,
         q_get_node_reads_a_project_instance,
         q_get_node_still_reads_environment_when_project_bound,
-        resolve_home_prefers_project_and_logs_on_collision
+        resolve_home_prefers_project_and_logs_on_collision,
+        execute_query_2_rejects_bad_session_project,
+        resume_rejects_bad_session_project
      ]}].
 
 
@@ -522,6 +529,43 @@ q2_rejects_non_attribute_nref(_Config) ->
         graphdb_query:execute_query(
             #q_describe{nref = ?NREF_ROOT, labels = default}).
 
+%% SP2 review wave B Fix 1 regression: reproduces the reviewer's exact
+%% repro. describe_attribute's own resolve_labels call used to route
+%% N/Parent/Children (all attribute nrefs, always environment-resident)
+%% through resolve_home/2, so a project-bound session whose project had
+%% minted enough instances to collide numerically with a low bootstrap
+%% nref (here, 8 = "Relationships") silently dropped that nref's label
+%% instead of erroring -- resolve_home/2 found a project instance at key
+%% 8, read it as kind=instance, and NAME_ATTR_INSTANCE (20) doesn't match
+%% the environment's real Relationships node, so resolve_label missed.
+%%
+%% Mint 9 project nrefs (a compositional root plus 8 filler instances) so
+%% the project's own allocator has assigned nref 8 to one of them -- a
+%% genuine key collision with the environment's bootstrap "Relationships"
+%% attribute (also nref 8). Then describe a relationship-type attribute
+%% whose parent is nref 8 under a project-bound session and confirm BOTH
+%% the described attribute's own label AND its parent's (nref 8's) label
+%% are present -- pre-fix, nref 8's label was silently missing.
+q2_label_not_dropped_under_project_session(_Config) ->
+    Project = proj(),
+    Class = widget_class(),
+    Root = root_instance(Project),
+    lists:foreach(fun(I) ->
+        {ok, _, _} = graphdb_instance:create_instance(Project,
+            "Filler" ++ integer_to_list(I), Class, Root)
+    end, lists:seq(1, 8)),
+    {ok, RelType} = graphdb_attr:create_relationship_type("QRelType"),
+    Session = graphdb_query:new_session(Project),
+    {ok, R, _Session1} = graphdb_query:execute_query(
+        #q_describe{nref = RelType, labels = default}, Session),
+    ?assertEqual(?NREF_RELATIONSHIPS, maps:get(parent, R)),
+    Labels = maps:get(labels, R),
+    ?assert(maps:is_key(RelType, Labels)),
+    %% This is the assertion that failed before the fix: nref 8's label
+    %% ("Relationships") was silently absent from Labels.
+    ?assert(maps:is_key(?NREF_RELATIONSHIPS, Labels)),
+    ?assertEqual("Relationships", maps:get(?NREF_RELATIONSHIPS, Labels)).
+
 %%---------------------------------------------------------------------
 %% describe_class
 %%---------------------------------------------------------------------
@@ -649,18 +693,13 @@ q4_instance_not_found(_Config) ->
 %%---------------------------------------------------------------------
 %% list_instances_of
 %%---------------------------------------------------------------------
-%% KNOWN SP2 GAP (see report): #q_instances_of{}'s dispatch reads outgoing
-%% instantiation arcs from the CLASS's own resolved Home
-%% (session_read_arcs(Session, ClassNref, outgoing, [instantiation])).
-%% resolve_home/2 (Task 12) resolves Home by NODE existence, and a class
-%% node never lives in a project's own table, so Home always resolves to
-%% environment for a class nref -- regardless of session project binding.
-%% But instance_records/5 (graphdb_instance, Task 9) deliberately writes
-%% the class->instance membership row (C2I) into the PROJECT's own
-%% relationships table (design note there: "Reads of this row ... never [by]
-%% scanning the environment's relationships table by source_nref=ClassNref
-%% for this purpose"). Q5 is exactly that disallowed scan. No test-only fix
-%% exists; #q_instances_of{}'s dispatch needs project-aware routing.
+%% #q_instances_of{}'s dispatch routes explicitly through the session's
+%% bound Project (graphdb_query.erl's ProjectHome / session_read_arcs_home/5)
+%% rather than resolve_home/2's bare-nref guess, since the class->instance
+%% membership row (C2I) is always written into the PROJECT's own
+%% relationships table regardless of where the class node itself resolves
+%% (fixed by commit a419628; formerly a known gap in this suite's own
+%% comments here, now stale and removed).
 q5_lists_direct_instances(_Config) ->
     {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
     {ok, Tau, _} = graphdb_instance:create_instance(proj(),
@@ -688,19 +727,30 @@ q5_non_recursive_excludes_subclasses(_Config) ->
     {ok, Car} = graphdb_class:create_class("Car",     Veh),
     {ok, Tau, _} = graphdb_instance:create_instance(proj(),
                     "Taurus", Car, root()),
-    %% Negative assertion, so it passes today regardless of the Q5/project
-    %% gap documented above -- session-bound for consistency with its
-    %% siblings and so it stays meaningful once that gap is fixed.
     Session = graphdb_query:new_session(proj()),
     {ok, Insts, _Session1} = graphdb_query:execute_query(
         #q_instances_of{class = Veh, recursive = false}, Session),
     ?assertNot(lists:member(Tau, Insts)).
 
+%% SP2 review wave B Fix 3: project-bound, not the project-less
+%% execute_query/1 form. Under execute_query/1 the session carries no
+%% Project (project => undefined), so #q_instances_of{}'s dispatch takes
+%% its ProjectHome =:= undefined branch and reads instantiation arcs from
+%% the environment, where NO class ever has project-resident instances --
+%% every class returns [] there, proven or not, so the assertion could
+%% never fail. Binding to proj() -- AND populating that same project with
+%% an instance of an unrelated class -- makes this test actually exercise
+%% "a real, non-empty project still returns [] for a genuinely empty
+%% class", matching its q5 siblings.
 q5_class_with_no_instances(_Config) ->
-    {ok, Veh} = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
-    ?assertMatch({ok, []},
+    {ok, Veh}   = graphdb_class:create_class("Vehicle", ?NREF_CLASSES),
+    {ok, Other} = graphdb_class:create_class("Other",   ?NREF_CLASSES),
+    {ok, _, _}  = graphdb_instance:create_instance(proj(),
+                   "Something", Other, root()),
+    Session = graphdb_query:new_session(proj()),
+    ?assertMatch({ok, [], _},
                  graphdb_query:execute_query(
-                     #q_instances_of{class = Veh, recursive = true})).
+                     #q_instances_of{class = Veh, recursive = true}, Session)).
 
 %%---------------------------------------------------------------------
 %% find_path
@@ -840,6 +890,49 @@ resolve_home_prefers_project_and_logs_on_collision(_Config) ->
     {ok, #{nref := FoundNref, kind := instance}, _Session1} =
         graphdb_query:execute_query(#q_get_node{nref = ProjRootNref}, Session),
     ?assertEqual(ProjRootNref, FoundNref).
+
+%%-----------------------------------------------------------------------------
+%% SP2 review wave B Fix 2 regression -- reproduces the reviewer's "bogus
+%% session" transcript. new_session/1 stores its Project argument
+%% unvalidated; before this fix, feeding that session straight into
+%% execute_query/2 (or resume/2) reached resolve_home/2's
+%% mnesia:dirty_read(graphdb_ns:node_table(Project), _) INSIDE this
+%% gen_server's own handle_call (dispatch/2 runs synchronously, not via a
+%% nested call), and graphdb_ns:node_table/1's bare two-clause match
+%% crashed the graphdb_query singleton itself. validate_session_home/1
+%% now gates both entry points on the caller side, before the
+%% gen_server:call, returning a clean {error, invalid_project} instead.
+%% The empirical proof: the worker's registered pid is unchanged
+%% before/after (this suite starts graphdb_query directly, not under a
+%% supervisor, so a crash would unregister the name rather than restart
+%% it -- either divergence from the pre-call pid proves the crash).
+%%-----------------------------------------------------------------------------
+execute_query_2_rejects_bad_session_project(_Config) ->
+    PidBefore = whereis(graphdb_query),
+    ?assert(is_pid(PidBefore)),
+    Session = graphdb_query:new_session(not_a_project),
+    ?assertEqual({error, invalid_project},
+                 graphdb_query:execute_query(
+                     #q_get_node{nref = ?NREF_ROOT}, Session)),
+    ?assertEqual(PidBefore, whereis(graphdb_query)).
+
+resume_rejects_bad_session_project(_Config) ->
+    {ok, A}  = graphdb_class:create_class("A", ?NREF_CLASSES),
+    {ok, B}  = graphdb_class:create_class("B", A),
+    {ok, C}  = graphdb_class:create_class("C", B),
+    {ok, _D} = graphdb_class:create_class("D", C),
+    Q = #q_find_path{from = C, to = A, max_depth = 1,
+                     arc_kinds = [taxonomy]},
+    S0 = graphdb_query:new_session(),
+    {partial, _, Cont, S1} = graphdb_query:execute_query(Q, S0),
+    %% Corrupt the already-valid, already-in-flight session's Home after
+    %% the fact -- resume/2 must re-validate, not trust a session just
+    %% because execute_query/2 accepted it earlier.
+    BadSession = S1#{project => not_a_project},
+    PidBefore = whereis(graphdb_query),
+    ?assertEqual({error, invalid_project},
+                 graphdb_query:resume(Cont, BadSession)),
+    ?assertEqual(PidBefore, whereis(graphdb_query)).
 
 
 %%---------------------------------------------------------------------

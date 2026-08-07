@@ -113,6 +113,16 @@
 	get_instance_returns_node/1,
 	get_instance_not_found/1,
 	get_instance_rejects_non_instance/1,
+	%% SP2 review wave B Fix 2 -- read-path handle gating
+	get_instance_rejects_bad_session/1,
+	children_rejects_bad_session/1,
+	compositional_ancestors_rejects_bad_session/1,
+	class_of_rejects_bad_session/1,
+	class_memberships_rejects_bad_session/1,
+	resolve_value_rejects_bad_session/1,
+	compositional_ancestors_accepts_environment_home/1,
+	resolve_value_accepts_environment_home/1,
+	bad_session_does_not_crash_worker/1,
 	%% Hierarchy
 	children_returns_instance_children/1,
 	children_empty_for_leaf/1,
@@ -278,7 +288,16 @@ groups() ->
 		{lookups, [], [
 			get_instance_returns_node,
 			get_instance_not_found,
-			get_instance_rejects_non_instance
+			get_instance_rejects_non_instance,
+			get_instance_rejects_bad_session,
+			children_rejects_bad_session,
+			compositional_ancestors_rejects_bad_session,
+			class_of_rejects_bad_session,
+			class_memberships_rejects_bad_session,
+			resolve_value_rejects_bad_session,
+			compositional_ancestors_accepts_environment_home,
+			resolve_value_accepts_environment_home,
+			bad_session_does_not_crash_worker
 		]},
 		{hierarchy, [], [
 			children_returns_instance_children,
@@ -1162,6 +1181,91 @@ get_instance_rejects_non_instance(_Config) ->
 	Node = #node{nref = Nref, kind = class, attribute_value_pairs = []},
 	ok = mnesia:dirty_write(graphdb_ns:node_table(Project), Node),
 	?assertEqual({error, not_an_instance}, graphdb_instance:get_instance(Project, Nref)).
+
+
+%%-----------------------------------------------------------------------------
+%% SP2 review wave B Fix 2 -- read-path handle gating.
+%%
+%% Before this fix, get_instance/2, children/2, compositional_ancestors/2,
+%% class_of/2, class_memberships/2, and resolve_value/3 all called
+%% gen_server:call directly with an unvalidated Project/Home argument.  A
+%% malformed handle (anything that is neither `environment` nor a
+%% well-formed Project map) reached graphdb_ns:node_table/1's bare
+%% two-clause match INSIDE the graphdb_instance worker process, which
+%% raised function_clause and crashed the singleton shared by every
+%% project.  with_home/2 now gates all six on the caller side, before the
+%% gen_server:call, exactly like the write path's with_project/2.
+%%-----------------------------------------------------------------------------
+get_instance_rejects_bad_session(_Config) ->
+	?assertEqual({error, invalid_project},
+		graphdb_instance:get_instance(not_a_session, 1)).
+
+children_rejects_bad_session(_Config) ->
+	?assertEqual({error, invalid_project},
+		graphdb_instance:children(not_a_session, 1)).
+
+compositional_ancestors_rejects_bad_session(_Config) ->
+	?assertEqual({error, invalid_project},
+		graphdb_instance:compositional_ancestors(not_a_session, 1)).
+
+class_of_rejects_bad_session(_Config) ->
+	?assertEqual({error, invalid_project},
+		graphdb_instance:class_of(not_a_session, 1)).
+
+class_memberships_rejects_bad_session(_Config) ->
+	?assertEqual({error, invalid_project},
+		graphdb_instance:class_memberships(not_a_session, 1)).
+
+resolve_value_rejects_bad_session(_Config) ->
+	?assertEqual({error, invalid_project},
+		graphdb_instance:resolve_value(not_a_session, 1, 2)).
+
+%%-----------------------------------------------------------------------------
+%% compositional_ancestors/2 and resolve_value/3 are the two reads
+%% graphdb_query threads resolve_home/2's result into directly, and that
+%% result can be the atom `environment` (an ordinary environment-resident
+%% nref) -- plain with_project/2 (which REJECTS `environment`) would have
+%% broken every such call.  with_home/2 must accept it: prove it does, by
+%% pointing both functions at the environment's own bootstrap Root node
+%% (nref 1, kind=category) and confirming the call reaches the environment
+%% table (a real not_an_instance / not_found reply) instead of
+%% short-circuiting with {error, invalid_project}.
+%%-----------------------------------------------------------------------------
+compositional_ancestors_accepts_environment_home(_Config) ->
+	?assertEqual({error, not_an_instance},
+		graphdb_instance:compositional_ancestors(environment, ?NREF_ROOT)).
+
+resolve_value_accepts_environment_home(_Config) ->
+	?assertEqual({error, not_an_instance},
+		graphdb_instance:resolve_value(environment, ?NREF_ROOT, ?NREF_ROOT)).
+
+%%-----------------------------------------------------------------------------
+%% The empirical proof the review demanded: a malformed handle returns a
+%% clean error AND the graphdb_instance worker's pid is unchanged
+%% before/after -- i.e. it never crashed and was never restarted by its
+%% supervisor.  (This suite starts graphdb_instance directly via
+%% start_link/0, not under a supervisor, so a crash would leave the
+%% registered name unregistered rather than restarted -- whereis/1 would
+%% return `undefined` afterwards instead of a different pid. Either
+%% divergence from the pre-call pid proves the crash.)
+%%-----------------------------------------------------------------------------
+bad_session_does_not_crash_worker(_Config) ->
+	PidBefore = whereis(graphdb_instance),
+	?assert(is_pid(PidBefore)),
+	?assertEqual({error, invalid_project},
+		graphdb_instance:get_instance(not_a_session, 1)),
+	?assertEqual({error, invalid_project},
+		graphdb_instance:children(not_a_session, 1)),
+	?assertEqual({error, invalid_project},
+		graphdb_instance:compositional_ancestors(not_a_session, 1)),
+	?assertEqual({error, invalid_project},
+		graphdb_instance:class_of(not_a_session, 1)),
+	?assertEqual({error, invalid_project},
+		graphdb_instance:class_memberships(not_a_session, 1)),
+	?assertEqual({error, invalid_project},
+		graphdb_instance:resolve_value(not_a_session, 1, 2)),
+	PidAfter = whereis(graphdb_instance),
+	?assertEqual(PidBefore, PidAfter).
 
 
 %%=============================================================================
