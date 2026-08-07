@@ -1621,9 +1621,8 @@ mutate_mixed_rollback(_Config) ->
 %% Project-taking twins (SP2 T10): get_node/2, retire_node/2,
 %% update_node_avps/3, delete_node/2.
 %%
-%% proj() is stubbed locally here (Task 12 has not landed yet in this
-%% execution order) -- copies the canonical helper from the plan's Task 14
-%% Step 1 code block verbatim. Task 12/14 will remove this local copy.
+%% proj() (defined below, near the end of this file) is a normal per-suite
+%% CT helper -- each SP2-era suite defines its own memoised copy.
 %%=============================================================================
 
 get_node_2_reads_project_instance(_Config) ->

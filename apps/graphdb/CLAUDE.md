@@ -17,8 +17,8 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_sup.erl`       | OTP `supervisor` behaviour callback module                                                                                                                                                     |
 | `graphdb_nref.erl`      | Switchable node-nref allocation facade gen_server (first child; permanent during init)                                                                                                         |
 | `graphdb_bootstrap.erl` | Bootstrap file loader + Mnesia schema creator (implemented)                                                                                                                                    |
-| `graphdb_ns.erl`        | Pure namespace-resolution module (SP1) — `namespace_of/1`, `target_namespace/1`; the code expression of the field-role namespace map                                                           |
-| `graphdb_project.erl`   | Project registry + project session (SP1) — `register_project/1`, `is_project/1`, `open_session/1`, `session_project/1`, `require_session/1`; canonical project-scoped relationship API surface |
+| `graphdb_ns.erl`        | Pure namespace-resolution module (SP1+SP2) — `namespace_of/2`, `target_namespace/2` (home-relative), `node_table/1`, `rel_table/1`; the code expression of the field-role namespace map          |
+| `graphdb_project.erl`   | Project registry + physical store (SP1+SP2) — `register_project/1` (also creates the project's three tables), `is_project/1`, `open/1`, `require_project/1`, `next_nref/1`, `next_rel_id_pair/1`; canonical project-scoped relationship API surface |
 | `graphdb_mgr.erl`       | Primary coordinator gen_server (implemented — bootstrap init, read API, category guard)                                                                                                        |
 | `graphdb_rules.erl`     | Graph rules gen_server (implemented — F4 Phase A+B1+B2+B3+B4+B5: rule meta-ontology, create/retrieve, taxonomy walk, composition firing, propose mode, connection firing, conflict precedence) |
 | `graphdb_attr.erl`      | Attribute library gen_server (implemented)                                                                                                                                                     |
@@ -70,39 +70,59 @@ nref spaces:
 - **Environment**: scaffold nrefs 1–35; permanent tier `[?LABEL_START, ?NREF_START)` = `[10001, 1000000)` holds English (10000), loader-assigned atom-labeled nodes, and worker `init/1` seeds (graphdb_attr, graphdb_language sub-groups); runtime nrefs ≥ `?NREF_START` (1000000). Boundaries are macros in `apps/graphdb/include/graphdb_nrefs.hrl` — not directives in `bootstrap.terms`. All node-nref allocation goes through `graphdb_nref`.
 - **Project**: allocator starts at **1** — no pre-assigned nrefs, no bootstrap file, no floor needed
 
-Cross-database nref resolution: `characterization` and `reciprocal` fields always reference environment nrefs; `target_nref` is routed to environment or project based on the arc label's `target_kind` AVP.
+Cross-database nref resolution is **home-relative**: `characterization`/
+`reciprocal` (arc labels), class nodes, and attribute nodes always resolve to
+the environment; `source_nref`/`target_nref` route through the record's
+`Home :: environment | Project` (see below).
 
-### Reference & namespace model (SP1)
+### Reference & namespace model (SP1+SP2)
 
-The environment/project separation is being built as a four-sub-project
-program (design: `../../docs/designs/project-env-reference-namespace-model-design.md`;
+The environment/project separation is a four-sub-project program (design:
+`../../docs/designs/project-env-reference-namespace-model-design.md`;
 tracking: `../../TASKS.md` → *Multi-project sessions*). SP1 (reference &
-namespace model) is implemented at the **API/code layer only — no
-`node`/`relationship` record changes**:
+namespace model) and SP2 (physical project store) are both implemented:
 
-- **Namespace map** — `graphdb_ns:namespace_of/1` / `target_namespace/1`
-  encode which store each nref field resolves against
-  (`environment | project | home`). Pure; the code expression of the design's
-  field-role table.
-- **Project identity + session** — a project is an anchor node under `Projects`
-  (nref 5), created by `graphdb_project:register_project/1`. A project
-  operation carries a `Session` (`graphdb_project:open_session/1`), validated
-  by `require_session/1`. Sessions are opaque values threaded as data (the
-  workers are shared singletons, so project context cannot be ambient).
-- **Required session on the project write path** — `create_instance`,
+- **Namespace map** — `graphdb_ns:namespace_of/2` / `target_namespace/2`
+  take a leading `Home :: environment | Project` and encode which store each
+  nref field resolves against. `node_table/1` / `rel_table/1` map a `Home`
+  to its physical Mnesia table atom. Pure; the code expression of the
+  design's field-role table.
+- **Project identity + physical store** — a project is an anchor node under
+  `Projects` (nref 5). `graphdb_project:register_project/1` creates that
+  anchor **and** the project's own three Mnesia tables: `nodes_<Anchor>`,
+  `relationships_<Anchor>`, `counters_<Anchor>` (`<Anchor>` = the anchor's
+  environment nref). `open/1` resolves a registered project nref into a
+  `Project` handle `#{anchor, nodes, rels, counters}`; `require_project/1`
+  validates that handle. `next_nref/1` / `next_rel_id_pair/1` are the
+  project-local allocators — `mnesia:dirty_update_counter/3` on the
+  project's own `counters_<A>` table, starting at 1. A `Project` handle is
+  an opaque value threaded as data (the workers are shared singletons, so
+  project context cannot be ambient); there is no `session_project/1` —
+  the handle itself is the only lookup.
+- **Project write path takes `Project`, not `Session`** — `create_instance`,
   `add_relationship`, `remove_relationship`, `update_relationship`(`_both`),
-  and `add_class_membership` take `Session` as the first argument and reject a
-  missing/invalid one with `{error, invalid_session}`.
+  and `add_class_membership` take a `Project` handle as the first argument
+  and reject a missing/invalid one with `{error, invalid_project}`. Instance
+  reads (`get_instance`, `children`, `compositional_ancestors`, `class_of`,
+  `class_memberships`, `resolve_value`) now also take a leading `Project` —
+  the whole of `graphdb_instance` is Project-routed, no longer
+  namespace-agnostic.
+- **`graphdb_mgr` Project-taking twins** — `get_node/2`, `retire_node/2`,
+  `unretire_node/2`, `update_node_avps/3`, `delete_node/2`, and `mutate/2`
+  route through a private `with_project/2` gate. The `/1` forms (and `/2` for
+  `update_node_avps`) stay environment-only; `mutate/1` in particular stays
+  environment-only by design (a batch is inherently single-table once the
+  physical split exists).
+- **`graphdb_query` sessions bind a `Project`** — `new_session/1`. Every
+  bare-nref read resolves its `Home` via `resolve_home/2`: try the bound
+  project's table first, fall back to the environment, and log if the nref
+  genuinely exists in both (a real collision, resolved in the project's
+  favor on the theory that a project-bound session is evidence of intent).
 - **Proxy contract** — cross-project links are local nodes of the seeded
   "Remote Reference" class carrying `remote_project` / `remote_nref` AVP
   payload; no structural reference crosses a project boundary. Recognized by
-  `graphdb_instance:is_proxy/1` / `proxy_coordinates/1`. Representation only —
-  creation/dereference are SP2/SP3.
-- **Namespace-agnostic in SP1** — `mutate/1` and the instance reads
-  (`get_instance` / `children` / `compositional_ancestors` / `resolve_value`),
-  like `get_node` / `get_relationships`, are NOT session-gated: `mutate/1` is
-  mixed env/project, and the reads are consumed by `graphdb_query`. Their
-  routing lands in SP2. Behaviour is unchanged against today's single store.
+  `graphdb_instance:is_proxy/1` / `proxy_coordinates/1`. Representation
+  only — creation/dereference remain SP3 work.
 
 ---
 
@@ -308,38 +328,41 @@ Manages the "is a" hierarchy of class nodes in the ontology.
 
 ### `graphdb_instance` — Instance & Compositional Hierarchy
 
-Creates and manages instance nodes in the project (instance space).
+Creates and manages instance nodes in the project (instance space). Fully
+Project-routed as of SP2 — every public function, reads included, takes a
+leading `Project` handle (`graphdb_project:open/1`).
 
-- `create_instance/4,5,6` (**session**, name, class_nref, compositional_parent_nref [, connection_resolver [, conflict_resolver]]) — requires a valid project session (SP1); atomically writes the node record AND the instance→class membership relationship pair (arc labels nref=29 and nref=30), then fires composition rules (F4 B2). Returns `{ok, Nref, Report}` on success or `{error, Reason, Report}` on rule-firing failure; pre-plan validation errors (unknown class, non-instantiable class, etc.) return `{error, Reason}` (2-tuple). Rejects a class marked non-instantiable with `{error, {class_not_instantiable, ClassNref}}` (L9). Propose-mode composition rules surface as `proposed` outcomes in the report (B3); nothing is materialised for them. `/4` threads a connection **resolver** (`fun((ConnContext) -> {connect, [Target]} | defer end`): the RESOLVE step fires effective ConnectionRules (F4 B4) — `mandatory` connections to existing targets land in the root transaction, `auto` post-commit, `defer`/`propose` are reported only; targets are validated (exists, instance, instance-of target_class-or-subclass). `/3` uses the built-in `report_only` (defer-all) connection resolver, so connection rules surface as `required`/`not_connected`/`proposed` outcomes and nothing is connected. `/5` threads a B5 **conflict resolver** (`fun((#{kind, rules, class_nref}) -> [Pair])`); `/3` and `/4` inject the built-in `graphdb_rules:default_conflict_resolver/0`, which shadows conflicting inherited rules (nearest-level winner by mode priority), merges multiplicity (nearest Min, greatest Max), and demotes both-real-template losers to `propose` (F4 B5).
-- `add_relationship/5,6,7` (**session**, source_nref, characterization_nref, target_nref, reciprocal_nref [, template_nref [, {FwdAVPs, RevAVPs}]]) — requires a valid project session (SP1); validates endpoints, resolves source/target class and template scope, and writes the two directed `kind=connection` rows in a **single** `graphdb_mgr:transaction/1` (TOCTOU-isolated). The rel-id pair is allocated up-front (outside the transaction) via `rel_id_server:get_id_pair/0`. `/4` uses the source class's default template; `/5` takes an explicit template nref; `/6` adds per-direction AVPs.
-- `add_relationship_in_txn/9` (IdPair, S, C, T, R, TemplateSpec, AVPSpec,
+- `create_instance/4,5,6` (**Project**, name, class_nref, compositional_parent_nref [, connection_resolver [, conflict_resolver]]) — requires a valid `Project` handle; atomically writes the node record AND the instance→class membership relationship pair (arc labels nref=29 and nref=30) into the project's own tables, then fires composition rules (F4 B2). Returns `{ok, Nref, Report}` on success or `{error, Reason, Report}` on rule-firing failure; pre-plan validation errors (unknown class, non-instantiable class, etc.) return `{error, Reason}` (2-tuple). Rejects a class marked non-instantiable with `{error, {class_not_instantiable, ClassNref}}` (L9). Propose-mode composition rules surface as `proposed` outcomes in the report (B3); nothing is materialised for them. `/5` threads a connection **resolver** (`fun((ConnContext) -> {connect, [Target]} | defer end`): the RESOLVE step fires effective ConnectionRules (F4 B4) — `mandatory` connections to existing targets land in the root transaction, `auto` post-commit, `defer`/`propose` are reported only; targets are validated (exists, instance, instance-of target_class-or-subclass). `/4` uses the built-in `report_only` (defer-all) connection resolver, so connection rules surface as `required`/`not_connected`/`proposed` outcomes and nothing is connected. `/6` threads a B5 **conflict resolver** (`fun((#{kind, rules, class_nref}) -> [Pair])`); `/4` and `/5` inject the built-in `graphdb_rules:default_conflict_resolver/0`, which shadows conflicting inherited rules (nearest-level winner by mode priority), merges multiplicity (nearest Min, greatest Max), and demotes both-real-template losers to `propose` (F4 B5).
+- `add_relationship/5,6,7` (**Project**, source_nref, characterization_nref, target_nref, reciprocal_nref [, template_nref [, {FwdAVPs, RevAVPs}]]) — requires a valid `Project` handle; validates endpoints, resolves source/target class and template scope, and writes the two directed `kind=connection` rows in a **single** `graphdb_mgr:transaction/1` (TOCTOU-isolated). The rel-id pair is allocated up-front (outside the transaction) via `Project`'s own `graphdb_project:next_rel_id_pair/1`. `/5` uses the source class's default template; `/6` takes an explicit template nref; `/7` adds per-direction AVPs.
+- `add_relationship_in_txn/10` (Home, IdPair, S, C, T, R, TemplateSpec, AVPSpec,
   TkAttr, RetAttr) — tier-1 **in-transaction** primitive (bare-mnesia twin
   of `add_relationship`'s transaction body; aborts on failure, never opens
-  its own txn). The caller allocates the rel-id pair up-front.
-  `do_add_relationship/7` (tier-2) and `graphdb_mgr:mutate/1` (tier-3) both
+  its own txn). `Home :: environment | Project` picks the physical table via
+  `graphdb_ns`; the caller allocates the rel-id pair up-front.
+  `do_add_relationship/7` (tier-2) and `graphdb_mgr:mutate/1,2` (tier-3) both
   compose it into their single transaction.
-- `remove_relationship/4,5` (**session**, source, char, target [, template]) — deletes
+- `remove_relationship/4,5` (**Project**, source, char, target [, template]) — deletes
   **both** directed rows of a logical connection edge atomically
-  (connection-arcs only; no cache work). `/3` ignores template; `/4` narrows
+  (connection-arcs only; no cache work). `/4` ignores template; `/5` narrows
   by it. Identity contract: zero matches → `{error, relationship_not_found}`,
   more than one (duplicate edges — nothing dedups at write time) →
   `{error, {ambiguous_relationship, Templates}}`; a missing symmetric partner
   aborts `{error, {dangling_half_edge, Id}}` (never deletes a half-edge).
-  Tier-1 `remove_relationship_in_txn/4` + shared `resolve_forward_connection/4`
-  resolver are the in-txn primitives (slice E).
-- `update_relationship/5,6` + `update_relationship_both/5,6` (**session**,
+  Tier-1 `remove_relationship_in_txn/5` + shared `resolve_forward_connection/5`
+  resolver (both `Home`-first) are the in-txn primitives (slice E).
+- `update_relationship/5,6` + `update_relationship_both/5,6` (**Project**,
   source, char, target [, template], Updates | {Fwd, Rev}) — AVP-only edit of an existing
   connection edge, reusing slice B's `validate_avp_updates/1` +
   `apply_avp_updates/2`. **Remove is edge-level; AVP update is
   directed-row-level**: `update_relationship` edits the single row named by
   `(S, C, T)` (edit the reverse by naming `(T, R, S)`); `*_both` edits both
   directions with independent `{Fwd, Rev}` lists, composing the single tier-1
-  primitive `update_relationship_avps_in_txn/5` twice. The `?ARC_TEMPLATE`
-  scope AVP is protected from edit. Same not-found/ambiguity arms as remove
-  (slice E).
-- `add_class_membership/3` (**session**, instance_nref, class_nref) — adds a membership arc pair; also rejects a non-instantiable class target with `{error, {class_not_instantiable, ClassNref}}` (L9)
+  primitive `update_relationship_avps_in_txn/6` (`Home`-first) twice. The
+  `?ARC_TEMPLATE` scope AVP is protected from edit. Same not-found/ambiguity
+  arms as remove (slice E).
+- `add_class_membership/3` (**Project**, instance_nref, class_nref) — adds a membership arc pair; also rejects a non-instantiable class target with `{error, {class_not_instantiable, ClassNref}}` (L9)
 - `is_proxy/1`, `proxy_coordinates/1` (SP1) — recognize a Remote Reference proxy node and extract its `{remote_project, remote_nref}` coordinates; `remote_reference_class/0` returns the seeded class nref
-- `get_instance/1`, `children/1`, `compositional_ancestors/1`, `resolve_value/2` — reads; **not** session-gated in SP1 (namespace-agnostic, consumed by `graphdb_query`; routing deferred to SP2)
+- `get_instance/2`, `children/2`, `compositional_ancestors/2`, `class_of/2`, `class_memberships/2`, `resolve_value/3` — reads, all Project-first as of SP2 (no longer namespace-agnostic); consumed by `graphdb_query`
 
 ### `graphdb_rules` — Graph Rules (F4 Phase A + B1 + B2 + B3 + B4 + B5)
 
@@ -411,7 +434,7 @@ translation hooks.
 Parses and executes graph queries. Public API:
 
 - `parse_query/1` — identity until a text DSL lands
-- `new_session/0`, `refresh/1` — snapshot-semantics session lifecycle
+- `new_session/0`, `new_session/1`, `refresh/1` — snapshot-semantics session lifecycle. `new_session/1` binds the session to a `Project`; `new_session/0` stays environment-only.
 - `execute_query/1`, `execute_query/2` — ephemeral and session-threaded
 - `resume/2` — continue a `#cont_path{}` (returns
   `{error, snapshot_expired}` if the session has been refreshed since)
@@ -420,29 +443,43 @@ Parses and executes graph queries. Public API:
 Queries are represented as records defined in
 `apps/graphdb/include/graphdb_query.hrl`. Every Mnesia read goes
 through `session_read_node/2` or `session_read_arcs/4`; direct
-`mnesia:dirty_*` calls outside those helpers are a code smell.
+`mnesia:dirty_*` calls outside those helpers are a code smell. Every
+bare-nref read resolves its physical table via `resolve_home/2` (SP2):
+try the session's bound `Project` first, fall back to the environment,
+and log a warning if the nref genuinely exists in both — the project's
+copy wins on the theory that a project-bound session is caller intent.
 
 See `docs/designs/f3-graphdb-query-design.md` for the architectural contract.
 
 ### `graphdb_mgr` — Primary Coordinator
 
-Single public entry point; delegates to the five specialized workers.
+Single public entry point; delegates to the specialized workers.
 
-- `create_instance/4` and `add_relationship/5` take a project `Session` first
-  arg (SP1) and reject a missing/invalid one via
-  `graphdb_project:require_session/1`, delegating to `graphdb_instance`.
+- `create_instance/4` and `add_relationship/5` take a `Project` handle as the
+  first arg and delegate straight to `graphdb_instance` (which itself
+  validates the handle via `graphdb_project:require_project/1`).
+- **Project-taking twins (SP2)** — `get_node/2`, `retire_node/2`,
+  `unretire_node/2`, `update_node_avps/3`, `delete_node/2`, and `mutate/2`
+  all route through a private `with_project/2` gate (validates the handle,
+  then runs the operation against the project's own tables). The `/1` forms
+  (and `/2` for `update_node_avps`) stay environment-only — they are not
+  aliases, they read/write the shared `nodes`/`relationships` tables.
+  `get_relationships/1,2` has **no** Project-taking twin yet (see
+  `TASKS.md` → *Multi-project sessions*).
 - In `init/1`: checks if `nodes` table is empty; if so, calls `graphdb_bootstrap:load/0`
 - Rejects any runtime request to create, modify, or delete a `category` node with `{error, category_nodes_are_immutable}`
 - Sequences Nref allocation → record write → Nref confirmation
-- `mutate/1` — tier-3 batch entry point. Applies an ordered list of
+- `mutate/1,2` — tier-3 batch entry point. Applies an ordered list of
   `add_relationship` / `retire_node` / `unretire_node` / `update_node_avps` /
   `remove_relationship` / `update_relationship` / `update_relationship_both`
   mutations atomically in one `transaction/1` (all commit or none). Tagged-tuple
   grammar; opaque bare-reason contract `{ok, [ok, ...]}` | `{error, Reason}`
   with whole-batch rollback; `mutate([]) -> {ok, []}`. A **plain function**, not
   a `gen_server:call` — it owns the transaction in the caller's process.
-  **Not session-gated in SP1** (a batch is mixed env/project; a project session
-  would over-constrain env-only batches — routing deferred to SP2). See
+  `mutate/2` routes an entire batch against one `Project`'s tables via
+  `with_project/2`; `mutate/1` stays environment-only by design — a batch
+  mixing environment and project mutations has no single physical table set
+  to run against once the store is split (SP2). See
   `docs/designs/batch-mutate-design.md`.
 - `update_node_avps/2` — merges a list of AVP updates onto a node atomically
   through the transaction seam (tier-2 wrapper owning one `transaction/1`;

@@ -21,14 +21,15 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `nref` subsystem    | Fully implemented; backed by DETS (Disk-based Erlang Term Storage); `set_floor/1` API                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `dictionary_imp`    | Implemented; not yet wired to `dictionary_server` / `term_server`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `graphdb_bootstrap` | Implemented — Mnesia schema, table creation, scaffold loader                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `graphdb_mgr`       | Implemented — bootstrap startup, read API, category guard, cache audit/repair; `retire_node/1` / `unretire_node/1` soft-retire runtime nodes via a boolean `retired` marker AVP; public `get_node/1` returns `{error, retired}` for retired nodes; `delete_node/1` remains unimplemented, reserved for a future hard delete.                                                                                                                                                                                                                                            |
+| `graphdb_ns` / `graphdb_project` | Implemented (SP1+SP2) — home-relative namespace routing (`graphdb_ns`) and project registry + physical per-project store (`graphdb_project`); see §6.                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `graphdb_mgr`       | Implemented — bootstrap startup, read API, category guard, cache audit/repair; `retire_node/1` / `unretire_node/1` soft-retire runtime nodes via a boolean `retired` marker AVP; public `get_node/1` returns `{error, retired}` for retired nodes; `delete_node/1` remains unimplemented, reserved for a future hard delete. SP2 adds Project-taking twins `get_node/2`, `retire_node/2`, `unretire_node/2`, `update_node_avps/3`, `delete_node/2`, `mutate/2`, gated by `with_project/2`; the `/1` (and `/2` for `update_node_avps`) forms stay environment-only.                                                                                                                                                                                                                                            |
 | `graphdb_attr`      | Implemented — attribute library (name, literal, relationship attributes); seeds the `retired` lifecycle marker literal-attribute                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `graphdb_class`     | Implemented — taxonomic hierarchy with multi-parent inheritance (BFS — breadth-first search — over a DAG, a directed acyclic graph); abstract (non-instantiable) classes via the `instantiable` marker                                                                                                                                                                                                                                                                                                                                                                  |
-| `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance with multi-class membership and ambiguity-detecting class resolver; refuses instantiation/membership of abstract classes; refuses retired nodes as new instance targets, compositional parents, and arc endpoints; fires composition rules on `create_instance/3` and surfaces `proposed` outcomes for propose-mode rules; fires connection rules via a caller-supplied resolver on `create_instance/4`; applies horizontal conflict precedence via a caller-overridable resolver on `create_instance/5` |
+| `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance with multi-class membership and ambiguity-detecting class resolver; refuses instantiation/membership of abstract classes; refuses retired nodes as new instance targets, compositional parents, and arc endpoints; fires composition rules on `create_instance/4` and surfaces `proposed` outcomes for propose-mode rules; fires connection rules via a caller-supplied resolver on `create_instance/5`; applies horizontal conflict precedence via a caller-overridable resolver on `create_instance/6`. SP2: every public function, including the instance reads, takes a leading `Project` handle — fully Project-routed (§6) |
 | `graphdb_rules`     | Implemented — rule meta-ontology, applies_to attachment, scope-aware create/retrieve, taxonomy-walking effective-rules read, composition firing engine, propose mode, connection firing, horizontal conflict precedence                                                                                                                                                                                                                                                                                                                                                 |
 | `graphdb_language`  | Implemented — multilingual overlay layer (label resolution, dialect chains, per-language Mnesia overlay tables)                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `graphdb_query`     | Implemented — query language with snapshot-semantics sessions and continuation-based bounded BFS                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Tests               | 537 passing (432 Common Test + 105 EUnit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `graphdb_query`     | Implemented — query language with snapshot-semantics sessions and continuation-based bounded BFS. SP2: `new_session/1` binds a `Project`; bare-nref reads resolve `Home` via `resolve_home/2`.                                                                                                                                                                                                                                                                                                                                                                        |
+| Tests               | 677 passing (532 Common Test + 145 EUnit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 The kernel is functional under multi-inheritance, multi-class-
 membership, and per-class template semantics.  Multilingual label
@@ -54,19 +55,40 @@ implemented; hard delete (`delete_node/1`) remains reserved.
 ### Mnesia tables
 
 ```
-nodes         — one row per concept node             (primary key: nref)
-relationships — one row per directed arc             (primary key: id)
+nodes         — one row per environment concept node  (primary key: nref)
+relationships — one row per environment directed arc  (primary key: id)
 ```
 
-Two tables cover the entire graph. Bidirectional logical edges are stored
-as two directed rows in `relationships`, written atomically.
+The environment (ontology) tables above are the single shared store for
+categories, attributes, classes, languages, templates, and rules.
+Bidirectional logical edges are stored as two directed rows in
+`relationships`, written atomically.
+
+Each **registered project** (SP2) owns its own physical table set, created
+by `graphdb_project:register_project/1`:
+
+```
+nodes_<Anchor>         — one row per project concept node    (primary key: nref)
+relationships_<Anchor> — one row per project directed arc    (primary key: id)
+counters_<Anchor>      — project-local nref/rel-id allocator (dirty counters)
+```
+
+`<Anchor>` is the project's environment anchor nref (a child of `Projects`,
+nref 5). A project's node and relationship nrefs are allocated from **1**
+via `mnesia:dirty_update_counter/3` on `counters_<Anchor>` — independent of,
+and numerically overlapping with, both the environment's nref space and
+every other project's. This is safe only because every read/write is routed
+to a specific table by `Home :: environment | Project` (see §6); no query
+crosses tables without going through that routing. See §6 for the
+per-project allocator and the home-relative field-routing rule.
 
 **Indexes:**
-- `relationships` — secondary on `source_nref` and `target_nref` for O(1)
-  forward and reverse traversal.
-- `nodes` carries no secondary index. Downward queries ("children of X")
-  read outgoing arcs from `relationships` filtered by kind +
-  characterization (see §3 cache invariant).
+- `relationships` (and each project's `relationships_<Anchor>`) — secondary
+  on `source_nref` and `target_nref` for O(1) forward and reverse traversal.
+- `nodes` (and each project's `nodes_<Anchor>`) carries no secondary index.
+  Downward queries ("children of X") read outgoing arcs from the same-table
+  relationships, filtered by kind + characterization (see §3 cache
+  invariant).
 
 Embedding relationships inside the node record (Dallas's original DETS
 design) is rejected: it makes reverse-lookup an O(N) full-scan and
@@ -211,12 +233,12 @@ Every `kind = connection` arc carries a `Template` AVP — `#{attribute
 semantic context. The AVP attribute is bootstrap-seeded at nref 31;
 it is forbidden on relationships of any other kind. Template nodes
 are compositional children of class nodes (see §3 cache field
-sources). API: `graphdb_instance:add_relationship/5,6,7` (session-first — SP1).
+sources). API: `graphdb_instance:add_relationship/5,6,7` (Project-first — SP1/SP2).
 
 Connection edges are mutated through `graphdb_instance` (connection-arcs
-only — these never touch the `parents`/`classes` caches; all take a project
-`Session` first arg — SP1 — and reject an invalid one with
-`{error, invalid_session}`): `remove_relationship/4,5` deletes **both**
+only — these never touch the `parents`/`classes` caches; all take a
+`Project` handle first arg — SP1/SP2 — and reject an invalid one with
+`{error, invalid_project}`): `remove_relationship/4,5` deletes **both**
 directed rows of a logical edge atomically; `update_relationship/5,6` and
 `update_relationship_both/5,6` edit the per-direction AVP metadata, reusing the
 slice-B AVP merge grammar. Remove
@@ -277,7 +299,8 @@ maintains. `graphdb_mgr` is the public entry point and routes to the
 workers — read path and soft-retire implemented; remaining write-side
 routing is pending (see [`../TASKS.md`](../TASKS.md)).
 
-The tier-3 batch entry point `graphdb_mgr:mutate/1` applies an ordered list
+The tier-3 batch entry point `graphdb_mgr:mutate/1` (environment) /
+`mutate/2` (a `Project`, SP2) applies an ordered list
 of `add_relationship` / `retire_node` / `unretire_node` / `update_node_avps` /
 `remove_relationship` / `update_relationship` / `update_relationship_both`
 mutations atomically in one transaction, composing the tier-1 primitives
@@ -316,14 +339,18 @@ exist on the same node, each with its own Mnesia schema.
 
 ### Cross-database nref resolution
 
-Nrefs are plain `integer()`s with no embedded database tag. Context
-determines routing:
+Nrefs are plain `integer()`s with no embedded database tag, and are **not**
+globally unique — every project's allocator restarts at 1 (§7), so a
+project nref routinely coincides numerically with an environment nref or
+another project's nref. Routing is **home-relative**: every read/write
+carries (explicitly or via context) a `Home :: environment | Project`, and
+that `Home` — not the nref's numeric value — selects the physical table.
 
-| Relationship field               | Resolves to                                 |
-| -------------------------------- | ------------------------------------------- |
-| `source_nref`                    | Same database as the relationship row       |
-| `characterization`, `reciprocal` | Always the ontology                         |
-| `target_nref`                    | Routed by the arc label's `target_kind` AVP |
+| Relationship field                | Resolves to                                                     |
+| ---------------------------------- | ---------------------------------------------------------------- |
+| `source_nref`                      | `Home` — the store the containing row was read from/written to  |
+| `characterization`, `reciprocal`   | Always the environment                                          |
+| `target_nref`                      | Routed by the arc label's `target_kind` AVP: `category`/`attribute`/`class` → always the environment; `instance` → `Home` |
 
 `target_kind :: category | attribute | class | instance` is stored as a
 literal AVP on every arc-label attribute node. Built-in arc labels
@@ -331,9 +358,11 @@ literal AVP on every arc-label attribute node. Built-in arc labels
 requires it for runtime additions.
 
 This routing table is the code contract of the pure module `graphdb_ns`
-(`namespace_of/1`, `target_namespace/1` → `environment | project | home`) —
-see the SP1 model below. Against today's single store it is behaviour-
-preserving; SP2 gives it physical teeth.
+(`namespace_of/2`, `target_namespace/2` — both `Home`-first — plus
+`node_table/1` / `rel_table/1`, which resolve a `Home` to its physical
+Mnesia table atom) — see the SP1/SP2 model below. `environment` resolves to
+the literal `nodes`/`relationships` tables; a `Project` handle carries its
+own `nodes_<Anchor>`/`relationships_<Anchor>` atoms directly.
 
 Every `graphdb_attr` creator takes an explicit, validated `ParentNref`
 (must name an existing `kind=attribute` node); the named functions
@@ -351,49 +380,69 @@ project's permanent cross-system identity token — used to scope
 project-side language overlay tables and as the stable reference point
 for cross-database arcs.
 
-Projects may be **remote**: all project-side Mnesia tables (`nodes`,
-`relationships`, per-language overlays) reside on the project's own
-node, which may differ from the environment node. Mnesia handles
-transparent remote access within a cluster; fully independent remote
-projects are a future distribution concern.
+SP2 puts every project's `nodes_<Anchor>` / `relationships_<Anchor>` /
+`counters_<Anchor>` tables on the same Mnesia node as the environment.
+Projects may become **remote** in the future (SP3): the project-side
+tables (plus per-language overlays) would reside on the project's own
+node, which may differ from the environment's. Mnesia handles transparent
+remote access within a cluster; fully independent remote projects are a
+future distribution concern.
 
 Visibility of the anchor node is governed by ACL AVPs on that node
 (not yet implemented). Globally visible projects have no access
 restriction; owner-specific projects have a permissioned ACL. The node
 always exists regardless of its visibility.
 
-### Reference & namespace model (SP1)
+### Reference & namespace model (SP1+SP2)
 
 The environment/project separation is a four-sub-project program
-(design: `designs/project-env-reference-namespace-model-design.md`; tracking:
-`../TASKS.md` → *Multi-project sessions*). **SP1 is implemented at the API/code
-layer only — no `node`/`relationship` record changes:**
+(design: `designs/project-env-reference-namespace-model-design.md`, amended
+for SP2 by `designs/sp2-physical-project-store-design.md`; tracking:
+`../TASKS.md` → *Multi-project sessions*). SP1 (reference & namespace model)
+and SP2 (physical project store) are both implemented:
 
 - **`graphdb_ns`** — pure namespace-resolution module encoding the routing
-  table above; every nref field resolves to `environment | project | home`.
-- **`graphdb_project`** — project registry (`register_project/1`,
-  `is_project/1`) creating the nref-5 anchor, plus the project **session**
-  (`open_session/1`, `session_project/1`, `require_session/1`) and the
-  canonical project-scoped relationship API surface. A session is an opaque
-  value threaded as data — the workers are shared singletons, so project
-  context cannot be ambient.
-- **Required session on the project write path** — `create_instance`,
+  table above; `namespace_of/2` / `target_namespace/2` take a leading `Home`
+  and resolve every nref field to `environment | Home`; `node_table/1` /
+  `rel_table/1` map a `Home` to its physical table atom.
+- **`graphdb_project`** — project registry and physical store.
+  `register_project/1` creates the nref-5-child anchor node **and** the
+  project's three Mnesia tables (`nodes_<Anchor>`, `relationships_<Anchor>`,
+  `counters_<Anchor>`). `open/1` resolves a registered project nref into a
+  `Project` handle `#{anchor, nodes, rels, counters}`; `require_project/1`
+  validates that handle. `next_nref/1` / `next_rel_id_pair/1` are the
+  project-local allocators (`mnesia:dirty_update_counter/3` on
+  `counters_<Anchor>`, starting at 1) — plus the canonical project-scoped
+  relationship API surface. A `Project` handle is an opaque value threaded
+  as data — the workers are shared singletons, so project context cannot be
+  ambient.
+- **Project write path takes `Project`** — `create_instance`,
   `add_relationship`, `remove_relationship`, `update_relationship`(`_both`),
-  and `add_class_membership` take a `Session` first arg and reject a missing/
-  invalid one with `{error, invalid_session}`.
+  and `add_class_membership` take a `Project` handle first arg and reject a
+  missing/invalid one with `{error, invalid_project}`. As of SP2 the
+  instance reads (`get_instance` / `children` / `compositional_ancestors` /
+  `class_of` / `class_memberships` / `resolve_value`) take a leading
+  `Project` too — the whole of `graphdb_instance` is Project-routed, no
+  longer namespace-agnostic.
+- **`graphdb_mgr` Project-taking twins (SP2)** — `get_node/2`,
+  `retire_node/2`, `unretire_node/2`, `update_node_avps/3`, `delete_node/2`,
+  and `mutate/2` route through a private `with_project/2` gate; the `/1`
+  forms (and `/2` for `update_node_avps`) stay environment-only. `mutate/1`
+  in particular stays environment-only by design — a batch mixing
+  environment and project mutations has no single physical table set to run
+  against once the store is split. `get_relationships` has no
+  Project-taking twin yet (tracked in `../TASKS.md`).
+- **`graphdb_query` sessions bind a `Project` (SP2)** — `new_session/1`;
+  bare-nref reads resolve `Home` per nref via `resolve_home/2`, trying the
+  bound project first and falling back to the environment.
 - **Proxy contract** — a cross-project link is a local node of the seeded
   "Remote Reference" class carrying `remote_project` / `remote_nref` AVP
   payload; no structural reference crosses a project boundary. Recognized by
-  `graphdb_instance:is_proxy/1` / `proxy_coordinates/1`. Representation only;
-  creation/dereference are SP2/SP3.
-- **Namespace-agnostic in SP1** — `mutate/1` and the instance reads
-  (`get_instance` / `children` / `compositional_ancestors` / `resolve_value`),
-  like `get_node` / `get_relationships`, are not session-gated: `mutate/1` is a
-  mixed env/project batch, and the reads are consumed by `graphdb_query`.
-  Their per-namespace routing lands in SP2.
+  `graphdb_instance:is_proxy/1` / `proxy_coordinates/1`. Representation
+  only; creation/dereference remain SP3 work.
 
-SP2 (physical per-project store + allocator-from-1), SP3 (distribution /
-residency + proxy dereference), and SP4 (migration) remain.
+SP3 (distribution / residency + proxy dereference) and SP4 (migration)
+remain.
 
 ---
 
@@ -436,11 +485,15 @@ permanent tier has roughly 990 000 free slots — spill-over is not expected.
 
 ### Project allocators
 
-Per-project; start at **1**; no bootstrap floor. The project allocator
-layer is not yet implemented — when added, the simplest design mirrors
-the ontology allocator with a per-project DETS file. Numerical nref
-overlap with the ontology is not a problem because every lookup is
-routed to a specific database (see §6 cross-database resolution).
+Per-project; start at **1**; no bootstrap floor. Implemented (SP2) as an
+in-store Mnesia counter, not a DETS file: `graphdb_project:next_nref/1` /
+`next_rel_id_pair/1` call `mnesia:dirty_update_counter/3` against the
+project's own `counters_<Anchor>` table (§2), which creates the counter on
+first use with the increment as its value — no explicit seeding needed at
+`register_project/1` time. Numerical nref overlap with the environment (and
+with every other project) is not a problem because every lookup is routed
+to a specific table by `Home` (see §6 cross-database resolution), never by
+nref value alone.
 
 ---
 
