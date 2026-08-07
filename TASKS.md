@@ -155,7 +155,8 @@ Tracked follow-ups (not in the seam spec):
   nrefs once and allocates one rel-id pair per `add_relationship` outside
   the transaction; phase 3 folds the prepared list in order. Required one
   behaviour-preserving extraction —
-  `graphdb_instance:add_relationship_in_txn/9`. Design
+  `graphdb_instance:add_relationship_in_txn/9` (now `/10` — SP2 added a
+  leading `Home`). Design
   `docs/designs/batch-mutate-design.md`; plan
   `docs/superpowers/plans/2026-06-24-batch-mutate.md`.
 
@@ -229,26 +230,26 @@ Follow-ups this design adds:
   (and `update_node_avps`') should refuse the whole permanent tier,
   consistent with `retire_node`'s `permanent_node_immutable`.
 
-### Project boundary (architectural; prerequisite for the delete hard-delete fast-path)
+### Project boundary — RESOLVED by SP1 + SP2
 
-The environment/project split described in the knowledge model is not
-physically realized. Today there is a single shared `nodes` /
-`relationships` pair; instances draw nrefs from the environment runtime
-allocator (`graphdb_nref`); and the Projects category (`nref` 5) is a bare
-scaffold with nothing attached. Consequently a project instance is not
-reliably distinguishable from an environment instance-kind node (e.g. a
-rule), and there is no project-local identity space.
+This entry recorded that the environment/project split was not physically
+realized: a single shared `nodes` / `relationships` pair, instances drawing
+nrefs from the environment allocator, and the Projects category (`nref` 5)
+a bare scaffold. **SP1 (reference & namespace model) and SP2 (physical
+project store) closed this** — see *Multi-project sessions* below. Each
+registered project now has its own `nodes_<Anchor>` /
+`relationships_<Anchor>` / `counters_<Anchor>` tables and its own
+allocators starting at 1, so a project instance is physically
+distinguishable and there is a real project-local identity space.
 
-Until this exists, several things stay blocked or degraded:
+What this unblocks, and where each stands now:
 
-- the delete hard-delete fast-path for project instances (slice A above);
-- project-scoped rules (`graphdb_rules` returns
-  `project_rules_not_yet_supported`);
-- any per-project isolation, addressing, or lifecycle.
-
-How projects are separated, identified, and addressed is an **open
-architectural question to be brainstormed** — this entry records the need
-and what it unblocks, not the solution.
+- the delete hard-delete fast-path for project instances (slice A above) —
+  now unblocked, still to be done;
+- project-scoped rules (`graphdb_rules` still returns
+  `project_rules_not_yet_supported`) — now unblocked, still to be done;
+- per-project isolation and addressing — delivered by SP2. Per-project
+  *lifecycle* (residency, distribution, migration) is SP3/SP4.
 
 ### Retired-node purge (deferred; depends on the history/versioning feature)
 
@@ -265,7 +266,7 @@ design — recorded here as a need, not a solution.
 
 `graphdb_mgr:update_node_avps/2` merges a list of AVP updates onto a node
 atomically. Tier-2 wrapper owns one `transaction/1`; tier-1
-`update_node_avps_in_txn/3` does the in-txn work. Wired as the fourth
+`update_node_avps_in_txn/4` does the in-txn work. Wired as the fourth
 `{update_node_avps, Nref, AVPs}` kind in `mutate/1`. Design
 `docs/designs/slice-b-update-node-avps-design.md`.
 
@@ -289,7 +290,7 @@ Set via `graphdb_class:add_qualifying_characteristic/3` (`#{instance_only =>
 true}`) or a `create_class/3` initial AVP. Enforced at three class-level
 value-binding gates — `bind_qc_value/3`, `create_class/3`, and
 `update_node_avps/2` (the last covers `mutate/1`, both composing
-`update_node_avps_in_txn/3`) — each returning `{error,
+`update_node_avps_in_txn/4`) — each returning `{error,
 {instance_only_attribute, AttrNref}}`. Enforcement is local to the class
 node written. Design `docs/designs/slice-c-instance-only-qc-design.md`.
 
@@ -571,6 +572,38 @@ The real failure mode: if the DETS file is lost while the Mnesia
 the counter restarts at 1 and hands out ids colliding with existing primary
 keys, and `mnesia:write` then **silently overwrites existing relationship
 rows**.
+
+**Open design question — `TheKnowledgeNetwork.md` §3 says identity is
+uniform; SP2 makes that false at the physical layer.** The canonical spec
+states ontology nodes and project nodes "share the same identity space."
+Post-SP2 each project's allocator restarts at 1, so a bare nref is unique
+only within a `Home` — nref 7 in project A, nref 7 in project B, and
+bootstrap nref 7 are three different nodes. The SP2 design doc does not
+resolve this either; it only notes the *anchor* nref needs no new identity
+scheme. Per this repo's rule that `TheKnowledgeNetwork.md` is conceptual
+and does not track code, SP2 flagged rather than edited it. Needs a
+deliberate call: either the spec records that identity is now
+`Home`-relative, or the model asserts a globally-unique identity that the
+implementation must eventually restore (e.g. via the deferred non-integer
+nref indirection). Not a code defect — a spec/model decision.
+
+**Accepted consequence of `resolve_home/2` (documented, tested, recorded
+here so it is a choice and not a surprise).** A project-bound
+`graphdb_query` session resolves a bare nref to the project when it exists
+in both stores — so environment nodes numerically below the project's
+allocator high-water mark become unaddressable through that session.
+`#q_get_node{nref = 3}` under a project with ≥3 instances returns the
+project's instance 3, not the `Classes` category. This is deliberate
+(caller intent) and covered by
+`resolve_home_prefers_project_and_logs_on_collision`; it is called out
+because the shadowed range grows with every instance created. Distinct
+from the traversal defect above, which is *not* intentional.
+
+**Minor — `graphdb_mgr:do_get_node/1` and `/2` diverge on the retired
+marker.** The `/1` (environment) form applies a retired-marker check; the
+`/2` (Project) form does not. Documented at `graphdb_mgr.erl:186-188`.
+Harmless today, but the asymmetry will surprise someone — make them
+consistent, or document why they should differ.
 
 ### SP3+ — distribution, residency, migration
 
