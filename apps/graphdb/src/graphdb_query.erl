@@ -250,10 +250,29 @@ dispatch(#q_instances_of{class = C, recursive = Recursive}, Session) ->
         true  -> [C | all_subclasses(C)];
         false -> [C]
     end,
+    %% Instances only ever live in projects: the class->instance
+    %% membership row (characterization = ?ARC_CLASS_TO_INST) is written
+    %% into the project's own relationship table
+    %% (graphdb_instance:instance_records/5), never into the
+    %% environment's, regardless of what resolve_home/2 would pick for
+    %% the bare class nref (a class node never exists in a project's
+    %% node table, so resolve_home/2 always answers `environment` for
+    %% it -- the wrong table for this particular arc shape). When the
+    %% session has a Project bound, route every class in Classes
+    %% through that project explicitly instead of resolve_home/2. With
+    %% no Project bound, preserve prior behaviour exactly (environment
+    %% read, which legitimately yields [] since no environment-resident
+    %% class has project-resident instances).
+    ProjectHome = maps:get(project, Session, undefined),
     {Instances, Session1} = lists:foldl(
         fun(Cl, {Acc, S}) ->
-            {Arcs, S1} = session_read_arcs(S, Cl, outgoing,
-                                           [instantiation]),
+            {Arcs, S1} = if
+                ProjectHome =:= undefined ->
+                    session_read_arcs(S, Cl, outgoing, [instantiation]);
+                true ->
+                    session_read_arcs_home(S, ProjectHome, Cl, outgoing,
+                                           [instantiation])
+            end,
             Members = [A#relationship.target_nref || A <- Arcs,
                 A#relationship.characterization =:= ?ARC_CLASS_TO_INST],
             {Members ++ Acc, S1}
@@ -353,6 +372,32 @@ session_read_arcs(#{cache := Cache} = Session, Nref, Dir, Kinds) ->
     case maps:get(Key, Cache, miss) of
         miss ->
             Home = resolve_home(Session, Nref),
+            Arcs = read_arcs(Home, Nref, Dir, Kinds),
+            Cache1 = Cache#{Key => Arcs},
+            {Arcs, Session#{cache := Cache1}};
+        Cached ->
+            {Cached, Session}
+    end.
+
+%%---------------------------------------------------------------------
+%% session_read_arcs_home(Session, Home, Nref, Direction, KindFilter)
+%%     -> {[#relationship{}], Session1}
+%%
+%% Same read-through cache as session_read_arcs/4, but Home is supplied
+%% by the caller instead of being resolved via resolve_home/2 -- for
+%% arc shapes (e.g. the project-side class->instance membership arc
+%% read by #q_instances_of{}) where resolve_home/2's bare-nref
+%% resolution would pick the wrong table. Cache key is {arcs, Home,
+%% Nref, Direction, KindFilter}: a 5-tuple, deliberately a different
+%% shape from session_read_arcs/4's 4-tuple {arcs, Nref, Direction,
+%% KindFilter} key, so the two read paths can never collide in the
+%% shared per-session cache map even when called for the same Nref --
+%% no entry written by one path is ever a valid key for the other.
+%%---------------------------------------------------------------------
+session_read_arcs_home(#{cache := Cache} = Session, Home, Nref, Dir, Kinds) ->
+    Key = {arcs, Home, Nref, Dir, Kinds},
+    case maps:get(Key, Cache, miss) of
+        miss ->
             Arcs = read_arcs(Home, Nref, Dir, Kinds),
             Cache1 = Cache#{Key => Arcs},
             {Arcs, Session#{cache := Cache1}};
