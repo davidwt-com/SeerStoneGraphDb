@@ -526,7 +526,8 @@ that gap.
 
 **Known gap** — `graphdb_mgr:get_relationships/1,2` has no Project-taking
 twin (the only one of the `graphdb_mgr` read/write operations touched by
-SP1/SP2 without one). ~6 test sites work around it with direct
+SP1/SP2 without one). 15 call sites across 11 test functions in
+`graphdb_instance_SUITE` / `graphdb_mgr_SUITE` work around it with direct
 `mnesia:index_read(graphdb_ns:rel_table(Project), ...)`. A repo-wide grep
 found zero production callers, so this is an API-completeness gap, not a
 live bug — pick it up when a project-side relationship-read caller appears.
