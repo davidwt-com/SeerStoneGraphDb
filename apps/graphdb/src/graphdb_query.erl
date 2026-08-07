@@ -354,6 +354,12 @@ dispatch(_Query, Session) ->
 %% language's entry points give no characterization context to
 %% determine Home outright.
 %%---------------------------------------------------------------------
+resolve_home(#{project := environment}, _Nref) ->
+    %% new_session/1 accepts the atom `environment` as a legitimate Home
+    %% (validate_session_home/1 blesses it). Match it ahead of the project
+    %% clause: without this, `environment` falls into the clause below and
+    %% maps:get(anchor, environment) raises badmap INSIDE the singleton.
+    environment;
 resolve_home(#{project := Project}, Nref) when Project =/= undefined ->
     case mnesia:dirty_read(graphdb_ns:node_table(Project), Nref) of
         [_] ->
@@ -630,7 +636,10 @@ describe_instance(#node{nref = N, parents = Parents, classes = Classes,
                                                       Session2),
     {AmbiguousLabels, Session4} = resolve_labels(AmbiguousNrefs, LangSpec,
                                                  Session3),
-    Labels = maps:merge(EnvLabels, AmbiguousLabels),
+    %% EnvLabels second: on key overlap (reachable when a connection
+    %% target is also one of the instance's classes) the known-environment
+    %% resolution is authoritative over resolve_home/2's guess.
+    Labels = maps:merge(AmbiguousLabels, EnvLabels),
     Result = #{nref                    => N,
                kind                    => instance,
                classes                 => Classes,
@@ -770,7 +779,10 @@ label_chain({language, LangNref})  ->
     case lookup_chain_for_nref(LangNref) of
         [] -> [en];
         L  -> L
-    end.
+    end;
+%% Catch-all: a #q_describe{} left with `labels` unset (or carrying any
+%% unrecognised spec) must not function_clause inside the singleton.
+label_chain(_Other)                -> [en].
 
 lookup_chain_for_nref(LangNref) ->
     %% Translates a language Nref to a code, then asks

@@ -532,6 +532,46 @@ SP1/SP2 without one). 15 call sites across 11 test functions in
 found zero production callers, so this is an API-completeness gap, not a
 live bug — pick it up when a project-side relationship-read caller appears.
 
+**Open defect (Important) — query traversal silently truncates
+environment-only paths under a project-bound session.**
+`graphdb_query:session_read_arcs/4` and `is_scaffold_node/2` push every
+*arc-discovered* nref through `resolve_home/2`, which was designed for
+entry-point nrefs (where no characterization context exists). Mid-traversal
+it re-guesses Home per frontier node, so a bootstrap nref that a project
+happens to shadow is read from the project instead of the environment.
+Reproduced: a `#q_find_path{}` between two runtime-tier environment
+attributes whose only path runs through bootstrap nref 6 ("Names") returns
+`{ok, no_path}` under a session bound to a project with 21 instances, while
+returning the correct 2-hop path under an environment session and under a
+1-instance project. Both endpoints are unshadowed, so this is **not** the
+documented, tested "endpoint resolves to the project by caller intent"
+behaviour of `resolve_home/2` — it is mid-traversal re-guessing.
+Because project allocators start at 1, any project with ≥6 instances
+shadows nref 6 and any with ≥35 shadows the whole bootstrap scaffold, so
+this is high-likelihood, not theoretical. The result is silently wrong: no
+error, only a collision warning in the log.
+
+Fix needs a design decision, not a local patch: arc-discovered nrefs *do*
+have characterization context, so they should route via
+`graphdb_ns:target_namespace/2` on the arc's `target_kind` rather than
+guessing — with the 29/30 class↔instance membership pair as an explicit
+exception, since its source and target deliberately live in different
+Homes. Deferred out of SP2 as a scoped design task.
+
+**Open defect (Important, pre-existing, unrelated to SP2) —
+`rel_id_server:seed_from_mnesia/0` calls a nonexistent function.**
+`rel_id_server.erl:207` calls `mnesia:dirty_foldl/3`, which does not exist
+in OTP 28 (should be `mnesia:foldl/3`). Invisible to the compiler; caught
+by the `xref` gate added alongside SP2 and currently suppressed by a
+single-MFA `xref_ignores` entry in `rebar.config` — **remove that entry
+when this is fixed.** `initialize/0` calls it only when the DETS `counter`
+key is absent, so a normal restart with an intact DETS file never hits it.
+The real failure mode: if the DETS file is lost while the Mnesia
+`relationships` table survives (restore, data-dir move, partial recovery),
+the counter restarts at 1 and hands out ids colliding with existing primary
+keys, and `mnesia:write` then **silently overwrites existing relationship
+rows**.
+
 ### SP3+ — distribution, residency, migration
 
 - **Distribution & residency (SP3)** — projects on separate nodes / locations;
