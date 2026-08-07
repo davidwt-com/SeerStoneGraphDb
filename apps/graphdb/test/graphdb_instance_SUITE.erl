@@ -506,6 +506,7 @@ setup_isolated_env(Config) ->
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
 	verify_cache_invariant(TC),
+	verify_project_cache_invariant(TC),
 	catch gen_server:stop(graphdb_rules),
 	catch gen_server:stop(graphdb_instance),
 	catch gen_server:stop(graphdb_class),
@@ -544,6 +545,30 @@ verify_cache_invariant(TC) ->
 					ct:fail({cache_invariant_failed, TC, Mismatches})
 			end;
 		_ -> ok
+	end.
+
+%% Project-scoped twin of verify_cache_invariant/1 (SP2). proj() memoises
+%% the Project handle in the process dictionary on first use per testcase;
+%% only testcases that actually touched a project (i.e. called proj())
+%% have anything to check. A failed verify is a fatal CT failure, same as
+%% the environment check above.
+verify_project_cache_invariant(TC) ->
+	case get(sp2_project) of
+		undefined ->
+			ok;
+		Project ->
+			case mnesia:system_info(is_running) of
+				yes ->
+					case graphdb_mgr:verify_caches(Project) of
+						ok -> ok;
+						{error, Mismatches} ->
+							ct:pal("Project cache invariant failed in ~p:~n~p",
+								[TC, Mismatches]),
+							ct:fail({project_cache_invariant_failed, TC,
+								Mismatches})
+					end;
+				_ -> ok
+			end
 	end.
 
 

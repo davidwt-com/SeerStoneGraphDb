@@ -218,14 +218,18 @@ register_project_creates_tables(_Config) ->
 		Tables)).
 
 %%-----------------------------------------------------------------------------
-%% Calling ensure_tables again for an already-registered project's anchor
-%% (simulated by opening twice) does not error.
+%% register_project/1 is create-if-absent: a retried call for the same
+%% Name converges on the same anchor nref and the same table handle, and
+%% does NOT leave a duplicate project node under Projects.
 %%-----------------------------------------------------------------------------
 register_project_is_idempotent(_Config) ->
-	{ok, P} = graphdb_project:register_project("Acme"),
-	{ok, P1} = graphdb_project:open(P),
-	{ok, P2} = graphdb_project:open(P),
-	?assertEqual(P1, P2).
+	{ok, P1} = graphdb_project:register_project("Acme"),
+	{ok, P2} = graphdb_project:register_project("Acme"),
+	?assertEqual(P1, P2),
+	{ok, Handle1} = graphdb_project:open(P1),
+	{ok, Handle2} = graphdb_project:open(P2),
+	?assertEqual(Handle1, Handle2),
+	?assertEqual(1, count_projects_named("Acme")).
 
 %%-----------------------------------------------------------------------------
 %% open/1 returns a Project handle carrying the three table atoms.
@@ -378,6 +382,31 @@ setup_isolated_env(Config) ->
 	{ok, _} = application:ensure_all_started(nref),
 
 	[{tmp_dir, TmpDir}, {mnesia_dir, MnesiaDir} | Config].
+
+
+%%-----------------------------------------------------------------------------
+%% count_projects_named(Name) -> non_neg_integer()
+%%
+%% Counts the direct children of Projects (nref 5) whose instance-name AVP
+%% equals Name. Used to assert register_project/1's create-if-absent
+%% behaviour never leaves a duplicate anchor for a retried call.
+%%-----------------------------------------------------------------------------
+count_projects_named(Name) ->
+	{ok, Arcs} = graphdb_mgr:get_relationships(?NREF_PROJECTS, outgoing),
+	ChildNrefs = [T || #relationship{characterization = C, target_nref = T}
+		<- Arcs, C =:= ?ARC_CAT_CHILD],
+	length([N || N <- ChildNrefs, node_named(N, Name)]).
+
+node_named(Nref, Name) ->
+	case graphdb_mgr:get_node(Nref) of
+		{ok, #node{attribute_value_pairs = AVPs}} ->
+			lists:any(fun
+				(#{attribute := ?NAME_ATTR_INSTANCE, value := V}) -> V =:= Name;
+				(_) -> false
+			end, AVPs);
+		_ ->
+			false
+	end.
 
 
 %%-----------------------------------------------------------------------------

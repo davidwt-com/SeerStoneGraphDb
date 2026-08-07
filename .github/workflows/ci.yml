@@ -36,3 +36,6 @@ jobs:
 
       - name: Compile
         run: rebar3 compile
+
+      - name: Cross reference analysis (undefined function calls)
+        run: rebar3 xref

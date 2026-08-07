@@ -134,7 +134,12 @@
 		transaction/1,
 		%% Cache invariant audit / repair
 		verify_caches/0,
-		rebuild_caches/0
+		rebuild_caches/0,
+		verify_caches/1,
+		rebuild_caches/1,
+		%% Cross-worker AVP-update helpers (graphdb_instance production callers)
+		validate_avp_updates/1,
+		apply_avp_updates/2
 		]).
 
 %%---------------------------------------------------------------------
@@ -156,8 +161,6 @@
 -export([
 		validate_direction/1,
 		check_category_guard/1,
-		validate_avp_updates/1,
-		apply_avp_updates/2,
 		check_instance_only/2
 		]).
 -endif.
@@ -252,12 +255,10 @@ create_class(Name, ParentClassNref) ->
 %% Delegates to graphdb_instance; propagates the 3-tuple return verbatim.
 %%-----------------------------------------------------------------------------
 create_instance(Project, Name, ClassNref, ParentNref) ->
-	case graphdb_project:require_project(Project) of
-		{error, _} = Err -> Err;
-		ok ->
-			gen_server:call(?MODULE,
-				{create_instance, Project, Name, ClassNref, ParentNref})
-	end.
+	with_project(Project, fun(P) ->
+		gen_server:call(?MODULE,
+			{create_instance, P, Name, ClassNref, ParentNref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -269,13 +270,11 @@ create_instance(Project, Name, ClassNref, ParentNref) ->
 %% graphdb_instance.
 %%-----------------------------------------------------------------------------
 add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
-	case graphdb_project:require_project(Project) of
-		{error, _} = Err -> Err;
-		ok ->
-			gen_server:call(?MODULE,
-				{add_relationship, Project, SourceNref, CharNref, TargetNref,
-					ReciprocalNref})
-	end.
+	with_project(Project, fun(P) ->
+		gen_server:call(?MODULE,
+			{add_relationship, P, SourceNref, CharNref, TargetNref,
+				ReciprocalNref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -604,10 +603,11 @@ dispatch(Home, {update_relationship_both, S, C, T, Template, {Fwd, Rev}},
 %%-----------------------------------------------------------------------------
 %% verify_caches() -> ok | {error, [{Nref, Field, Expected, Actual}, ...]}
 %%
-%% Scans every node and compares its hierarchy cache fields (`parents`,
-%% `classes`) against the corresponding arcs in the relationships table.
-%% Returns ok when every cache matches its arcs; otherwise returns the
-%% complete list of mismatches.  Order-insensitive comparison.
+%% Scans every node in the environment and compares its hierarchy cache
+%% fields (`parents`, `classes`) against the corresponding arcs in the
+%% environment relationships table.  Returns ok when every cache matches
+%% its arcs; otherwise returns the complete list of mismatches.
+%% Order-insensitive comparison.
 %%
 %% A failed verify is a fatal error in the "arcs authoritative; lists
 %% cached" invariant -- it indicates a write path bug, not correctable
@@ -615,9 +615,24 @@ dispatch(Home, {update_relationship_both, S, C, T, Template, {Fwd, Rev}},
 %% testcase.
 %%-----------------------------------------------------------------------------
 verify_caches() ->
+	verify_caches_(environment).
+
+%%-----------------------------------------------------------------------------
+%% verify_caches(Project) -> ok | {error, [...]} | {error, invalid_project}
+%%
+%% Project-scoped twin of verify_caches/0 (SP2).  Scans Project's own
+%% nodes_<Anchor>/relationships_<Anchor> tables instead of the shared
+%% environment tables.  Gated on a well-formed Project handle.
+%%-----------------------------------------------------------------------------
+verify_caches(Project) ->
+	with_project(Project, fun verify_caches_/1).
+
+verify_caches_(Home) ->
 	Txn = fun() ->
-		Nrefs = mnesia:all_keys(nodes),
-		lists:flatmap(fun verify_one/1, Nrefs)
+		NodesTab = graphdb_ns:node_table(Home),
+		RelTab   = graphdb_ns:rel_table(Home),
+		Nrefs = mnesia:all_keys(NodesTab),
+		lists:flatmap(fun(N) -> verify_one(NodesTab, RelTab, N) end, Nrefs)
 	end,
 	case graphdb_mgr:transaction(Txn) of
 		{ok, []}            -> ok;
@@ -629,15 +644,31 @@ verify_caches() ->
 %%-----------------------------------------------------------------------------
 %% rebuild_caches() -> ok | {error, term()}
 %%
-%% Rewrites every node's `parents` and `classes` cache fields from the
-%% authoritative relationships table.  Used as the post-load tail of
-%% the bootstrap loader (Option B, H0d) and as a diagnostic repair tool.
-%% After a successful rebuild, verify_caches/0 must return ok.
+%% Rewrites every environment node's `parents` and `classes` cache fields
+%% from the authoritative environment relationships table.  Used as the
+%% post-load tail of the bootstrap loader (Option B, H0d) and as a
+%% diagnostic repair tool.  After a successful rebuild, verify_caches/0
+%% must return ok.
 %%-----------------------------------------------------------------------------
 rebuild_caches() ->
+	rebuild_caches_(environment).
+
+%%-----------------------------------------------------------------------------
+%% rebuild_caches(Project) -> ok | {error, term()} | {error, invalid_project}
+%%
+%% Project-scoped twin of rebuild_caches/0 (SP2).  Rewrites Project's own
+%% nodes_<Anchor> cache fields from its own relationships_<Anchor> table.
+%% Gated on a well-formed Project handle.
+%%-----------------------------------------------------------------------------
+rebuild_caches(Project) ->
+	with_project(Project, fun rebuild_caches_/1).
+
+rebuild_caches_(Home) ->
 	Txn = fun() ->
-		Nrefs = mnesia:all_keys(nodes),
-		lists:foreach(fun rebuild_one/1, Nrefs),
+		NodesTab = graphdb_ns:node_table(Home),
+		RelTab   = graphdb_ns:rel_table(Home),
+		Nrefs = mnesia:all_keys(NodesTab),
+		lists:foreach(fun(N) -> rebuild_one(NodesTab, RelTab, N) end, Nrefs),
 		ok
 	end,
 	case graphdb_mgr:transaction(Txn) of
@@ -1191,15 +1222,15 @@ is_avp_for(_, _)                 -> false.
 -define(PARENT_ARCS, [?ARC_CAT_PARENT, ?ARC_ATTR_PARENT, ?ARC_CLS_PARENT, ?ARC_INST_PARENT]).
 
 %%-----------------------------------------------------------------------------
-%% expected_parents(Nref) -> [integer()]
+%% expected_parents(RelTab, Nref) -> [integer()]
 %%
-%% Reads outgoing arcs from Nref of kind composition or taxonomy whose
-%% characterization is one of the parent-arc labels, and returns the
-%% corresponding target nrefs (the node's parent set).  Must run inside
-%% an active mnesia transaction.
+%% Reads outgoing arcs from Nref (in RelTab) of kind composition or
+%% taxonomy whose characterization is one of the parent-arc labels, and
+%% returns the corresponding target nrefs (the node's parent set).  Must
+%% run inside an active mnesia transaction.
 %%-----------------------------------------------------------------------------
-expected_parents(Nref) ->
-	Arcs = mnesia:index_read(relationships, Nref,
+expected_parents(RelTab, Nref) ->
+	Arcs = mnesia:index_read(RelTab, Nref,
 		#relationship.source_nref),
 	[A#relationship.target_nref || A <- Arcs,
 		(A#relationship.kind =:= composition orelse
@@ -1208,15 +1239,15 @@ expected_parents(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% expected_classes(Nref) -> [integer()]
+%% expected_classes(RelTab, Nref) -> [integer()]
 %%
-%% Reads outgoing instantiation arcs from Nref (char=29) and returns
-%% the corresponding target class nrefs.  Non-instance nodes have no
-%% instantiation arcs, so the returned list is naturally empty.  Must
+%% Reads outgoing instantiation arcs from Nref (in RelTab, char=29) and
+%% returns the corresponding target class nrefs.  Non-instance nodes have
+%% no instantiation arcs, so the returned list is naturally empty.  Must
 %% run inside an active mnesia transaction.
 %%-----------------------------------------------------------------------------
-expected_classes(Nref) ->
-	Arcs = mnesia:index_read(relationships, Nref,
+expected_classes(RelTab, Nref) ->
+	Arcs = mnesia:index_read(RelTab, Nref,
 		#relationship.source_nref),
 	[A#relationship.target_nref || A <- Arcs,
 		A#relationship.kind =:= instantiation,
@@ -1224,16 +1255,16 @@ expected_classes(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% verify_one(Nref) -> [{Nref, Field, Expected, Actual}]
+%% verify_one(NodesTab, RelTab, Nref) -> [{Nref, Field, Expected, Actual}]
 %%
-%% Compares one node's cache fields against its arcs.  Returns a list
-%% of zero, one, or two mismatch tuples.  Must run inside an active
-%% mnesia transaction.
+%% Compares one node's (in NodesTab) cache fields against its arcs (in
+%% RelTab).  Returns a list of zero, one, or two mismatch tuples.  Must
+%% run inside an active mnesia transaction.
 %%-----------------------------------------------------------------------------
-verify_one(Nref) ->
-	[Node]   = mnesia:read(nodes, Nref),
-	Parents  = lists:sort(expected_parents(Nref)),
-	Classes  = lists:sort(expected_classes(Nref)),
+verify_one(NodesTab, RelTab, Nref) ->
+	[Node]   = mnesia:read(NodesTab, Nref),
+	Parents  = lists:sort(expected_parents(RelTab, Nref)),
+	Classes  = lists:sort(expected_classes(RelTab, Nref)),
 	Cached_P = lists:sort(Node#node.parents),
 	Cached_C = lists:sort(Node#node.classes),
 	P = case Cached_P =:= Parents of
@@ -1248,17 +1279,17 @@ verify_one(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% rebuild_one(Nref) -> ok
+%% rebuild_one(NodesTab, RelTab, Nref) -> ok
 %%
-%% Rewrites one node's cache fields from its arcs.  Must run inside an
-%% active mnesia transaction.
+%% Rewrites one node's (in NodesTab) cache fields from its arcs (in
+%% RelTab).  Must run inside an active mnesia transaction.
 %%-----------------------------------------------------------------------------
-rebuild_one(Nref) ->
-	[Node]  = mnesia:read(nodes, Nref),
-	Parents = expected_parents(Nref),
-	Classes = expected_classes(Nref),
+rebuild_one(NodesTab, RelTab, Nref) ->
+	[Node]  = mnesia:read(NodesTab, Nref),
+	Parents = expected_parents(RelTab, Nref),
+	Classes = expected_classes(RelTab, Nref),
 	Updated = Node#node{parents = Parents, classes = Classes},
-	ok = mnesia:write(nodes, Updated, write).
+	ok = mnesia:write(NodesTab, Updated, write).
 
 
 %%-----------------------------------------------------------------------------

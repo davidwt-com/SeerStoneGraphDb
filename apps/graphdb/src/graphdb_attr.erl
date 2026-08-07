@@ -139,7 +139,9 @@
 		%% Seeded nref accessors
 		seeded_nrefs/0,
 		%% Cross-worker stamping
-		retro_stamp_attribute_types/0
+		retro_stamp_attribute_types/0,
+		%% Cross-worker lookup (graphdb_language, graphdb_rules init/1 seeding)
+		find_attribute_by_name/2
 		]).
 
 %%---------------------------------------------------------------------
@@ -159,8 +161,7 @@
 %%---------------------------------------------------------------------
 -ifdef(TEST).
 -export([
-		valid_target_kind/1,
-		find_attribute_by_name/2
+		valid_target_kind/1
 		]).
 -endif.
 

@@ -100,8 +100,12 @@ end)).
 %%
 %% mnesia:create_table/2 is a schema operation and cannot run inside a
 %% transaction, so table creation happens AFTER the anchor write, not
-%% atomically with it. ensure_tables/1 is idempotent (already_exists is
-%% not an error), so a retried register_project/1 call converges.
+%% atomically with it. Both steps are create-if-absent: create_anchor/1
+%% looks up an existing project anchor by Name first and reuses it if
+%% found; ensure_tables/1 treats already_exists as success. A retried
+%% register_project/1 call for the same Name therefore converges on the
+%% same anchor and the same tables, rather than allocating a duplicate
+%% anchor each time (this was NOT true before -- see TASKS.md).
 %%
 %% The anchor's nref and rel-id pair are allocated OUTSIDE the transaction
 %% fun: calling gen_servers (graphdb_nref, rel_id_server) inside a Mnesia
@@ -121,7 +125,54 @@ register_project(Name) when is_list(Name) ->
 			Err
 	end.
 
+%%---------------------------------------------------------------------
+%% create_anchor(Name) -> {ok, Nref} | {error, term()}
+%%
+%% Create-if-absent: looks up an existing project anchor by Name under
+%% Projects (nref 5) first; if found, reuses its nref without allocating
+%% a new one or writing anything. Otherwise allocates a fresh nref and
+%% writes a new anchor node + composition arc pair. The by-name lookup
+%% and the write are two separate transactions (nref/rel-id allocation
+%% must stay outside any transaction fun), so this narrows but does not
+%% eliminate the race between two concurrent first-time registrations of
+%% the same Name -- unchanged from the existing rel_id_server/graphdb_nref
+%% discipline used elsewhere (e.g. graphdb_attr:ensure_seed/2).
+%%---------------------------------------------------------------------
 create_anchor(Name) ->
+	case find_anchor_by_name(Name) of
+		{ok, Nref}       -> {ok, Nref};
+		not_found        -> create_new_anchor(Name);
+		{error, _} = Err -> Err
+	end.
+
+find_anchor_by_name(Name) ->
+	F = fun() ->
+		Arcs = mnesia:index_read(relationships, ?NREF_PROJECTS,
+			#relationship.source_nref),
+		ChildNrefs = [A#relationship.target_nref || A <- Arcs,
+			A#relationship.kind =:= composition,
+			A#relationship.characterization =:= ?ARC_CAT_CHILD],
+		Children = lists:flatmap(fun(N) -> mnesia:read(nodes, N) end,
+			ChildNrefs),
+		case lists:search(fun(N) -> anchor_has_name(N, Name) end, Children) of
+			{value, #node{nref = Nref}} -> {ok, Nref};
+			false                       -> not_found
+		end
+	end,
+	case graphdb_mgr:transaction(F) of
+		{ok, Result}    -> Result;
+		{error, Reason} -> {error, Reason}
+	end.
+
+anchor_has_name(#node{kind = instance, attribute_value_pairs = AVPs}, Name) ->
+	lists:any(fun
+		(#{attribute := ?NAME_ATTR_INSTANCE, value := V}) -> V =:= Name;
+		(_) -> false
+	end, AVPs);
+anchor_has_name(_, _) ->
+	false.
+
+create_new_anchor(Name) ->
 	Nref = graphdb_nref:get_next(),
 	{Id1, Id2} = rel_id_server:get_id_pair(),
 	NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
