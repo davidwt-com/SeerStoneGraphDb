@@ -115,7 +115,8 @@
     resume_rejects_bad_session_project/1,
     %% SP2 follow-up — Home routing for arc-discovered nrefs
     t1_env_only_path_identical_across_sessions/1,
-    t2_shadowed_target_is_not_falsely_found/1
+    t2_shadowed_target_is_not_falsely_found/1,
+    t5_cross_store_edge_discloses_home/1
 ]).
 
 suite() ->
@@ -199,7 +200,8 @@ groups() ->
      ]},
      {sp2_traversal_home_routing, [], [
         t1_env_only_path_identical_across_sessions,
-        t2_shadowed_target_is_not_falsely_found
+        t2_shadowed_target_is_not_falsely_found,
+        t5_cross_store_edge_discloses_home
      ]}].
 
 
@@ -1018,6 +1020,26 @@ t2_shadowed_target_is_not_falsely_found(_Config) ->
     %% The invariant: no path is fabricated.
     ?assertNotMatch({ok, [_ | _], _}, Reply),
     ?assertMatch({partial, _Best, _Cont, _S}, Reply).
+
+%%---------------------------------------------------------------------
+%% T5 -- a path that crosses stores says so.  A project instance's
+%% outgoing membership row (characterization 29) lives in the PROJECT's
+%% relationship table but targets an environment class, so this is the
+%% one crossing reachable under this scope.  The edge must disclose
+%% `home => environment`; an environment-only path (T1) discloses
+%% nothing.
+%%---------------------------------------------------------------------
+t5_cross_store_edge_discloses_home(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, X, _} = graphdb_instance:create_instance(Project, "T5X", Cls,
+                                                  root()),
+    Session = graphdb_query:new_session(Project),
+    {ok, Path, _} = graphdb_query:execute_query(
+        #q_find_path{from = X, to = Cls, max_depth = 2,
+                     arc_kinds = [instantiation]}, Session),
+    ?assertMatch([#{from := X, via := ?ARC_INST_TO_CLASS, to := Cls,
+                    kind := instantiation, home := environment}], Path).
 
 
 %%---------------------------------------------------------------------

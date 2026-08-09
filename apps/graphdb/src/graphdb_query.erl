@@ -941,7 +941,7 @@ expand_arcs(ToKey, FromId, FromHome, From, PathHere,
     %% never guessed from the bare nref.
     TargetHome = graphdb_ns:arc_target_namespace(FromHome, K, C),
     TargetId   = home_id(TargetHome),
-    Edge = #{from => From, via => C, to => T, kind => K},
+    Edge = make_edge(From, C, T, K, FromId, TargetId),
     NewPath = PathHere ++ [Edge],
     %% Half B: compare and remember the Home-qualified key. A bare nref
     %% is unique only within a Home.
@@ -961,6 +961,23 @@ expand_arcs(ToKey, FromId, FromHome, From, PathHere,
                                 Rest, V1, Acc1, Found, S)
             end
     end.
+
+%%---------------------------------------------------------------------
+%% make_edge(From, Char, To, Kind, FromId, TargetId) -> map()
+%%
+%% A path edge discloses `home` iff this hop crosses stores. The absent
+%% key means "same store as the previous hop"; the first edge's store is
+%% the one the caller named in `from`. A consumer reconstructs the whole
+%% Home sequence by carrying the last disclosed value forward.
+%%
+%% The value is a home_id(), never the raw Project handle -- results
+%% must not leak physical table atoms.
+%%---------------------------------------------------------------------
+make_edge(From, Char, To, Kind, HomeId, HomeId) ->
+    #{from => From, via => Char, to => To, kind => Kind};
+make_edge(From, Char, To, Kind, _FromId, TargetId) ->
+    #{from => From, via => Char, to => To, kind => Kind,
+      home => TargetId}.
 
 %%---------------------------------------------------------------------
 %% is_scaffold_node(Home, Nref) -> boolean()
