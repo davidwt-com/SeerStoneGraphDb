@@ -112,7 +112,10 @@
     resolve_home_prefers_project_and_logs_on_collision/1,
     %% SP2 review wave B Fix 2 — malformed-handle read-path gating
     execute_query_2_rejects_bad_session_project/1,
-    resume_rejects_bad_session_project/1
+    resume_rejects_bad_session_project/1,
+    %% SP2 follow-up — Home routing for arc-discovered nrefs
+    t1_env_only_path_identical_across_sessions/1,
+    t2_shadowed_target_is_not_falsely_found/1
 ]).
 
 suite() ->
@@ -122,7 +125,8 @@ all() ->
     [{group, skeleton}, {group, q1_get_node}, {group, q1b_get_arcs},
      {group, q2_describe_attribute}, {group, q3_describe_class},
      {group, q4_describe_instance}, {group, q5_list_instances_of},
-     {group, q6_find_path}, {group, sp2_project_session}].
+     {group, q6_find_path}, {group, sp2_project_session},
+     {group, sp2_traversal_home_routing}].
 
 groups() ->
     [{skeleton, [], [
@@ -192,6 +196,10 @@ groups() ->
         resolve_home_prefers_project_and_logs_on_collision,
         execute_query_2_rejects_bad_session_project,
         resume_rejects_bad_session_project
+     ]},
+     {sp2_traversal_home_routing, [], [
+        t1_env_only_path_identical_across_sessions,
+        t2_shadowed_target_is_not_falsely_found
      ]}].
 
 
@@ -933,6 +941,83 @@ resume_rejects_bad_session_project(_Config) ->
     ?assertEqual({error, invalid_project},
                  graphdb_query:resume(Cont, BadSession)),
     ?assertEqual(PidBefore, whereis(graphdb_query)).
+
+%%=====================================================================
+%% SP2 follow-up — Home routing for arc-discovered nrefs
+%% (docs/designs/query-traversal-home-routing-design.md)
+%%=====================================================================
+
+%%---------------------------------------------------------------------
+%% T1 -- the invariant that broke.  An environment-only path must be
+%% returned IDENTICALLY under an environment session, under a project
+%% that does not shadow the intermediate hop, and under a project that
+%% does.  Before the fix the third case returned {ok, no_path}.
+%%---------------------------------------------------------------------
+t1_env_only_path_identical_across_sessions(_Config) ->
+    %% Both attributes are created under bootstrap nref 6 ("Names"), and
+    %% graphdb_attr writes the taxonomy pair 6 -24-> New / New -23-> 6.
+    %% So the only [taxonomy] route from A1 to A2 runs through 6.
+    {ok, A1} = graphdb_attr:create_name_attribute("T1Alpha"),
+    {ok, A2} = graphdb_attr:create_name_attribute("T1Beta"),
+    Q = #q_find_path{from = A1, to = A2, max_depth = 4,
+                     arc_kinds = [taxonomy]},
+
+    {ok, EnvPath, _} =
+        graphdb_query:execute_query(Q, graphdb_query:new_session()),
+
+    %% (b) a project holding a single node -- nref 6 is NOT shadowed.
+    {ok, SmallP} = graphdb_project:register_project("T1 small"),
+    {ok, Small}  = graphdb_project:open(SmallP),
+    _ = root_instance(Small),
+    {ok, SmallPath, _} =
+        graphdb_query:execute_query(Q, graphdb_query:new_session(Small)),
+
+    %% (c) a project holding >= 6 nodes -- nref 6 IS shadowed.  Project
+    %% allocators start at 1, so this is the steady state of any real
+    %% project, not a contrived setup.
+    {ok, BigP} = graphdb_project:register_project("T1 shadowing"),
+    {ok, Big}  = graphdb_project:open(BigP),
+    Seeded = [root_instance(Big) || _ <- lists:seq(1, 6)],
+    ?assert(lists:member(?NREF_NAMES, Seeded)),
+    {ok, BigPath, _} =
+        graphdb_query:execute_query(Q, graphdb_query:new_session(Big)),
+
+    ?assertEqual(EnvPath, SmallPath),
+    ?assertEqual(EnvPath, BigPath),
+    ?assertMatch([#{from := A1, via := ?ARC_ATTR_PARENT,
+                    to := ?NREF_NAMES, kind := taxonomy},
+                  #{from := ?NREF_NAMES, via := ?ARC_ATTR_CHILD,
+                    to := A2, kind := taxonomy}], EnvPath),
+    %% An environment-only path crosses no store, so no edge discloses
+    %% a Home (see Task 3).
+    ?assertEqual([], [E || E <- EnvPath, maps:is_key(home, E)]).
+
+%%---------------------------------------------------------------------
+%% T2 -- false `found` via the bare-nref target comparison.  With
+%% to = 6 under a shadowing project, resolve_home/2 resolves the
+%% ENDPOINT to the project's instance 6 (documented, intentional).  A
+%% walk through the environment's attribute 6 must therefore NOT count
+%% as having found it.  Pre-fix, `case T of To` compared 6 =:= 6 and
+%% returned a one-edge path -- a fabricated result.
+%%
+%% max_depth = 2 makes the post-fix outcome deterministic: level 1
+%% expands A1 to {6}, level 2 expands 6's children, none of which is
+%% the project's instance 6, and the budget runs out with a non-empty
+%% frontier -> partial.
+%%---------------------------------------------------------------------
+t2_shadowed_target_is_not_falsely_found(_Config) ->
+    {ok, A1} = graphdb_attr:create_name_attribute("T2Alpha"),
+    {ok, P}  = graphdb_project:register_project("T2 shadowing"),
+    {ok, Project} = graphdb_project:open(P),
+    Seeded = [root_instance(Project) || _ <- lists:seq(1, 6)],
+    ?assert(lists:member(?NREF_NAMES, Seeded)),
+    Session = graphdb_query:new_session(Project),
+    Reply = graphdb_query:execute_query(
+        #q_find_path{from = A1, to = ?NREF_NAMES, max_depth = 2,
+                     arc_kinds = [taxonomy]}, Session),
+    %% The invariant: no path is fabricated.
+    ?assertNotMatch({ok, [_ | _], _}, Reply),
+    ?assertMatch({partial, _Best, _Cont, _S}, Reply).
 
 
 %%---------------------------------------------------------------------
