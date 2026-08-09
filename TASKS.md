@@ -155,7 +155,8 @@ Tracked follow-ups (not in the seam spec):
   nrefs once and allocates one rel-id pair per `add_relationship` outside
   the transaction; phase 3 folds the prepared list in order. Required one
   behaviour-preserving extraction —
-  `graphdb_instance:add_relationship_in_txn/9`. Design
+  `graphdb_instance:add_relationship_in_txn/9` (now `/10` — SP2 added a
+  leading `Home`). Design
   `docs/designs/batch-mutate-design.md`; plan
   `docs/superpowers/plans/2026-06-24-batch-mutate.md`.
 
@@ -229,26 +230,26 @@ Follow-ups this design adds:
   (and `update_node_avps`') should refuse the whole permanent tier,
   consistent with `retire_node`'s `permanent_node_immutable`.
 
-### Project boundary (architectural; prerequisite for the delete hard-delete fast-path)
+### Project boundary — RESOLVED by SP1 + SP2
 
-The environment/project split described in the knowledge model is not
-physically realized. Today there is a single shared `nodes` /
-`relationships` pair; instances draw nrefs from the environment runtime
-allocator (`graphdb_nref`); and the Projects category (`nref` 5) is a bare
-scaffold with nothing attached. Consequently a project instance is not
-reliably distinguishable from an environment instance-kind node (e.g. a
-rule), and there is no project-local identity space.
+This entry recorded that the environment/project split was not physically
+realized: a single shared `nodes` / `relationships` pair, instances drawing
+nrefs from the environment allocator, and the Projects category (`nref` 5)
+a bare scaffold. **SP1 (reference & namespace model) and SP2 (physical
+project store) closed this** — see *Multi-project sessions* below. Each
+registered project now has its own `nodes_<Anchor>` /
+`relationships_<Anchor>` / `counters_<Anchor>` tables and its own
+allocators starting at 1, so a project instance is physically
+distinguishable and there is a real project-local identity space.
 
-Until this exists, several things stay blocked or degraded:
+What this unblocks, and where each stands now:
 
-- the delete hard-delete fast-path for project instances (slice A above);
-- project-scoped rules (`graphdb_rules` returns
-  `project_rules_not_yet_supported`);
-- any per-project isolation, addressing, or lifecycle.
-
-How projects are separated, identified, and addressed is an **open
-architectural question to be brainstormed** — this entry records the need
-and what it unblocks, not the solution.
+- the delete hard-delete fast-path for project instances (slice A above) —
+  now unblocked, still to be done;
+- project-scoped rules (`graphdb_rules` still returns
+  `project_rules_not_yet_supported`) — now unblocked, still to be done;
+- per-project isolation and addressing — delivered by SP2. Per-project
+  *lifecycle* (residency, distribution, migration) is SP3/SP4.
 
 ### Retired-node purge (deferred; depends on the history/versioning feature)
 
@@ -265,7 +266,7 @@ design — recorded here as a need, not a solution.
 
 `graphdb_mgr:update_node_avps/2` merges a list of AVP updates onto a node
 atomically. Tier-2 wrapper owns one `transaction/1`; tier-1
-`update_node_avps_in_txn/3` does the in-txn work. Wired as the fourth
+`update_node_avps_in_txn/4` does the in-txn work. Wired as the fourth
 `{update_node_avps, Nref, AVPs}` kind in `mutate/1`. Design
 `docs/designs/slice-b-update-node-avps-design.md`.
 
@@ -289,7 +290,7 @@ Set via `graphdb_class:add_qualifying_characteristic/3` (`#{instance_only =>
 true}`) or a `create_class/3` initial AVP. Enforced at three class-level
 value-binding gates — `bind_qc_value/3`, `create_class/3`, and
 `update_node_avps/2` (the last covers `mutate/1`, both composing
-`update_node_avps_in_txn/3`) — each returning `{error,
+`update_node_avps_in_txn/4`) — each returning `{error,
 {instance_only_attribute, AttrNref}}`. Enforcement is local to the class
 node written. Design `docs/designs/slice-c-instance-only-qc-design.md`.
 
@@ -426,8 +427,10 @@ resolver is supplied via `create_instance/4`.
 ## Multi-project sessions
 
 This is a four-sub-project program (design:
-`docs/designs/project-env-reference-namespace-model-design.md`). SP1 (the
-reference & namespace model) is done; SP2–SP4 remain.
+`docs/designs/project-env-reference-namespace-model-design.md`, amended for
+SP2 by `docs/designs/sp2-physical-project-store-design.md`). SP1 (the
+reference & namespace model) and SP2 (the physical project store) are done;
+SP3 (distribution & residency) and SP4 (migration) remain.
 
 ### SP1 — reference & namespace model — IMPLEMENTED
 
@@ -460,19 +463,153 @@ At the API/code layer only, no `node`/`relationship` record changes:
   consumed by `graphdb_query`, so gating them would force the deferred
   query-session unification. Their per-namespace routing lands in SP2.
 - `proxy_coordinates/1` assumes a well-formed proxy (both AVPs present); it can
-  badmatch on a malformed proxy. Harmless until SP2 adds proxy **creation**;
-  handle the missing-AVP case there.
+  badmatch on a malformed proxy. Harmless until proxy **creation** lands;
+  handle the missing-AVP case there. SP2 did not add proxy creation — still
+  open, see below.
 - Proxy-node creation API and dereference; private environment overlays
   (a private overlay hiding a project's nref-5 anchor); session unification
   with the `graphdb_query` session.
 
-### SP2+ — turning project scope on
+**Resolved by SP2 (below):** the reads' per-namespace routing, and the
+`Session`→`Project` rename (`open_session/1`/`session_project/1`/
+`require_session/1` are gone; `open/1`/`require_project/1` replace them).
+**Still open after SP2:** proxy-node creation API and dereference — carried
+forward to SP3 below.
 
-- **Physical project store (SP2)** — separate Mnesia table set / schema per
-  project; per-project allocator from 1; the resolution seam gains real
-  env-vs-project routing; the session binds to physical storage.
+### SP2 — physical project store — IMPLEMENTED
+
+Plan: `.superpowers/sdd/2026-08-05-sp2-physical-project-store/`; design:
+`docs/designs/sp2-physical-project-store-design.md`.
+
+- **Per-project physical store** — `graphdb_project:register_project/1` now
+  also creates the project's three Mnesia tables: `nodes_<Anchor>`,
+  `relationships_<Anchor>`, `counters_<Anchor>` (`<Anchor>` = the project's
+  environment anchor nref). `open/1` resolves a registered project nref into
+  a `Project` handle `#{anchor, nodes, rels, counters}`; `require_project/1`
+  replaces SP1's `require_session/1`. `session_project/1` is removed — the
+  handle itself is the only lookup, there is no ambient project context.
+- **Per-project allocators from 1** — `next_nref/1` / `next_rel_id_pair/1`
+  via `mnesia:dirty_update_counter/3` on the project's own `counters_<A>`
+  table. This closes the SP1-era nref-collision hazard: every project's
+  nrefs now restart at 1 in an isolated table instead of colliding
+  numerically with environment bootstrap nrefs 1–35 (or with any other
+  project's nrefs) inside a shared table.
+- **Home-relative namespace routing** — `graphdb_ns:namespace_of/2` /
+  `target_namespace/2` take a leading `Home :: environment | Project`;
+  `node_table/1` / `rel_table/1` map a `Home` to its physical table atom.
+  `characterization`/`reciprocal` (arc labels), class nodes, and attribute
+  nodes always resolve to the environment; `source_nref`/`target_nref`
+  route through `Home`. Instance↔class membership arcs (both directions,
+  including the class→instance row whose `source_nref` is an environment
+  class nref) are written in the project's own table.
+- **`graphdb_instance` fully Project-routed** — the entire write API and the
+  instance reads (`get_instance`, `children`, `compositional_ancestors`,
+  `class_of`, `class_memberships`, `resolve_value`) take a leading
+  `Project`, no longer namespace-agnostic. SP1's `Session` parameter is
+  renamed `Project` throughout and is now load-bearing (SP1 validated it
+  but it was inert against the single store).
+- **`graphdb_mgr` Project-taking twins** — `get_node/2`, `retire_node/2`,
+  `unretire_node/2`, `update_node_avps/3`, `delete_node/2`, `mutate/2`, all
+  gated by a private `with_project/2`. `mutate/1` stays environment-only by
+  design (a batch mixing environment and project mutations has no single
+  physical table set to run against once the store is split).
+- **`graphdb_query` sessions bind a Project** — `new_session/1`;
+  `resolve_home/2` resolves a bare nref by trying the bound project first,
+  falling back to the environment, logging on a genuine collision.
+
+**Scope addition beyond the original design** — Task 10 added Project-taking
+twins for `retire_node`/`unretire_node`/`update_node_avps`/`delete_node`,
+which were not in the original design's API table. Their absence would have
+been a live nref-collision hazard post-SP2: a bare-Nref call against these
+would resolve against the shared environment table, silently missing or
+clobbering project data sitting at the same numeric nref. The twins close
+that gap.
+
+**Known gap** — `graphdb_mgr:get_relationships/1,2` has no Project-taking
+twin (the only one of the `graphdb_mgr` read/write operations touched by
+SP1/SP2 without one). 15 call sites across 11 test functions in
+`graphdb_instance_SUITE` / `graphdb_mgr_SUITE` work around it with direct
+`mnesia:index_read(graphdb_ns:rel_table(Project), ...)`. A repo-wide grep
+found zero production callers, so this is an API-completeness gap, not a
+live bug — pick it up when a project-side relationship-read caller appears.
+
+**Open defect (Important) — query traversal silently truncates
+environment-only paths under a project-bound session.**
+`graphdb_query:session_read_arcs/4` and `is_scaffold_node/2` push every
+*arc-discovered* nref through `resolve_home/2`, which was designed for
+entry-point nrefs (where no characterization context exists). Mid-traversal
+it re-guesses Home per frontier node, so a bootstrap nref that a project
+happens to shadow is read from the project instead of the environment.
+Reproduced: a `#q_find_path{}` between two runtime-tier environment
+attributes whose only path runs through bootstrap nref 6 ("Names") returns
+`{ok, no_path}` under a session bound to a project with 21 instances, while
+returning the correct 2-hop path under an environment session and under a
+1-instance project. Both endpoints are unshadowed, so this is **not** the
+documented, tested "endpoint resolves to the project by caller intent"
+behaviour of `resolve_home/2` — it is mid-traversal re-guessing.
+Because project allocators start at 1, any project with ≥6 instances
+shadows nref 6 and any with ≥35 shadows the whole bootstrap scaffold, so
+this is high-likelihood, not theoretical. The result is silently wrong: no
+error, only a collision warning in the log.
+
+Fix needs a design decision, not a local patch: arc-discovered nrefs *do*
+have characterization context, so they should route via
+`graphdb_ns:target_namespace/2` on the arc's `target_kind` rather than
+guessing — with the 29/30 class↔instance membership pair as an explicit
+exception, since its source and target deliberately live in different
+Homes. Deferred out of SP2 as a scoped design task.
+
+**Open defect (Important, pre-existing, unrelated to SP2) —
+`rel_id_server:seed_from_mnesia/0` calls a nonexistent function.**
+`rel_id_server.erl:207` calls `mnesia:dirty_foldl/3`, which does not exist
+in OTP 28 (should be `mnesia:foldl/3`). Invisible to the compiler; caught
+by the `xref` gate added alongside SP2 and currently suppressed by a
+single-MFA `xref_ignores` entry in `rebar.config` — **remove that entry
+when this is fixed.** `initialize/0` calls it only when the DETS `counter`
+key is absent, so a normal restart with an intact DETS file never hits it.
+The real failure mode: if the DETS file is lost while the Mnesia
+`relationships` table survives (restore, data-dir move, partial recovery),
+the counter restarts at 1 and hands out ids colliding with existing primary
+keys, and `mnesia:write` then **silently overwrites existing relationship
+rows**.
+
+**Open design question — `TheKnowledgeNetwork.md` §3 says identity is
+uniform; SP2 makes that false at the physical layer.** The canonical spec
+states ontology nodes and project nodes "share the same identity space."
+Post-SP2 each project's allocator restarts at 1, so a bare nref is unique
+only within a `Home` — nref 7 in project A, nref 7 in project B, and
+bootstrap nref 7 are three different nodes. The SP2 design doc does not
+resolve this either; it only notes the *anchor* nref needs no new identity
+scheme. Per this repo's rule that `TheKnowledgeNetwork.md` is conceptual
+and does not track code, SP2 flagged rather than edited it. Needs a
+deliberate call: either the spec records that identity is now
+`Home`-relative, or the model asserts a globally-unique identity that the
+implementation must eventually restore (e.g. via the deferred non-integer
+nref indirection). Not a code defect — a spec/model decision.
+
+**Accepted consequence of `resolve_home/2` (documented, tested, recorded
+here so it is a choice and not a surprise).** A project-bound
+`graphdb_query` session resolves a bare nref to the project when it exists
+in both stores — so environment nodes numerically below the project's
+allocator high-water mark become unaddressable through that session.
+`#q_get_node{nref = 3}` under a project with ≥3 instances returns the
+project's instance 3, not the `Classes` category. This is deliberate
+(caller intent) and covered by
+`resolve_home_prefers_project_and_logs_on_collision`; it is called out
+because the shadowed range grows with every instance created. Distinct
+from the traversal defect above, which is *not* intentional.
+
+**Minor — `graphdb_mgr:do_get_node/1` and `/2` diverge on the retired
+marker.** The `/1` (environment) form applies a retired-marker check; the
+`/2` (Project) form does not. Documented at `graphdb_mgr.erl:186-188`.
+Harmless today, but the asymmetry will surprise someone — make them
+consistent, or document why they should differ.
+
+### SP3+ — distribution, residency, migration
+
 - **Distribution & residency (SP3)** — projects on separate nodes / locations;
-  environment reachability or replication at each location; proxy dereference.
+  environment reachability or replication at each location; proxy-node
+  creation API and dereference (still open post-SP2, see above).
 - **Migration (SP4)** — move existing instances out of the shared environment
   tables into project storage; reassign their nrefs.
 - Session state may carry multiple `{ProjectId, AnchorNref}` and a
@@ -487,6 +624,33 @@ recurse transitively into a conferred class's rules — which reframes
 multi-class creation from an API-signature problem into a gather-
 transitivity problem. A class-list / signature-widening framing was
 considered and rejected; see `docs/designs/f4-phase-b4-connection-firing-design.md` §7.
+
+---
+
+## Client session
+
+A concept named but deliberately not yet designed.
+
+`Session` is intended as a higher-level, per-user or per-client container
+for the state needed to disambiguate that client's operations — a primary
+project, a primary language, and whatever else later proves to need
+disambiguation.
+
+The intent is that a `Session` is used only at a high level and is
+decomposed there into the concrete handles the lower-level functions take:
+functions that touch a store receive a `Project`; functions that need a
+specific language receive that language. Nothing below the top layer sees a
+`Session`.
+
+No design work has been done, and none should be inferred from the name.
+The container's content is driven by consumers that do not exist yet, so
+its shape is deliberately left open. The existing `graphdb_query` session
+is the closest thing in the tree today and is the natural candidate for
+`Session` to absorb whenever this is picked up.
+
+Note that the parameter SP1 shipped under the name `Session` was in fact a
+project handle; SP2 renames it `Project` and frees the name for this
+concept.
 
 ---
 

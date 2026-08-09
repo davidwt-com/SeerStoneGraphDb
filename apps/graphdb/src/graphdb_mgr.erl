@@ -109,6 +109,7 @@
 		start_link/0,
 		%% Read operations
 		get_node/1,
+		get_node/2,
 		get_relationships/1,
 		get_relationships/2,
 		%% Write operations (delegate to workers)
@@ -117,18 +118,28 @@
 		create_instance/4,
 		add_relationship/5,
 		delete_node/1,
+		delete_node/2,
 		retire_node/1,
+		retire_node/2,
 		unretire_node/1,
+		unretire_node/2,
 		update_node_avps/2,
+		update_node_avps/3,
 		%% Batch write (tier-3 entry point)
 		mutate/1,
+		mutate/2,
 		%% Tier-1 in-txn write primitive (composed by mutate/1)
-		update_node_avps_in_txn/3,
+		update_node_avps_in_txn/4,
 		%% Transaction helper (write-path seam)
 		transaction/1,
 		%% Cache invariant audit / repair
 		verify_caches/0,
-		rebuild_caches/0
+		rebuild_caches/0,
+		verify_caches/1,
+		rebuild_caches/1,
+		%% Cross-worker AVP-update helpers (graphdb_instance production callers)
+		validate_avp_updates/1,
+		apply_avp_updates/2
 		]).
 
 %%---------------------------------------------------------------------
@@ -150,8 +161,6 @@
 -export([
 		validate_direction/1,
 		check_category_guard/1,
-		validate_avp_updates/1,
-		apply_avp_updates/2,
 		check_instance_only/2
 		]).
 -endif.
@@ -172,6 +181,22 @@ start_link() ->
 %%-----------------------------------------------------------------------------
 get_node(Nref) ->
 	gen_server:call(?MODULE, {get_node, Nref}).
+
+
+%%-----------------------------------------------------------------------------
+%% get_node(Project, Nref) -> {ok, #node{}} | {error, not_found | term()}
+%%
+%% Reads a single node from Project's own nodes table. Unlike get_node/1,
+%% no retired-marker check -- SP1/SP2 have not extended the retired-read
+%% guard to the project write path; project reads return the raw node.
+%% Gated on a well-formed Project handle (graphdb_project:require_project/1)
+%% BEFORE the gen_server:call, so a malformed handle never reaches the
+%% singleton -- mirrors graphdb_instance:with_project/2.
+%%-----------------------------------------------------------------------------
+get_node(Project, Nref) ->
+	with_project(Project, fun(P) ->
+		gen_server:call(?MODULE, {get_node, P, Nref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -222,38 +247,34 @@ create_class(Name, ParentClassNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% create_instance(Session, Name, ClassNref, ParentNref) ->
+%% create_instance(Project, Name, ClassNref, ParentNref) ->
 %%     {ok, Nref, report()} | {error, Reason, report()} | {error, Reason}
 %%
-%% Creates a new instance node in the project named by Session and fires
-%% mandatory composition rules.  A project operation requires a valid session
-%% (SP1).  Delegates to graphdb_instance; propagates the 3-tuple return verbatim.
+%% Creates a new instance node in Project and fires mandatory composition
+%% rules.  A project operation requires a valid Project handle (SP2).
+%% Delegates to graphdb_instance; propagates the 3-tuple return verbatim.
 %%-----------------------------------------------------------------------------
-create_instance(Session, Name, ClassNref, ParentNref) ->
-	case graphdb_project:require_session(Session) of
-		{error, _} = Err -> Err;
-		ok ->
-			gen_server:call(?MODULE,
-				{create_instance, Session, Name, ClassNref, ParentNref})
-	end.
+create_instance(Project, Name, ClassNref, ParentNref) ->
+	with_project(Project, fun(P) ->
+		gen_server:call(?MODULE,
+			{create_instance, P, Name, ClassNref, ParentNref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
-%% add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+%% add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
 %%     ok | {error, term()}
 %%
-%% Creates a bidirectional relationship (two directed rows) in the project
-%% named by Session.  A project operation requires a valid session (SP1);
-%% delegates to graphdb_instance.
+%% Creates a bidirectional relationship (two directed rows) in Project.  A
+%% project operation requires a valid Project handle (SP2); delegates to
+%% graphdb_instance.
 %%-----------------------------------------------------------------------------
-add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
-	case graphdb_project:require_session(Session) of
-		{error, _} = Err -> Err;
-		ok ->
-			gen_server:call(?MODULE,
-				{add_relationship, Session, SourceNref, CharNref, TargetNref,
-					ReciprocalNref})
-	end.
+add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+	with_project(Project, fun(P) ->
+		gen_server:call(?MODULE,
+			{add_relationship, P, SourceNref, CharNref, TargetNref,
+				ReciprocalNref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -265,6 +286,17 @@ add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
 %%-----------------------------------------------------------------------------
 delete_node(Nref) ->
 	gen_server:call(?MODULE, {delete_node, Nref}).
+
+
+%%-----------------------------------------------------------------------------
+%% delete_node(Project, Nref) -> ok | {error, term()}
+%% Project-scoped twin of delete_node/1. Actual deletion not yet implemented.
+%% Gated on a well-formed Project handle before the gen_server:call.
+%%-----------------------------------------------------------------------------
+delete_node(Project, Nref) ->
+	with_project(Project, fun(P) ->
+		gen_server:call(?MODULE, {delete_node, P, Nref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -282,6 +314,25 @@ unretire_node(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
+%% retire_node(Project, Nref) -> ok | {error, Reason}
+%% unretire_node(Project, Nref) -> ok | {error, Reason}
+%%
+%% Project-scoped twins. No permanent-tier guard: a project's allocator has
+%% no permanent tier (design §4) -- every project nref is mutable. Gated on
+%% a well-formed Project handle before the gen_server:call.
+%%-----------------------------------------------------------------------------
+retire_node(Project, Nref) ->
+	with_project(Project, fun(P) ->
+		gen_server:call(?MODULE, {retire_node, P, Nref})
+	end).
+
+unretire_node(Project, Nref) ->
+	with_project(Project, fun(P) ->
+		gen_server:call(?MODULE, {unretire_node, P, Nref})
+	end).
+
+
+%%-----------------------------------------------------------------------------
 %% update_node_avps(Nref, AVPs) -> ok | {error, term()}
 %%
 %% Merges a list of attribute-value-pair updates into a node's AVP list,
@@ -296,6 +347,23 @@ update_node_avps(Nref, AVPs) ->
 	case validate_avp_updates(AVPs) of
 		ok ->
 			gen_server:call(?MODULE, {update_node_avps, Nref, AVPs});
+		{error, _} = Err ->
+			Err
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% update_node_avps(Project, Nref, AVPs) -> ok | {error, term()}
+%% Project-scoped twin of update_node_avps/2. Gated on a well-formed Project
+%% handle before the gen_server:call, after client-side AVP validation.
+%%-----------------------------------------------------------------------------
+-spec update_node_avps(map(), integer(), [map()]) -> ok | {error, term()}.
+update_node_avps(Project, Nref, AVPs) ->
+	case validate_avp_updates(AVPs) of
+		ok ->
+			with_project(Project, fun(P) ->
+				gen_server:call(?MODULE, {update_node_avps, P, Nref, AVPs})
+			end);
 		{error, _} = Err ->
 			Err
 	end.
@@ -327,10 +395,21 @@ transaction(Fun) ->
 
 %%-----------------------------------------------------------------------------
 %% mutate([Mutation]) -> {ok, [Result]} | {error, Reason}
+%% mutate(Project, [Mutation]) -> {ok, [Result]} | {error, Reason}
 %%
 %% Tier-3 batch write entry point: applies an ordered list of mutations
 %% ATOMICALLY in one graphdb_mgr:transaction/1, composing the write-path
 %% seam's tier-1 primitives directly. All commit or none do.
+%%
+%% mutate/1 resolves Home = environment (its grammar and behaviour are
+%% UNCHANGED from before mutate/2 existed). mutate/2 is the Project-aware
+%% twin: it resolves Home = Project, so add_relationship / remove_relationship
+%% / update_relationship(_both) / update_node_avps / retire_node /
+%% unretire_node all touch Project's own tables. A batch may still mix
+%% environment and project references (an add_relationship whose Char/Recip
+%% are environment attribute nrefs, as always) but spans at most one project
+%% plus the environment (design doc7). mutate/2 is gated on a well-formed
+%% Project handle via with_project/2, same as the other Project-taking twins.
 %%
 %% Mutation grammar (tagged tuples mirroring the public arities):
 %%   {add_relationship, S, C, T, R}                       default template, no AVPs
@@ -364,56 +443,71 @@ transaction(Fun) ->
 %%-----------------------------------------------------------------------------
 -spec mutate([tuple()]) -> {ok, [term()]} | {error, term()}.
 mutate(Mutations) ->
-	case validate_mutations(Mutations) of
-		ok               -> run_mutations(Mutations);
+	do_mutate(environment, Mutations).
+
+-spec mutate(map(), [tuple()]) -> {ok, [term()]} | {error, term()}.
+mutate(Project, Mutations) ->
+	with_project(Project, fun(P) -> do_mutate(P, Mutations) end).
+
+do_mutate(Home, Mutations) ->
+	case validate_mutations(Home, Mutations) of
+		ok               -> run_mutations(Home, Mutations);
 		{error, _} = Err -> Err
 	end.
 
 %% Phase 1: static validation. No DB access, no allocation. A malformed term
 %% -> {error, {bad_mutation, M}}; a permanent-tier retire/unretire ->
 %% {error, permanent_node_immutable} (the same static guard set_retired/3
-%% applies in the solo path).
-validate_mutations([]) ->
+%% applies in the solo path). Home threads into tier_guard/2 only -- every
+%% other clause ignores it (pure shape check, unaffected by Home).
+validate_mutations(_Home, []) ->
 	ok;
-validate_mutations([M | Rest]) ->
-	case validate_mutation(M) of
-		ok               -> validate_mutations(Rest);
+validate_mutations(Home, [M | Rest]) ->
+	case validate_mutation(Home, M) of
+		ok               -> validate_mutations(Home, Rest);
 		{error, _} = Err -> Err
 	end.
 
-validate_mutation({add_relationship, _S, _C, _T, _R}) ->
+validate_mutation(_Home, {add_relationship, _S, _C, _T, _R}) ->
 	ok;
-validate_mutation({add_relationship, _S, _C, _T, _R, _Template}) ->
+validate_mutation(_Home, {add_relationship, _S, _C, _T, _R, _Template}) ->
 	ok;
-validate_mutation({add_relationship, _S, _C, _T, _R, _Template, {_Fwd, _Rev}}) ->
+validate_mutation(_Home,
+		{add_relationship, _S, _C, _T, _R, _Template, {_Fwd, _Rev}}) ->
 	ok;
-validate_mutation({retire_node, Nref}) when is_integer(Nref) ->
-	tier_guard(Nref);
-validate_mutation({unretire_node, Nref}) when is_integer(Nref) ->
-	tier_guard(Nref);
-validate_mutation({update_node_avps, Nref, AVPs}) when is_integer(Nref) ->
+validate_mutation(Home, {retire_node, Nref}) when is_integer(Nref) ->
+	tier_guard(Home, Nref);
+validate_mutation(Home, {unretire_node, Nref}) when is_integer(Nref) ->
+	tier_guard(Home, Nref);
+validate_mutation(Home, {update_node_avps, Nref, AVPs}) when is_integer(Nref) ->
 	case validate_avp_updates(AVPs) of
-		ok               -> tier_guard(Nref);
+		ok               -> tier_guard(Home, Nref);
 		{error, _} = Err -> Err
 	end;
-validate_mutation({remove_relationship, _S, _C, _T}) ->
+validate_mutation(_Home, {remove_relationship, _S, _C, _T}) ->
 	ok;
-validate_mutation({remove_relationship, _S, _C, _T, _Template}) ->
+validate_mutation(_Home, {remove_relationship, _S, _C, _T, _Template}) ->
 	ok;
-validate_mutation({update_relationship, _S, _C, _T, Updates}) ->
+validate_mutation(_Home, {update_relationship, _S, _C, _T, Updates}) ->
 	validate_avp_updates(Updates);
-validate_mutation({update_relationship, _S, _C, _T, _Template, Updates}) ->
+validate_mutation(_Home, {update_relationship, _S, _C, _T, _Template, Updates}) ->
 	validate_avp_updates(Updates);
-validate_mutation({update_relationship_both, _S, _C, _T, {Fwd, Rev}}) ->
+validate_mutation(_Home, {update_relationship_both, _S, _C, _T, {Fwd, Rev}}) ->
 	validate_both_avp_updates(Fwd, Rev);
-validate_mutation({update_relationship_both, _S, _C, _T, _Template,
+validate_mutation(_Home, {update_relationship_both, _S, _C, _T, _Template,
 		{Fwd, Rev}}) ->
 	validate_both_avp_updates(Fwd, Rev);
-validate_mutation(M) ->
+validate_mutation(_Home, M) ->
 	{error, {bad_mutation, M}}.
 
-tier_guard(Nref) when Nref >= ?NREF_START -> ok;
-tier_guard(_Nref)                         -> {error, permanent_node_immutable}.
+%% tier_guard(Home, Nref) -> ok | {error, permanent_node_immutable}
+%% A project's allocator has no permanent tier (design4): any Home other
+%% than environment is unconditionally ok. Only the literal environment
+%% tier is guarded against Nref < ?NREF_START, matching mutate/1's original
+%% (Home-less) behaviour exactly.
+tier_guard(Home, _Nref) when Home =/= environment -> ok;
+tier_guard(environment, Nref) when Nref >= ?NREF_START -> ok;
+tier_guard(environment, _Nref)                         -> {error, permanent_node_immutable}.
 
 validate_both_avp_updates(Fwd, Rev) ->
 	case validate_avp_updates(Fwd) of
@@ -421,91 +515,99 @@ validate_both_avp_updates(Fwd, Rev) ->
 		{error, _} = Err -> Err
 	end.
 
-%% Phases 2 + 3. Precondition: Mutations already passed validate_mutations/1.
+%% Phases 2 + 3. Precondition: Mutations already passed validate_mutations/2.
 %% Empty batch short-circuits with no transaction.
-run_mutations([]) ->
+run_mutations(_Home, []) ->
 	{ok, []};
-run_mutations(Mutations) ->
+run_mutations(Home, Mutations) ->
 	%% Phase 2 (outside the transaction): resolve the seeded attr nrefs once,
 	%% and allocate one rel-id pair per add_relationship.
 	{ok, #{target_kind := TkAttr, retired := RetAttr}} =
 		graphdb_attr:seeded_nrefs(),
-	Prepared = [prepare(M) || M <- Mutations],
+	Prepared = [prepare(Home, M) || M <- Mutations],
 	%% Phase 3: one transaction folding the prepared list in order.
 	graphdb_mgr:transaction(fun() ->
-		[dispatch(P, TkAttr, RetAttr) || P <- Prepared]
+		[dispatch(Home, P, TkAttr, RetAttr) || P <- Prepared]
 	end).
 
 %% Phase 2 per-mutation prep. Allocates one rel-id pair per add_relationship
-%% via rel_id_server (a gen_server call -- MUST stay outside the transaction)
-%% and normalises each add_relationship to the explicit
+%% (a gen_server call -- MUST stay outside the transaction), routed to
+%% rel_id_server for the environment or graphdb_project's own counter for a
+%% project, and normalises each add_relationship to the explicit
 %% (TemplateSpec, AVPSpec) form. retire/unretire need no resources.
 %% Prepared add_relationship shape:
 %%   {add_relationship, IdPair, S, C, T, R, TemplateSpec, AVPSpec}
-prepare({add_relationship, S, C, T, R}) ->
-	{add_relationship, rel_id_server:get_id_pair(), S, C, T, R,
-		default, {[], []}};
-prepare({add_relationship, S, C, T, R, Template}) ->
-	{add_relationship, rel_id_server:get_id_pair(), S, C, T, R,
-		Template, {[], []}};
-prepare({add_relationship, S, C, T, R, Template, AVPSpec}) ->
-	{add_relationship, rel_id_server:get_id_pair(), S, C, T, R,
-		Template, AVPSpec};
-prepare({retire_node, _Nref} = M) ->
+prepare(Home, {add_relationship, S, C, T, R}) ->
+	{add_relationship, alloc_rel_id_pair(Home), S, C, T, R, default, {[], []}};
+prepare(Home, {add_relationship, S, C, T, R, Template}) ->
+	{add_relationship, alloc_rel_id_pair(Home), S, C, T, R, Template, {[], []}};
+prepare(Home, {add_relationship, S, C, T, R, Template, AVPSpec}) ->
+	{add_relationship, alloc_rel_id_pair(Home), S, C, T, R, Template, AVPSpec};
+prepare(_Home, {retire_node, _Nref} = M) ->
 	M;
-prepare({unretire_node, _Nref} = M) ->
+prepare(_Home, {unretire_node, _Nref} = M) ->
 	M;
-prepare({update_node_avps, _Nref, _AVPs} = M) ->
+prepare(_Home, {update_node_avps, _Nref, _AVPs} = M) ->
 	M;
-prepare({remove_relationship, _S, _C, _T} = M) ->
+prepare(_Home, {remove_relationship, _S, _C, _T} = M) ->
 	M;
-prepare({remove_relationship, _S, _C, _T, _Template} = M) ->
+prepare(_Home, {remove_relationship, _S, _C, _T, _Template} = M) ->
 	M;
-prepare({update_relationship, _S, _C, _T, _U} = M) ->
+prepare(_Home, {update_relationship, _S, _C, _T, _U} = M) ->
 	M;
-prepare({update_relationship, _S, _C, _T, _Template, _U} = M) ->
+prepare(_Home, {update_relationship, _S, _C, _T, _Template, _U} = M) ->
 	M;
-prepare({update_relationship_both, _S, _C, _T, _Pair} = M) ->
+prepare(_Home, {update_relationship_both, _S, _C, _T, _Pair} = M) ->
 	M;
-prepare({update_relationship_both, _S, _C, _T, _Template, _Pair} = M) ->
+prepare(_Home, {update_relationship_both, _S, _C, _T, _Template, _Pair} = M) ->
 	M.
+
+%% Duplicated 2-clause Home-dispatch helper (same YAGNI precedent as
+%% is_retired/2's per-module duplication) -- graphdb_instance has its own
+%% copy inline in do_add_relationship/8.
+alloc_rel_id_pair(environment) -> rel_id_server:get_id_pair();
+alloc_rel_id_pair(Project)     -> graphdb_project:next_rel_id_pair(Project).
 
 %% Phase 3 dispatch. Runs INSIDE the transaction: no gen_server calls, no
 %% transaction/1, no rel-id allocation here (all done in phase 2). Each
 %% tier-1 primitive returns ok or calls mnesia:abort/1.
-dispatch({add_relationship, IdPair, S, C, T, R, TemplateSpec, AVPSpec},
+dispatch(Home, {add_relationship, IdPair, S, C, T, R, TemplateSpec, AVPSpec},
 		TkAttr, RetAttr) ->
-	graphdb_instance:add_relationship_in_txn(IdPair, S, C, T, R, TemplateSpec,
-		AVPSpec, TkAttr, RetAttr);
-dispatch({retire_node, Nref}, _TkAttr, RetAttr) ->
-	set_retired_(Nref, true, RetAttr);
-dispatch({unretire_node, Nref}, _TkAttr, RetAttr) ->
-	set_retired_(Nref, false, RetAttr);
-dispatch({update_node_avps, Nref, AVPs}, _TkAttr, RetAttr) ->
-	update_node_avps_in_txn(Nref, AVPs, RetAttr);
-dispatch({remove_relationship, S, C, T}, _TkAttr, _RetAttr) ->
-	graphdb_instance:remove_relationship_in_txn(S, C, T, any);
-dispatch({remove_relationship, S, C, T, Template}, _TkAttr, _RetAttr) ->
-	graphdb_instance:remove_relationship_in_txn(S, C, T, Template);
-dispatch({update_relationship, S, C, T, U}, _TkAttr, _RetAttr) ->
-	graphdb_instance:update_relationship_avps_in_txn(S, C, T, any, U);
-dispatch({update_relationship, S, C, T, Template, U}, _TkAttr, _RetAttr) ->
-	graphdb_instance:update_relationship_avps_in_txn(S, C, T, Template, U);
-dispatch({update_relationship_both, S, C, T, {Fwd, Rev}}, _TkAttr, _RetAttr) ->
-	graphdb_instance:update_relationship_both_in_txn(S, C, T, any, Fwd, Rev);
-dispatch({update_relationship_both, S, C, T, Template, {Fwd, Rev}}, _TkAttr,
+	graphdb_instance:add_relationship_in_txn(Home, IdPair, S, C, T, R,
+		TemplateSpec, AVPSpec, TkAttr, RetAttr);
+dispatch(Home, {retire_node, Nref}, _TkAttr, RetAttr) ->
+	set_retired_(Home, Nref, true, RetAttr);
+dispatch(Home, {unretire_node, Nref}, _TkAttr, RetAttr) ->
+	set_retired_(Home, Nref, false, RetAttr);
+dispatch(Home, {update_node_avps, Nref, AVPs}, _TkAttr, RetAttr) ->
+	update_node_avps_in_txn(Home, Nref, AVPs, RetAttr);
+dispatch(Home, {remove_relationship, S, C, T}, _TkAttr, _RetAttr) ->
+	graphdb_instance:remove_relationship_in_txn(Home, S, C, T, any);
+dispatch(Home, {remove_relationship, S, C, T, Template}, _TkAttr, _RetAttr) ->
+	graphdb_instance:remove_relationship_in_txn(Home, S, C, T, Template);
+dispatch(Home, {update_relationship, S, C, T, U}, _TkAttr, _RetAttr) ->
+	graphdb_instance:update_relationship_avps_in_txn(Home, S, C, T, any, U);
+dispatch(Home, {update_relationship, S, C, T, Template, U}, _TkAttr, _RetAttr) ->
+	graphdb_instance:update_relationship_avps_in_txn(Home, S, C, T, Template,
+		U);
+dispatch(Home, {update_relationship_both, S, C, T, {Fwd, Rev}}, _TkAttr,
 		_RetAttr) ->
-	graphdb_instance:update_relationship_both_in_txn(S, C, T, Template, Fwd,
-		Rev).
+	graphdb_instance:update_relationship_both_in_txn(Home, S, C, T, any, Fwd,
+		Rev);
+dispatch(Home, {update_relationship_both, S, C, T, Template, {Fwd, Rev}},
+		_TkAttr, _RetAttr) ->
+	graphdb_instance:update_relationship_both_in_txn(Home, S, C, T, Template,
+		Fwd, Rev).
 
 
 %%-----------------------------------------------------------------------------
 %% verify_caches() -> ok | {error, [{Nref, Field, Expected, Actual}, ...]}
 %%
-%% Scans every node and compares its hierarchy cache fields (`parents`,
-%% `classes`) against the corresponding arcs in the relationships table.
-%% Returns ok when every cache matches its arcs; otherwise returns the
-%% complete list of mismatches.  Order-insensitive comparison.
+%% Scans every node in the environment and compares its hierarchy cache
+%% fields (`parents`, `classes`) against the corresponding arcs in the
+%% environment relationships table.  Returns ok when every cache matches
+%% its arcs; otherwise returns the complete list of mismatches.
+%% Order-insensitive comparison.
 %%
 %% A failed verify is a fatal error in the "arcs authoritative; lists
 %% cached" invariant -- it indicates a write path bug, not correctable
@@ -513,9 +615,24 @@ dispatch({update_relationship_both, S, C, T, Template, {Fwd, Rev}}, _TkAttr,
 %% testcase.
 %%-----------------------------------------------------------------------------
 verify_caches() ->
+	verify_caches_(environment).
+
+%%-----------------------------------------------------------------------------
+%% verify_caches(Project) -> ok | {error, [...]} | {error, invalid_project}
+%%
+%% Project-scoped twin of verify_caches/0 (SP2).  Scans Project's own
+%% nodes_<Anchor>/relationships_<Anchor> tables instead of the shared
+%% environment tables.  Gated on a well-formed Project handle.
+%%-----------------------------------------------------------------------------
+verify_caches(Project) ->
+	with_project(Project, fun verify_caches_/1).
+
+verify_caches_(Home) ->
 	Txn = fun() ->
-		Nrefs = mnesia:all_keys(nodes),
-		lists:flatmap(fun verify_one/1, Nrefs)
+		NodesTab = graphdb_ns:node_table(Home),
+		RelTab   = graphdb_ns:rel_table(Home),
+		Nrefs = mnesia:all_keys(NodesTab),
+		lists:flatmap(fun(N) -> verify_one(NodesTab, RelTab, N) end, Nrefs)
 	end,
 	case graphdb_mgr:transaction(Txn) of
 		{ok, []}            -> ok;
@@ -527,15 +644,31 @@ verify_caches() ->
 %%-----------------------------------------------------------------------------
 %% rebuild_caches() -> ok | {error, term()}
 %%
-%% Rewrites every node's `parents` and `classes` cache fields from the
-%% authoritative relationships table.  Used as the post-load tail of
-%% the bootstrap loader (Option B, H0d) and as a diagnostic repair tool.
-%% After a successful rebuild, verify_caches/0 must return ok.
+%% Rewrites every environment node's `parents` and `classes` cache fields
+%% from the authoritative environment relationships table.  Used as the
+%% post-load tail of the bootstrap loader (Option B, H0d) and as a
+%% diagnostic repair tool.  After a successful rebuild, verify_caches/0
+%% must return ok.
 %%-----------------------------------------------------------------------------
 rebuild_caches() ->
+	rebuild_caches_(environment).
+
+%%-----------------------------------------------------------------------------
+%% rebuild_caches(Project) -> ok | {error, term()} | {error, invalid_project}
+%%
+%% Project-scoped twin of rebuild_caches/0 (SP2).  Rewrites Project's own
+%% nodes_<Anchor> cache fields from its own relationships_<Anchor> table.
+%% Gated on a well-formed Project handle.
+%%-----------------------------------------------------------------------------
+rebuild_caches(Project) ->
+	with_project(Project, fun rebuild_caches_/1).
+
+rebuild_caches_(Home) ->
 	Txn = fun() ->
-		Nrefs = mnesia:all_keys(nodes),
-		lists:foreach(fun rebuild_one/1, Nrefs),
+		NodesTab = graphdb_ns:node_table(Home),
+		RelTab   = graphdb_ns:rel_table(Home),
+		Nrefs = mnesia:all_keys(NodesTab),
+		lists:foreach(fun(N) -> rebuild_one(NodesTab, RelTab, N) end, Nrefs),
 		ok
 	end,
 	case graphdb_mgr:transaction(Txn) of
@@ -591,6 +724,9 @@ handle_call({get_node, Nref}, _From, State0) ->
 			{reply, Err, State0}
 	end;
 
+handle_call({get_node, Project, Nref}, _From, State) ->
+	{reply, do_get_node(Project, Nref), State};
+
 handle_call({get_relationships, Nref, Direction}, _From, State) ->
 	{reply, do_get_relationships(Nref, Direction), State};
 
@@ -627,6 +763,13 @@ handle_call({unretire_node, Nref}, _From, State0) ->
 	{Reply, State} = set_retired(Nref, false, State0),
 	{reply, Reply, State};
 
+handle_call({retire_node, Project, Nref}, _From, State0) ->
+	{Reply, State} = set_retired(Project, Nref, true, State0),
+	{reply, Reply, State};
+handle_call({unretire_node, Project, Nref}, _From, State0) ->
+	{Reply, State} = set_retired(Project, Nref, false, State0),
+	{reply, Reply, State};
+
 handle_call({delete_node, Nref}, _From, State) ->
 	case check_category_guard(Nref) of
 		{error, _} = Err ->
@@ -638,12 +781,29 @@ handle_call({delete_node, Nref}, _From, State) ->
 			{reply, {error, not_implemented}, State}
 	end;
 
+handle_call({delete_node, Project, Nref}, _From, State) ->
+	case check_category_guard(Project, Nref) of
+		{error, _} = Err ->
+			{reply, Err, State};
+		ok ->
+			{reply, {error, not_implemented}, State}
+	end;
+
 handle_call({update_node_avps, Nref, AVPs}, _From, State) ->
 	case check_category_guard(Nref) of
 		{error, _} = Err ->
 			{reply, Err, State};
 		ok ->
 			{Reply, State1} = do_update_node_avps(Nref, AVPs, State),
+			{reply, Reply, State1}
+	end;
+
+handle_call({update_node_avps, Project, Nref, AVPs}, _From, State) ->
+	case check_category_guard(Project, Nref) of
+		{error, _} = Err ->
+			{reply, Err, State};
+		ok ->
+			{Reply, State1} = do_update_node_avps(Project, Nref, AVPs, State),
 			{reply, Reply, State1}
 	end;
 
@@ -672,6 +832,23 @@ code_change(_OldVsn, State, _Extra) ->
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
+%% with_project(Project, Fun) -> term()
+%%
+%% Gate a project operation on a valid Project handle. A missing or
+%% malformed handle short-circuits with {error, invalid_project} -- BEFORE
+%% any gen_server:call, so a bad handle never reaches (and never crashes)
+%% the graphdb_mgr singleton via graphdb_ns:node_table/1's bare 2-clause
+%% match. A valid handle runs Fun(Project). Mirrors
+%% graphdb_instance:with_project/2 (same contract, same name, private to
+%% each module).
+%%-----------------------------------------------------------------------------
+with_project(Project, Fun) when is_function(Fun, 1) ->
+	case graphdb_project:require_project(Project) of
+		ok               -> Fun(Project);
+		{error, _} = Err -> Err
+	end.
+
+%%-----------------------------------------------------------------------------
 %% validate_direction(Direction) -> ok | {error, {invalid_direction, term()}}
 %%
 %% Validates the relationship query direction parameter.
@@ -689,6 +866,16 @@ validate_direction(Dir)      -> {error, {invalid_direction, Dir}}.
 %%-----------------------------------------------------------------------------
 do_get_node(Nref) ->
 	case mnesia:dirty_read(nodes, Nref) of
+		[Node] -> {ok, Node};
+		[]     -> {error, not_found}
+	end.
+
+
+%%-----------------------------------------------------------------------------
+%% do_get_node(Home, Nref) -> {ok, #node{}} | {error, not_found}
+%%-----------------------------------------------------------------------------
+do_get_node(Home, Nref) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Home), Nref) of
 		[Node] -> {ok, Node};
 		[]     -> {error, not_found}
 	end.
@@ -740,6 +927,20 @@ check_category_guard(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
+%% check_category_guard(Home, Nref) -> ok | {error, ...}
+%%-----------------------------------------------------------------------------
+check_category_guard(Home, Nref) ->
+	case do_get_node(Home, Nref) of
+		{ok, #node{kind = category}} ->
+			{error, category_nodes_are_immutable};
+		{ok, _} ->
+			ok;
+		{error, _} = Err ->
+			Err
+	end.
+
+
+%%-----------------------------------------------------------------------------
 %% set_retired(Nref, Bool, State) -> {ok | {error, Reason}, State'}
 %%
 %% Tier-2 wrapper. Static arithmetic guard refuses the whole permanent tier
@@ -752,7 +953,20 @@ set_retired(Nref, _Bool, State) when Nref < ?NREF_START ->
 set_retired(Nref, Bool, State0) ->
 	{RetAttr, State} = ensure_retired_nref(State0),
 	Reply = case graphdb_mgr:transaction(
-				fun() -> set_retired_(Nref, Bool, RetAttr) end) of
+				fun() -> set_retired_(environment, Nref, Bool, RetAttr) end) of
+		{ok, ok}     -> ok;
+		{error, _}=E -> E
+	end,
+	{Reply, State}.
+
+%%-----------------------------------------------------------------------------
+%% set_retired(Project, Nref, Bool, State) -> {ok | {error, Reason}, State'}
+%% No permanent-tier guard for a project (see moduledoc above retire_node/2).
+%%-----------------------------------------------------------------------------
+set_retired(Project, Nref, Bool, State0) ->
+	{RetAttr, State} = ensure_retired_nref(State0),
+	Reply = case graphdb_mgr:transaction(
+				fun() -> set_retired_(Project, Nref, Bool, RetAttr) end) of
 		{ok, ok}     -> ok;
 		{error, _}=E -> E
 	end,
@@ -772,18 +986,19 @@ ensure_retired_nref(#state{retired_nref = RetAttr} = State) ->
 	{RetAttr, State}.
 
 %%-----------------------------------------------------------------------------
-%% set_retired_(Nref, Bool, RetAttr) -> ok
+%% set_retired_(Home, Nref, Bool, RetAttr) -> ok
 %% Tier-1 primitive. Must run inside an active mnesia transaction. Reads the
 %% node under a write lock, rewrites its AVP list so the `retired` marker
 %% reflects Bool, writes it back. Aborts with not_found if absent.
 %%-----------------------------------------------------------------------------
-set_retired_(Nref, Bool, RetAttr) ->
-	case mnesia:read(nodes, Nref, write) of
+set_retired_(Home, Nref, Bool, RetAttr) ->
+	NodesTab = graphdb_ns:node_table(Home),
+	case mnesia:read(NodesTab, Nref, write) of
 		[]     -> mnesia:abort(not_found);
 		[Node] ->
 			AVPs0 = Node#node.attribute_value_pairs,
 			AVPs1 = set_marker(AVPs0, RetAttr, Bool),
-			mnesia:write(nodes,
+			mnesia:write(NodesTab,
 				Node#node{attribute_value_pairs = AVPs1}, write)
 	end.
 
@@ -802,14 +1017,27 @@ do_update_node_avps(Nref, _AVPs, State) when Nref < ?NREF_START ->
 do_update_node_avps(Nref, AVPs, State0) ->
 	{RetAttr, State} = ensure_retired_nref(State0),
 	Reply = case graphdb_mgr:transaction(
-				fun() -> update_node_avps_in_txn(Nref, AVPs, RetAttr) end) of
+				fun() -> update_node_avps_in_txn(environment, Nref, AVPs, RetAttr) end) of
 		{ok, ok}     -> ok;
 		{error, _}=E -> E
 	end,
 	{Reply, State}.
 
 %%-----------------------------------------------------------------------------
-%% update_node_avps_in_txn(Nref, AVPs, RetAttr) -> ok
+%% do_update_node_avps(Project, Nref, AVPs, State) -> {ok | {error, Reason}, State'}
+%% No permanent-tier guard for a project.
+%%-----------------------------------------------------------------------------
+do_update_node_avps(Project, Nref, AVPs, State0) ->
+	{RetAttr, State} = ensure_retired_nref(State0),
+	Reply = case graphdb_mgr:transaction(
+				fun() -> update_node_avps_in_txn(Project, Nref, AVPs, RetAttr) end) of
+		{ok, ok}     -> ok;
+		{error, _}=E -> E
+	end,
+	{Reply, State}.
+
+%%-----------------------------------------------------------------------------
+%% update_node_avps_in_txn(Home, Nref, AVPs, RetAttr) -> ok
 %% Tier-1 primitive. Must run inside an active mnesia transaction. Reads the
 %% node under a write lock; aborts not_found if absent. Aborts use_retire_api
 %% if any update targets the seeded `retired` attribute. Aborts
@@ -817,8 +1045,9 @@ do_update_node_avps(Nref, AVPs, State0) ->
 %% Applies the merge and writes the node back. RetAttr is resolved by the
 %% caller OUTSIDE the transaction (load-bearing: no gen_server call in-txn).
 %%-----------------------------------------------------------------------------
-update_node_avps_in_txn(Nref, AVPs, RetAttr) ->
-	case mnesia:read(nodes, Nref, write) of
+update_node_avps_in_txn(Home, Nref, AVPs, RetAttr) ->
+	NodesTab = graphdb_ns:node_table(Home),
+	case mnesia:read(NodesTab, Nref, write) of
 		[] ->
 			mnesia:abort(not_found);
 		[Node] ->
@@ -826,7 +1055,7 @@ update_node_avps_in_txn(Nref, AVPs, RetAttr) ->
 			ok = guard_instance_only(Node#node.attribute_value_pairs, AVPs),
 			ok = guard_attribute_existence(AVPs),
 			New = apply_avp_updates(Node#node.attribute_value_pairs, AVPs),
-			mnesia:write(nodes, Node#node{attribute_value_pairs = New}, write)
+			mnesia:write(NodesTab, Node#node{attribute_value_pairs = New}, write)
 	end.
 
 %% Abort if any update (upsert or delete) targets the seeded `retired` attr.
@@ -993,15 +1222,15 @@ is_avp_for(_, _)                 -> false.
 -define(PARENT_ARCS, [?ARC_CAT_PARENT, ?ARC_ATTR_PARENT, ?ARC_CLS_PARENT, ?ARC_INST_PARENT]).
 
 %%-----------------------------------------------------------------------------
-%% expected_parents(Nref) -> [integer()]
+%% expected_parents(RelTab, Nref) -> [integer()]
 %%
-%% Reads outgoing arcs from Nref of kind composition or taxonomy whose
-%% characterization is one of the parent-arc labels, and returns the
-%% corresponding target nrefs (the node's parent set).  Must run inside
-%% an active mnesia transaction.
+%% Reads outgoing arcs from Nref (in RelTab) of kind composition or
+%% taxonomy whose characterization is one of the parent-arc labels, and
+%% returns the corresponding target nrefs (the node's parent set).  Must
+%% run inside an active mnesia transaction.
 %%-----------------------------------------------------------------------------
-expected_parents(Nref) ->
-	Arcs = mnesia:index_read(relationships, Nref,
+expected_parents(RelTab, Nref) ->
+	Arcs = mnesia:index_read(RelTab, Nref,
 		#relationship.source_nref),
 	[A#relationship.target_nref || A <- Arcs,
 		(A#relationship.kind =:= composition orelse
@@ -1010,15 +1239,15 @@ expected_parents(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% expected_classes(Nref) -> [integer()]
+%% expected_classes(RelTab, Nref) -> [integer()]
 %%
-%% Reads outgoing instantiation arcs from Nref (char=29) and returns
-%% the corresponding target class nrefs.  Non-instance nodes have no
-%% instantiation arcs, so the returned list is naturally empty.  Must
+%% Reads outgoing instantiation arcs from Nref (in RelTab, char=29) and
+%% returns the corresponding target class nrefs.  Non-instance nodes have
+%% no instantiation arcs, so the returned list is naturally empty.  Must
 %% run inside an active mnesia transaction.
 %%-----------------------------------------------------------------------------
-expected_classes(Nref) ->
-	Arcs = mnesia:index_read(relationships, Nref,
+expected_classes(RelTab, Nref) ->
+	Arcs = mnesia:index_read(RelTab, Nref,
 		#relationship.source_nref),
 	[A#relationship.target_nref || A <- Arcs,
 		A#relationship.kind =:= instantiation,
@@ -1026,16 +1255,16 @@ expected_classes(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% verify_one(Nref) -> [{Nref, Field, Expected, Actual}]
+%% verify_one(NodesTab, RelTab, Nref) -> [{Nref, Field, Expected, Actual}]
 %%
-%% Compares one node's cache fields against its arcs.  Returns a list
-%% of zero, one, or two mismatch tuples.  Must run inside an active
-%% mnesia transaction.
+%% Compares one node's (in NodesTab) cache fields against its arcs (in
+%% RelTab).  Returns a list of zero, one, or two mismatch tuples.  Must
+%% run inside an active mnesia transaction.
 %%-----------------------------------------------------------------------------
-verify_one(Nref) ->
-	[Node]   = mnesia:read(nodes, Nref),
-	Parents  = lists:sort(expected_parents(Nref)),
-	Classes  = lists:sort(expected_classes(Nref)),
+verify_one(NodesTab, RelTab, Nref) ->
+	[Node]   = mnesia:read(NodesTab, Nref),
+	Parents  = lists:sort(expected_parents(RelTab, Nref)),
+	Classes  = lists:sort(expected_classes(RelTab, Nref)),
 	Cached_P = lists:sort(Node#node.parents),
 	Cached_C = lists:sort(Node#node.classes),
 	P = case Cached_P =:= Parents of
@@ -1050,17 +1279,17 @@ verify_one(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% rebuild_one(Nref) -> ok
+%% rebuild_one(NodesTab, RelTab, Nref) -> ok
 %%
-%% Rewrites one node's cache fields from its arcs.  Must run inside an
-%% active mnesia transaction.
+%% Rewrites one node's (in NodesTab) cache fields from its arcs (in
+%% RelTab).  Must run inside an active mnesia transaction.
 %%-----------------------------------------------------------------------------
-rebuild_one(Nref) ->
-	[Node]  = mnesia:read(nodes, Nref),
-	Parents = expected_parents(Nref),
-	Classes = expected_classes(Nref),
+rebuild_one(NodesTab, RelTab, Nref) ->
+	[Node]  = mnesia:read(NodesTab, Nref),
+	Parents = expected_parents(RelTab, Nref),
+	Classes = expected_classes(RelTab, Nref),
 	Updated = Node#node{parents = Parents, classes = Classes},
-	ok = mnesia:write(nodes, Updated, write).
+	ok = mnesia:write(NodesTab, Updated, write).
 
 
 %%-----------------------------------------------------------------------------

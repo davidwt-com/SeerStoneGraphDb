@@ -35,6 +35,16 @@
 	attribute_value_pairs
 }).
 
+-record(relationship, {
+	id,
+	kind,
+	source_nref,
+	characterization,
+	target_nref,
+	reciprocal,
+	avps
+}).
+
 
 %%---------------------------------------------------------------------
 %% Common Test callbacks
@@ -55,9 +65,18 @@
 %%---------------------------------------------------------------------
 -export([
 	register_project_creates_child_of_projects/1,
+	register_project_creates_tables/1,
+	register_project_is_idempotent/1,
 	is_project_false_for_non_child/1,
-	open_session_on_registered_project/1,
-	open_session_rejects_non_project/1
+	open_returns_project_handle/1,
+	open_rejects_non_project/1,
+	open_rejects_project_without_store/1,
+	open_rejects_project_with_partial_tables/1,
+	require_project_accepts_valid_handle/1,
+	require_project_rejects_malformed_term/1,
+	next_nref_starts_at_one/1,
+	next_nref_is_sequential/1,
+	next_rel_id_pair_returns_two_consecutive_ids/1
 ]).
 
 
@@ -70,9 +89,18 @@ suite() ->
 
 all() ->
 	[register_project_creates_child_of_projects,
+	 register_project_creates_tables,
+	 register_project_is_idempotent,
 	 is_project_false_for_non_child,
-	 open_session_on_registered_project,
-	 open_session_rejects_non_project].
+	 open_returns_project_handle,
+	 open_rejects_non_project,
+	 open_rejects_project_without_store,
+	 open_rejects_project_with_partial_tables,
+	 require_project_accepts_valid_handle,
+	 require_project_rejects_malformed_term,
+	 next_nref_starts_at_one,
+	 next_nref_is_sequential,
+	 next_rel_id_pair_returns_two_consecutive_ids].
 
 
 %%-----------------------------------------------------------------------------
@@ -178,19 +206,150 @@ is_project_false_for_non_child(_Config) ->
 	?assertNot(graphdb_project:is_project(?NREF_CLASSES)).
 
 %%-----------------------------------------------------------------------------
-%% open_session returns {ok, Session} for a registered project.
+%% register_project creates the three physical tables, all initially empty.
 %%-----------------------------------------------------------------------------
-open_session_on_registered_project(_Config) ->
+register_project_creates_tables(_Config) ->
 	{ok, P} = graphdb_project:register_project("Acme"),
-	{ok, S} = graphdb_project:open_session(P),
-	?assertEqual(P, graphdb_project:session_project(S)).
+	Tables = mnesia:system_info(tables),
+	?assert(lists:member(list_to_atom("nodes_" ++ integer_to_list(P)), Tables)),
+	?assert(lists:member(list_to_atom("relationships_" ++ integer_to_list(P)),
+		Tables)),
+	?assert(lists:member(list_to_atom("counters_" ++ integer_to_list(P)),
+		Tables)).
 
 %%-----------------------------------------------------------------------------
-%% open_session returns {error, not_a_project} for a non-project nref.
+%% register_project/1 is create-if-absent: a retried call for the same
+%% Name converges on the same anchor nref and the same table handle, and
+%% does NOT leave a duplicate project node under Projects.
 %%-----------------------------------------------------------------------------
-open_session_rejects_non_project(_Config) ->
-	?assertEqual({error, not_a_project},
-				 graphdb_project:open_session(?NREF_CLASSES)).
+register_project_is_idempotent(_Config) ->
+	{ok, P1} = graphdb_project:register_project("Acme"),
+	{ok, P2} = graphdb_project:register_project("Acme"),
+	?assertEqual(P1, P2),
+	{ok, Handle1} = graphdb_project:open(P1),
+	{ok, Handle2} = graphdb_project:open(P2),
+	?assertEqual(Handle1, Handle2),
+	?assertEqual(1, count_projects_named("Acme")).
+
+%%-----------------------------------------------------------------------------
+%% open/1 returns a Project handle carrying the three table atoms.
+%%-----------------------------------------------------------------------------
+open_returns_project_handle(_Config) ->
+	{ok, P} = graphdb_project:register_project("Acme"),
+	{ok, Project} = graphdb_project:open(P),
+	?assertEqual(#{anchor => P,
+	               nodes => list_to_atom("nodes_" ++ integer_to_list(P)),
+	               rels => list_to_atom("relationships_" ++ integer_to_list(P)),
+	               counters => list_to_atom("counters_" ++ integer_to_list(P))},
+	             Project).
+
+%%-----------------------------------------------------------------------------
+%% open/1 rejects a non-project nref.
+%%-----------------------------------------------------------------------------
+open_rejects_non_project(_Config) ->
+	?assertEqual({error, not_a_project}, graphdb_project:open(?NREF_CLASSES)).
+
+%%-----------------------------------------------------------------------------
+%% open/1 reports {error, no_store} for a registered anchor whose tables
+%% were never created (the SP1-era state) -- simulated by writing an anchor
+%% node directly under Projects without calling register_project/1.
+%%-----------------------------------------------------------------------------
+open_rejects_project_without_store(_Config) ->
+	Nref = graphdb_nref:get_next(),
+	{Id1, Id2} = rel_id_server:get_id_pair(),
+	Node = #node{nref = Nref, kind = instance, parents = [?NREF_PROJECTS],
+	             attribute_value_pairs = []},
+	F = fun() ->
+		ok = mnesia:write(nodes, Node, write),
+		ok = mnesia:write(relationships,
+			#relationship{id = Id1, kind = composition,
+			              source_nref = ?NREF_PROJECTS,
+			              characterization = ?ARC_CAT_CHILD,
+			              target_nref = Nref, reciprocal = ?ARC_CAT_PARENT,
+			              avps = []}, write),
+		ok = mnesia:write(relationships,
+			#relationship{id = Id2, kind = composition,
+			              source_nref = Nref,
+			              characterization = ?ARC_CAT_PARENT,
+			              target_nref = ?NREF_PROJECTS,
+			              reciprocal = ?ARC_CAT_CHILD, avps = []}, write)
+	end,
+	{ok, ok} = graphdb_mgr:transaction(F),
+	?assert(graphdb_project:is_project(Nref)),
+	?assertEqual({error, no_store}, graphdb_project:open(Nref)).
+
+%%-----------------------------------------------------------------------------
+%% open/1 reports {error, no_store} when only a subset of the three tables
+%% exist -- e.g. ensure_tables/1 failed partway through, leaving nodes_<A>
+%% created but relationships_<A>/counters_<A> absent. tables_exist/1 must
+%% check all three, not just the nodes table.
+%%-----------------------------------------------------------------------------
+open_rejects_project_with_partial_tables(_Config) ->
+	Nref = graphdb_nref:get_next(),
+	{Id1, Id2} = rel_id_server:get_id_pair(),
+	Node = #node{nref = Nref, kind = instance, parents = [?NREF_PROJECTS],
+	             attribute_value_pairs = []},
+	F = fun() ->
+		ok = mnesia:write(nodes, Node, write),
+		ok = mnesia:write(relationships,
+			#relationship{id = Id1, kind = composition,
+			              source_nref = ?NREF_PROJECTS,
+			              characterization = ?ARC_CAT_CHILD,
+			              target_nref = Nref, reciprocal = ?ARC_CAT_PARENT,
+			              avps = []}, write),
+		ok = mnesia:write(relationships,
+			#relationship{id = Id2, kind = composition,
+			              source_nref = Nref,
+			              characterization = ?ARC_CAT_PARENT,
+			              target_nref = ?NREF_PROJECTS,
+			              reciprocal = ?ARC_CAT_CHILD, avps = []}, write)
+	end,
+	{ok, ok} = graphdb_mgr:transaction(F),
+	NodesTable = list_to_atom("nodes_" ++ integer_to_list(Nref)),
+	{atomic, ok} = mnesia:create_table(NodesTable, [
+		{record_name, node},
+		{attributes, record_info(fields, node)},
+		{disc_copies, [node()]}
+	]),
+	?assert(graphdb_project:is_project(Nref)),
+	?assertEqual({error, no_store}, graphdb_project:open(Nref)).
+
+%%-----------------------------------------------------------------------------
+%% require_project accepts a well-formed handle, rejects everything else.
+%%-----------------------------------------------------------------------------
+require_project_accepts_valid_handle(_Config) ->
+	{ok, P} = graphdb_project:register_project("Acme"),
+	{ok, Project} = graphdb_project:open(P),
+	?assertEqual(ok, graphdb_project:require_project(Project)).
+
+require_project_rejects_malformed_term(_Config) ->
+	?assertEqual({error, invalid_project}, graphdb_project:require_project(undefined)),
+	?assertEqual({error, invalid_project}, graphdb_project:require_project(#{})).
+
+%%-----------------------------------------------------------------------------
+%% next_nref/1: first allocation yields 1; no seeding needed.
+%%-----------------------------------------------------------------------------
+next_nref_starts_at_one(_Config) ->
+	{ok, P} = graphdb_project:register_project("Acme"),
+	{ok, Project} = graphdb_project:open(P),
+	?assertEqual(1, graphdb_project:next_nref(Project)).
+
+next_nref_is_sequential(_Config) ->
+	{ok, P} = graphdb_project:register_project("Acme"),
+	{ok, Project} = graphdb_project:open(P),
+	?assertEqual(1, graphdb_project:next_nref(Project)),
+	?assertEqual(2, graphdb_project:next_nref(Project)),
+	?assertEqual(3, graphdb_project:next_nref(Project)).
+
+%%-----------------------------------------------------------------------------
+%% next_rel_id_pair/1: two consecutive ids, independent of the nref counter.
+%%-----------------------------------------------------------------------------
+next_rel_id_pair_returns_two_consecutive_ids(_Config) ->
+	{ok, P} = graphdb_project:register_project("Acme"),
+	{ok, Project} = graphdb_project:open(P),
+	?assertEqual({1, 2}, graphdb_project:next_rel_id_pair(Project)),
+	?assertEqual({3, 4}, graphdb_project:next_rel_id_pair(Project)),
+	?assertEqual(1, graphdb_project:next_nref(Project)).
 
 
 %%=============================================================================
@@ -223,6 +382,31 @@ setup_isolated_env(Config) ->
 	{ok, _} = application:ensure_all_started(nref),
 
 	[{tmp_dir, TmpDir}, {mnesia_dir, MnesiaDir} | Config].
+
+
+%%-----------------------------------------------------------------------------
+%% count_projects_named(Name) -> non_neg_integer()
+%%
+%% Counts the direct children of Projects (nref 5) whose instance-name AVP
+%% equals Name. Used to assert register_project/1's create-if-absent
+%% behaviour never leaves a duplicate anchor for a retried call.
+%%-----------------------------------------------------------------------------
+count_projects_named(Name) ->
+	{ok, Arcs} = graphdb_mgr:get_relationships(?NREF_PROJECTS, outgoing),
+	ChildNrefs = [T || #relationship{characterization = C, target_nref = T}
+		<- Arcs, C =:= ?ARC_CAT_CHILD],
+	length([N || N <- ChildNrefs, node_named(N, Name)]).
+
+node_named(Nref, Name) ->
+	case graphdb_mgr:get_node(Nref) of
+		{ok, #node{attribute_value_pairs = AVPs}} ->
+			lists:any(fun
+				(#{attribute := ?NAME_ATTR_INSTANCE, value := V}) -> V =:= Name;
+				(_) -> false
+			end, AVPs);
+		_ ->
+			false
+	end.
 
 
 %%-----------------------------------------------------------------------------

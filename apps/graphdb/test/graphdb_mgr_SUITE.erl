@@ -135,7 +135,16 @@
 	mutate_rejects_instance_only/1,
 	mutate_remove_relationship/1,
 	mutate_update_relationship/1,
-	mutate_mixed_rollback/1
+	mutate_mixed_rollback/1,
+	%% Project-taking twins (SP2 T10)
+	get_node_2_reads_project_instance/1,
+	get_node_2_does_not_leak_into_environment_table/1,
+	retire_node_2_retires_a_project_instance/1,
+	update_node_avps_3_edits_a_project_instance/1,
+	delete_node_2_reports_not_implemented/1,
+	%% mutate/2 (SP2 T11)
+	mutate_2_batches_within_one_project/1,
+	mutate_1_still_rejects_permanent_tier/1
 ]).
 
 
@@ -150,7 +159,8 @@ all() ->
 	[{group, init_tests}, {group, read_ops},
 	 {group, category_guard}, {group, write_delegation},
 	 {group, cache_audit}, {group, transaction_seam},
-	 {group, soft_retire}, {group, mutate}, {group, update_avps}].
+	 {group, soft_retire}, {group, mutate}, {group, update_avps},
+	 {group, project_twins}].
 
 groups() ->
 	[
@@ -239,6 +249,15 @@ groups() ->
 			update_node_avps_atomic_rollback,
 			update_node_avps_rejects_instance_only,
 			update_node_avps_delete_instance_only_ok
+		]},
+		{project_twins, [], [
+			get_node_2_reads_project_instance,
+			get_node_2_does_not_leak_into_environment_table,
+			retire_node_2_retires_a_project_instance,
+			update_node_avps_3_edits_a_project_instance,
+			delete_node_2_reports_not_implemented,
+			mutate_2_batches_within_one_project,
+			mutate_1_still_rejects_permanent_tier
 		]}
 	].
 
@@ -328,7 +347,14 @@ init_per_testcase(TC, Config) when
 		TC =:= mutate_rejects_instance_only;
 		TC =:= mutate_remove_relationship;
 		TC =:= mutate_update_relationship;
-		TC =:= mutate_mixed_rollback ->
+		TC =:= mutate_mixed_rollback;
+		TC =:= get_node_2_reads_project_instance;
+		TC =:= get_node_2_does_not_leak_into_environment_table;
+		TC =:= retire_node_2_retires_a_project_instance;
+		TC =:= update_node_avps_3_edits_a_project_instance;
+		TC =:= delete_node_2_reports_not_implemented;
+		TC =:= mutate_2_batches_within_one_project;
+		TC =:= mutate_1_still_rejects_permanent_tier ->
 	Config1 = setup_isolated_env(Config),
 	BootstrapFile = proplists:get_value(bootstrap_file, Config),
 	application:set_env(seerstone_graph_db, bootstrap_file, BootstrapFile),
@@ -694,9 +720,12 @@ create_class_delegates(_Config) ->
 %%-----------------------------------------------------------------------------
 create_instance_delegates(_Config) ->
 	{ok, ClassNref} = graphdb_class:create_class("TestClass2", 3),
-	{ok, Nref, _} = graphdb_mgr:create_instance(sess(), "TestInst", ClassNref, 5),
+	{ok, Nref, _} = graphdb_mgr:create_instance(proj(), "TestInst", ClassNref, root()),
 	?assert(is_integer(Nref)),
-	{ok, Node} = graphdb_mgr:get_node(Nref),
+	%% Nref is a project-space nref -- it can numerically collide with an
+	%% environment node (e.g. a category), so get_node/1 (environment-only)
+	%% is the wrong read here. Use the project-taking twin.
+	{ok, Node} = graphdb_mgr:get_node(proj(), Nref),
 	?assertEqual(instance, Node#node.kind).
 
 %%-----------------------------------------------------------------------------
@@ -706,16 +735,23 @@ create_instance_delegates(_Config) ->
 add_relationship_delegates(_Config) ->
 	%% Create a class and two instances
 	{ok, ClassNref} = graphdb_class:create_class("RelClass", 3),
-	{ok, InstA, _} = graphdb_instance:create_instance(sess(), "A", ClassNref, 5),
-	{ok, InstB, _} = graphdb_instance:create_instance(sess(), "B", ClassNref, 5),
+	{ok, InstA, _} = graphdb_instance:create_instance(proj(), "A", ClassNref, root()),
+	{ok, InstB, _} = graphdb_instance:create_instance(proj(), "B", ClassNref, root()),
 	%% Create a reciprocal relationship attribute pair (char/reciprocal nrefs)
 	{ok, {CharNref, RecipNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Knows", "KnownBy", instance),
 	%% Delegate through mgr
 	?assertEqual(ok,
-		graphdb_mgr:add_relationship(sess(), InstA, CharNref, InstB, RecipNref)),
-	%% Verify the arc is readable
-	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
+		graphdb_mgr:add_relationship(proj(), InstA, CharNref, InstB, RecipNref)),
+	%% Verify the arc is readable. graphdb_mgr:get_relationships/1 is
+	%% environment-only and has no project-taking twin (SP2 T10 only added
+	%% one for get_node/retire_node/unretire_node/update_node_avps/
+	%% delete_node) -- connection rows for project instances live in the
+	%% project's own relationships table, so read it directly.
+	{atomic, Rels} = mnesia:transaction(fun() ->
+		mnesia:index_read(graphdb_ns:rel_table(proj()), InstA,
+			#relationship.source_nref)
+	end),
 	Targets = [R#relationship.target_nref || R <- Rels,
 		R#relationship.characterization =:= CharNref],
 	?assertEqual([InstB], Targets).
@@ -1029,18 +1065,19 @@ mutate_empty_batch(_Config) ->
 %% A single add_relationship returns {ok, [ok]} and writes the arc.
 %%-----------------------------------------------------------------------------
 mutate_single_add_relationship(_Config) ->
+	Project = proj(),
 	{ok, ClassNref} = graphdb_class:create_class("MClassAR", 3),
-	{ok, InstA, _} = graphdb_instance:create_instance(sess(), "MA", ClassNref, 5),
-	{ok, InstB, _} = graphdb_instance:create_instance(sess(), "MB", ClassNref, 5),
+	{ok, InstA, _} = graphdb_instance:create_instance(Project, "MA", ClassNref, root()),
+	{ok, InstB, _} = graphdb_instance:create_instance(Project, "MB", ClassNref, root()),
 	{ok, {CharNref, RecipNref}} =
 		graphdb_attr:create_relationship_attribute_pair("MKnows", "MKnownBy",
 			instance),
+	%% Project instances -- mutate/1 resolves Home = environment (design);
+	%% use the Project-aware mutate/2 twin (SP2 T11).
 	?assertEqual({ok, [ok]},
-		graphdb_mgr:mutate(
+		graphdb_mgr:mutate(Project,
 			[{add_relationship, InstA, CharNref, InstB, RecipNref}])),
-	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
-	Targets = [R#relationship.target_nref || R <- Rels,
-		R#relationship.characterization =:= CharNref],
+	Targets = mutate_conn_targets(Project, InstA, CharNref),
 	?assertEqual([InstB], Targets).
 
 %%-----------------------------------------------------------------------------
@@ -1066,10 +1103,11 @@ mutate_single_retire_and_unretire(_Config) ->
 %% effect is present after commit.
 %%-----------------------------------------------------------------------------
 mutate_mixed_all_succeed(_Config) ->
+	Project = proj(),
 	{ok, ClassNref} = graphdb_class:create_class("MMixed", 3),
-	{ok, InstA, _} = graphdb_instance:create_instance(sess(), "MMA", ClassNref, 5),
-	{ok, InstB, _} = graphdb_instance:create_instance(sess(), "MMB", ClassNref, 5),
-	{ok, InstC, _} = graphdb_instance:create_instance(sess(), "MMC", ClassNref, 5),
+	{ok, InstA, _} = graphdb_instance:create_instance(Project, "MMA", ClassNref, root()),
+	{ok, InstB, _} = graphdb_instance:create_instance(Project, "MMB", ClassNref, root()),
+	{ok, InstC, _} = graphdb_instance:create_instance(Project, "MMC", ClassNref, root()),
 	{ok, {Ch1, Re1}} =
 		graphdb_attr:create_relationship_attribute_pair("MM1", "MM1r", instance),
 	{ok, {Ch2, Re2}} =
@@ -1077,13 +1115,14 @@ mutate_mixed_all_succeed(_Config) ->
 	Batch = [{add_relationship, InstA, Ch1, InstB, Re1},
 			 {add_relationship, InstA, Ch2, InstC, Re2},
 			 {retire_node, InstB}],
-	?assertEqual({ok, [ok, ok, ok]}, graphdb_mgr:mutate(Batch)),
-	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
+	?assertEqual({ok, [ok, ok, ok]}, graphdb_mgr:mutate(Project, Batch)),
+	Rels = mutate_conn_rows(Project, InstA),
 	Chars = lists:sort([R#relationship.characterization || R <- Rels,
 		R#relationship.characterization =:= Ch1 orelse
 		R#relationship.characterization =:= Ch2]),
 	?assertEqual(lists:sort([Ch1, Ch2]), Chars),
-	[#node{attribute_value_pairs = BAVPs}] = mnesia:dirty_read(nodes, InstB),
+	[#node{attribute_value_pairs = BAVPs}] =
+		mnesia:dirty_read(graphdb_ns:node_table(Project), InstB),
 	?assert(lists:any(fun(#{value := true}) -> true; (_) -> false end, BAVPs)).
 
 %%-----------------------------------------------------------------------------
@@ -1092,19 +1131,21 @@ mutate_mixed_all_succeed(_Config) ->
 %% first mutation wrote is absent (the whole batch rolled back).
 %%-----------------------------------------------------------------------------
 mutate_atomic_rollback(_Config) ->
+	Project = proj(),
 	{ok, ClassNref} = graphdb_class:create_class("MRollback", 3),
-	{ok, InstA, _} = graphdb_instance:create_instance(sess(), "MRA", ClassNref, 5),
-	{ok, InstB, _} = graphdb_instance:create_instance(sess(), "MRB", ClassNref, 5),
+	{ok, InstA, _} = graphdb_instance:create_instance(Project, "MRA", ClassNref, root()),
+	{ok, InstB, _} = graphdb_instance:create_instance(Project, "MRB", ClassNref, root()),
 	{ok, {CharNref, RecipNref}} =
 		graphdb_attr:create_relationship_attribute_pair("MRKnows", "MRKnownBy",
 			instance),
-	BadNref = ?NREF_START + 999999,
+	%% A project instance nref can numerically collide with an environment
+	%% nref, but retire_node inside mutate/2 resolves against Project's own
+	%% table -- use a nref clearly outside the project allocator's range.
+	BadNref = 999999,
 	Batch = [{add_relationship, InstA, CharNref, InstB, RecipNref},
 			 {retire_node, BadNref}],
-	?assertEqual({error, not_found}, graphdb_mgr:mutate(Batch)),
-	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
-	Targets = [R#relationship.target_nref || R <- Rels,
-		R#relationship.characterization =:= CharNref],
+	?assertEqual({error, not_found}, graphdb_mgr:mutate(Project, Batch)),
+	Targets = mutate_conn_targets(Project, InstA, CharNref),
 	?assertEqual([], Targets).
 
 %%-----------------------------------------------------------------------------
@@ -1114,17 +1155,19 @@ mutate_atomic_rollback(_Config) ->
 %% retired afterward.
 %%-----------------------------------------------------------------------------
 mutate_read_your_writes_rollback(_Config) ->
+	Project = proj(),
 	{ok, ClassNref} = graphdb_class:create_class("MRYW", 3),
-	{ok, InstA, _} = graphdb_instance:create_instance(sess(), "MRYWA", ClassNref, 5),
-	{ok, InstB, _} = graphdb_instance:create_instance(sess(), "MRYWB", ClassNref, 5),
+	{ok, InstA, _} = graphdb_instance:create_instance(Project, "MRYWA", ClassNref, root()),
+	{ok, InstB, _} = graphdb_instance:create_instance(Project, "MRYWB", ClassNref, root()),
 	{ok, {CharNref, RecipNref}} =
 		graphdb_attr:create_relationship_attribute_pair("MRYWK", "MRYWKr",
 			instance),
 	Batch = [{retire_node, InstA},
 			 {add_relationship, InstA, CharNref, InstB, RecipNref}],
 	?assertEqual({error, {endpoint_retired, InstA}},
-		graphdb_mgr:mutate(Batch)),
-	[#node{attribute_value_pairs = AVPs}] = mnesia:dirty_read(nodes, InstA),
+		graphdb_mgr:mutate(Project, Batch)),
+	[#node{attribute_value_pairs = AVPs}] =
+		mnesia:dirty_read(graphdb_ns:node_table(Project), InstA),
 	?assertEqual(false,
 		lists:any(fun(#{value := true}) -> true; (_) -> false end, AVPs)).
 
@@ -1134,18 +1177,20 @@ mutate_read_your_writes_rollback(_Config) ->
 %% batch writes nothing (phase 1 rejects the whole batch before phase 2/3).
 %%-----------------------------------------------------------------------------
 mutate_malformed_term(_Config) ->
+	Project = proj(),
 	{ok, ClassNref} = graphdb_class:create_class("MBad", 3),
-	{ok, InstA, _} = graphdb_instance:create_instance(sess(), "MBadA", ClassNref, 5),
-	{ok, InstB, _} = graphdb_instance:create_instance(sess(), "MBadB", ClassNref, 5),
+	{ok, InstA, _} = graphdb_instance:create_instance(Project, "MBadA", ClassNref, root()),
+	{ok, InstB, _} = graphdb_instance:create_instance(Project, "MBadB", ClassNref, root()),
 	{ok, {CharNref, RecipNref}} =
 		graphdb_attr:create_relationship_attribute_pair("MBadK", "MBadKr",
 			instance),
 	Bad = {frobnicate, 1, 2},
 	Batch = [{add_relationship, InstA, CharNref, InstB, RecipNref}, Bad],
-	?assertEqual({error, {bad_mutation, Bad}}, graphdb_mgr:mutate(Batch)),
-	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
-	Targets = [R#relationship.target_nref || R <- Rels,
-		R#relationship.characterization =:= CharNref],
+	%% Project instances -- use mutate/2 so a "nothing written" check below
+	%% reads the table the batch would actually have touched, not the
+	%% (always-untouched-by-this-batch) environment table.
+	?assertEqual({error, {bad_mutation, Bad}}, graphdb_mgr:mutate(Project, Batch)),
+	Targets = mutate_conn_targets(Project, InstA, CharNref),
 	?assertEqual([], Targets).
 
 %%-----------------------------------------------------------------------------
@@ -1164,23 +1209,48 @@ mutate_permanent_tier_guard(_Config) ->
 		   (_) -> false end, AVPs)).
 
 %%-----------------------------------------------------------------------------
+%% mutate/2 (SP2 T11): a Project-aware batch runs add_relationship against
+%% Project's own tables -- the two instances and the relationship it creates
+%% are readable back through the Project-taking get_node/2 twin.
+%%-----------------------------------------------------------------------------
+mutate_2_batches_within_one_project(_Config) ->
+	Project = proj(),
+	{ok, Root, _} = graphdb_instance:create_instance(Project, "Root",
+		widget_class(), root_instance(Project)),
+	{ok, A, _} = graphdb_instance:create_instance(Project, "A", widget_class(),
+		Root),
+	{ok, B, _} = graphdb_instance:create_instance(Project, "B", widget_class(),
+		Root),
+	{Char, Recip} = connects_to_attrs(),
+	{ok, [ok]} = graphdb_mgr:mutate(Project,
+		[{add_relationship, A, Char, B, Recip}]),
+	{ok, #node{}} = graphdb_mgr:get_node(Project, A).
+
+%%-----------------------------------------------------------------------------
+%% mutate/1's behaviour is unchanged by the mutate/2 Home-threading refactor:
+%% it still refuses the permanent tier via the environment-shaped tier_guard.
+%%-----------------------------------------------------------------------------
+mutate_1_still_rejects_permanent_tier(_Config) ->
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_mgr:mutate([{retire_node, ?NREF_ROOT}])).
+
+%%-----------------------------------------------------------------------------
 %% mutate accepts the 6-element add_relationship form with an explicit
 %% template nref; the Template AVP on the written arc is that template.
 %%-----------------------------------------------------------------------------
 mutate_add_relationship_explicit_template(_Config) ->
+	Project = proj(),
 	{ok, ClassNref} = graphdb_class:create_class("MTmplClass", 3),
 	{ok, AltTmpl} = graphdb_class:add_template(ClassNref, "msocial"),
-	{ok, A, _} = graphdb_instance:create_instance(sess(), "MTA", ClassNref, 5),
-	{ok, B, _} = graphdb_instance:create_instance(sess(), "MTB", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance(Project, "MTA", ClassNref, root()),
+	{ok, B, _} = graphdb_instance:create_instance(Project, "MTB", ClassNref, root()),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("MTKnows", "MTKnownBy",
 			instance),
 	?assertEqual({ok, [ok]},
-		graphdb_mgr:mutate(
+		graphdb_mgr:mutate(Project,
 			[{add_relationship, A, Char, B, Recip, AltTmpl}])),
-	{atomic, ARels} = mnesia:transaction(fun() ->
-		mnesia:index_read(relationships, A, #relationship.source_nref)
-	end),
+	ARels = mutate_conn_rows(Project, A),
 	[Fwd] = [R || R <- ARels,
 		R#relationship.characterization =:= Char,
 		R#relationship.target_nref =:= B],
@@ -1193,10 +1263,11 @@ mutate_add_relationship_explicit_template(_Config) ->
 %% on the reverse arc only.
 %%-----------------------------------------------------------------------------
 mutate_add_relationship_with_avps(_Config) ->
+	Project = proj(),
 	{ok, ClassNref} = graphdb_class:create_class("MAvpClass", 3),
 	{ok, DefaultTmpl} = graphdb_class:default_template(ClassNref),
-	{ok, A, _} = graphdb_instance:create_instance(sess(), "MAvA", ClassNref, 5),
-	{ok, B, _} = graphdb_instance:create_instance(sess(), "MAvB", ClassNref, 5),
+	{ok, A, _} = graphdb_instance:create_instance(Project, "MAvA", ClassNref, root()),
+	{ok, B, _} = graphdb_instance:create_instance(Project, "MAvB", ClassNref, root()),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("MAvKnows", "MAvKnownBy",
 			instance),
@@ -1205,20 +1276,16 @@ mutate_add_relationship_with_avps(_Config) ->
 	FwdOnly = #{attribute => Source,     value => "research-paper"},
 	RevOnly = #{attribute => Confidence, value => 0.42},
 	?assertEqual({ok, [ok]},
-		graphdb_mgr:mutate(
+		graphdb_mgr:mutate(Project,
 			[{add_relationship, A, Char, B, Recip, DefaultTmpl,
 				{[FwdOnly], [RevOnly]}}])),
-	{atomic, ARels} = mnesia:transaction(fun() ->
-		mnesia:index_read(relationships, A, #relationship.source_nref)
-	end),
+	ARels = mutate_conn_rows(Project, A),
 	[Fwd] = [R || R <- ARels,
 		R#relationship.characterization =:= Char,
 		R#relationship.target_nref =:= B],
 	?assert(lists:member(FwdOnly,    Fwd#relationship.avps)),
 	?assertNot(lists:member(RevOnly, Fwd#relationship.avps)),
-	{atomic, BRels} = mnesia:transaction(fun() ->
-		mnesia:index_read(relationships, B, #relationship.source_nref)
-	end),
+	BRels = mutate_conn_rows(Project, B),
 	[Rev] = [R || R <- BRels,
 		R#relationship.characterization =:= Recip,
 		R#relationship.target_nref =:= A],
@@ -1230,34 +1297,35 @@ mutate_add_relationship_with_avps(_Config) ->
 %% A single update_node_avps mutation returns {ok, [ok]} and writes the AVP.
 %%-----------------------------------------------------------------------------
 mutate_single_update_node_avps(_Config) ->
+	Project = proj(),
 	{ok, ClassNref} = graphdb_class:create_class("MUAClass", 3),
-	{ok, Inst, _} = graphdb_instance:create_instance(sess(), "MUAInst", ClassNref, 5),
+	{ok, Inst, _} = graphdb_instance:create_instance(Project, "MUAInst", ClassNref, root()),
 	{ok, Attr} = graphdb_attr:create_literal_attribute("MUAAttr", string),
 	?assertEqual({ok, [ok]},
-		graphdb_mgr:mutate([{update_node_avps, Inst,
+		graphdb_mgr:mutate(Project, [{update_node_avps, Inst,
 			[#{attribute => Attr, value => "blue"}]}])),
-	[#node{attribute_value_pairs = AVPs}] = mnesia:dirty_read(nodes, Inst),
+	[#node{attribute_value_pairs = AVPs}] =
+		mnesia:dirty_read(graphdb_ns:node_table(Project), Inst),
 	?assert(lists:member(#{attribute => Attr, value => "blue"}, AVPs)).
 
 %%-----------------------------------------------------------------------------
 %% A mixed batch (add_relationship + update_node_avps) all succeeds.
 %%-----------------------------------------------------------------------------
 mutate_mixed_add_rel_and_update_avps(_Config) ->
+	Project = proj(),
 	{ok, ClassNref} = graphdb_class:create_class("MMUAClass", 3),
-	{ok, InstA, _} = graphdb_instance:create_instance(sess(), "MMUAA", ClassNref, 5),
-	{ok, InstB, _} = graphdb_instance:create_instance(sess(), "MMUAB", ClassNref, 5),
+	{ok, InstA, _} = graphdb_instance:create_instance(Project, "MMUAA", ClassNref, root()),
+	{ok, InstB, _} = graphdb_instance:create_instance(Project, "MMUAB", ClassNref, root()),
 	{ok, {Ch, Re}} =
 		graphdb_attr:create_relationship_attribute_pair("MMUAk", "MMUAkb",
 			instance),
 	{ok, Attr} = graphdb_attr:create_literal_attribute("MMUAAttr", string),
 	Batch = [{add_relationship, InstA, Ch, InstB, Re},
 			 {update_node_avps, InstA, [#{attribute => Attr, value => "green"}]}],
-	?assertEqual({ok, [ok, ok]}, graphdb_mgr:mutate(Batch)),
-	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
-	?assertEqual([InstB],
-		[R#relationship.target_nref || R <- Rels,
-			R#relationship.characterization =:= Ch]),
-	[#node{attribute_value_pairs = AVPs}] = mnesia:dirty_read(nodes, InstA),
+	?assertEqual({ok, [ok, ok]}, graphdb_mgr:mutate(Project, Batch)),
+	?assertEqual([InstB], mutate_conn_targets(Project, InstA, Ch)),
+	[#node{attribute_value_pairs = AVPs}] =
+		mnesia:dirty_read(graphdb_ns:node_table(Project), InstA),
 	?assert(lists:member(#{attribute => Attr, value => "green"}, AVPs)).
 
 %%-----------------------------------------------------------------------------
@@ -1266,9 +1334,10 @@ mutate_mixed_add_rel_and_update_avps(_Config) ->
 %% first mutation wrote is absent.
 %%-----------------------------------------------------------------------------
 mutate_update_avps_rollback(_Config) ->
+	Project = proj(),
 	{ok, ClassNref} = graphdb_class:create_class("MUARbClass", 3),
-	{ok, InstA, _} = graphdb_instance:create_instance(sess(), "MUARbA", ClassNref, 5),
-	{ok, InstB, _} = graphdb_instance:create_instance(sess(), "MUARbB", ClassNref, 5),
+	{ok, InstA, _} = graphdb_instance:create_instance(Project, "MUARbA", ClassNref, root()),
+	{ok, InstB, _} = graphdb_instance:create_instance(Project, "MUARbB", ClassNref, root()),
 	{ok, {Ch, Re}} =
 		graphdb_attr:create_relationship_attribute_pair("MUARbk", "MUARbkb",
 			instance),
@@ -1276,11 +1345,8 @@ mutate_update_avps_rollback(_Config) ->
 	Batch = [{add_relationship, InstA, Ch, InstB, Re},
 			 {update_node_avps, InstA, [#{attribute => BadAttr, value => 1}]}],
 	?assertEqual({error, {unknown_attribute, BadAttr}},
-		graphdb_mgr:mutate(Batch)),
-	{ok, Rels} = graphdb_mgr:get_relationships(InstA),
-	?assertEqual([],
-		[R#relationship.target_nref || R <- Rels,
-			R#relationship.characterization =:= Ch]).
+		graphdb_mgr:mutate(Project, Batch)),
+	?assertEqual([], mutate_conn_targets(Project, InstA, Ch)).
 
 %%-----------------------------------------------------------------------------
 %% A malformed update_node_avps mutation is rejected in static validation
@@ -1315,13 +1381,14 @@ mutate_update_avps_not_found(_Config) ->
 ua_setup(Name) ->
 	{ok, ClassNref} = graphdb_class:create_class("UAClass" ++ Name, 3),
 	{ok, InstNref, _} =
-		graphdb_instance:create_instance(sess(), "UAInst" ++ Name, ClassNref, 5),
+		graphdb_instance:create_instance(proj(), "UAInst" ++ Name, ClassNref, root()),
 	{ok, AttrNref} =
 		graphdb_attr:create_literal_attribute("UAAttr" ++ Name, string),
 	{InstNref, AttrNref}.
 
 ua_avps(Nref) ->
-	[#node{attribute_value_pairs = AVPs}] = mnesia:dirty_read(nodes, Nref),
+	[#node{attribute_value_pairs = AVPs}] =
+		mnesia:dirty_read(graphdb_ns:node_table(proj()), Nref),
 	AVPs.
 
 ua_value(Nref, AttrNref) ->
@@ -1337,7 +1404,7 @@ ua_value(Nref, AttrNref) ->
 update_node_avps_upsert_roundtrip(_Config) ->
 	{Inst, Attr} = ua_setup("RT"),
 	?assertEqual(ok,
-		graphdb_mgr:update_node_avps(Inst, [#{attribute => Attr, value => "red"}])),
+		graphdb_mgr:update_node_avps(proj(), Inst, [#{attribute => Attr, value => "red"}])),
 	?assertEqual("red", ua_value(Inst, Attr)).
 
 %%-----------------------------------------------------------------------------
@@ -1347,7 +1414,7 @@ update_node_avps_overwrite_preserves_head(_Config) ->
 	{Inst, _Attr} = ua_setup("Head"),
 	[#{attribute := NameAttr} | _] = ua_avps(Inst),
 	?assertEqual(ok,
-		graphdb_mgr:update_node_avps(Inst,
+		graphdb_mgr:update_node_avps(proj(), Inst,
 			[#{attribute => NameAttr, value => "Renamed"}])),
 	[#{attribute := NameAttr, value := "Renamed"} | _] = ua_avps(Inst).
 
@@ -1356,10 +1423,10 @@ update_node_avps_overwrite_preserves_head(_Config) ->
 %%-----------------------------------------------------------------------------
 update_node_avps_delete(_Config) ->
 	{Inst, Attr} = ua_setup("Del"),
-	ok = graphdb_mgr:update_node_avps(Inst, [#{attribute => Attr, value => "x"}]),
+	ok = graphdb_mgr:update_node_avps(proj(), Inst, [#{attribute => Attr, value => "x"}]),
 	?assertEqual("x", ua_value(Inst, Attr)),
 	?assertEqual(ok,
-		graphdb_mgr:update_node_avps(Inst, [#{attribute => Attr}])),
+		graphdb_mgr:update_node_avps(proj(), Inst, [#{attribute => Attr}])),
 	?assertEqual(not_found, ua_value(Inst, Attr)).
 
 %%-----------------------------------------------------------------------------
@@ -1369,7 +1436,7 @@ update_node_avps_delete_absent_noop(_Config) ->
 	{Inst, Attr} = ua_setup("DelAbsent"),
 	Before = ua_avps(Inst),
 	?assertEqual(ok,
-		graphdb_mgr:update_node_avps(Inst, [#{attribute => Attr}])),
+		graphdb_mgr:update_node_avps(proj(), Inst, [#{attribute => Attr}])),
 	?assertEqual(Before, ua_avps(Inst)).
 
 %%-----------------------------------------------------------------------------
@@ -1378,7 +1445,7 @@ update_node_avps_delete_absent_noop(_Config) ->
 update_node_avps_undefined_retained(_Config) ->
 	{Inst, Attr} = ua_setup("Undef"),
 	?assertEqual(ok,
-		graphdb_mgr:update_node_avps(Inst,
+		graphdb_mgr:update_node_avps(proj(), Inst,
 			[#{attribute => Attr, value => undefined}])),
 	AVPs = ua_avps(Inst),
 	?assert(lists:member(#{attribute => Attr, value => undefined}, AVPs)).
@@ -1390,7 +1457,7 @@ update_node_avps_unknown_attribute(_Config) ->
 	{Inst, _Attr} = ua_setup("Unknown"),
 	BadAttr = ?NREF_START + 888888,
 	?assertEqual({error, {unknown_attribute, BadAttr}},
-		graphdb_mgr:update_node_avps(Inst, [#{attribute => BadAttr, value => 1}])).
+		graphdb_mgr:update_node_avps(proj(), Inst, [#{attribute => BadAttr, value => 1}])).
 
 %%-----------------------------------------------------------------------------
 %% Targeting the seeded `retired` attribute is rejected -> use_retire_api.
@@ -1399,7 +1466,7 @@ update_node_avps_retired_marker_rejected(_Config) ->
 	{Inst, _Attr} = ua_setup("Ret"),
 	{ok, #{retired := RetAttr}} = graphdb_attr:seeded_nrefs(),
 	?assertEqual({error, use_retire_api},
-		graphdb_mgr:update_node_avps(Inst,
+		graphdb_mgr:update_node_avps(proj(), Inst,
 			[#{attribute => RetAttr, value => true}])).
 
 %%-----------------------------------------------------------------------------
@@ -1427,7 +1494,7 @@ update_node_avps_atomic_rollback(_Config) ->
 	{Inst, Attr} = ua_setup("Atomic"),
 	BadAttr = ?NREF_START + 888888,
 	?assertEqual({error, {unknown_attribute, BadAttr}},
-		graphdb_mgr:update_node_avps(Inst,
+		graphdb_mgr:update_node_avps(proj(), Inst,
 			[#{attribute => Attr, value => "red"},
 			 #{attribute => BadAttr, value => "boom"}])),
 	?assertEqual(not_found, ua_value(Inst, Attr)).
@@ -1478,39 +1545,54 @@ mutate_rejects_instance_only(_Config) ->
 	?assert(lists:member(
 		#{attribute => Attr, value => undefined, instance_only => true}, AVPs)).
 
-%% count outgoing connection rows Source--Char-->Target via the public read API
-mutate_conn_count(Source, Char, Target) ->
-	{ok, Rels} = graphdb_mgr:get_relationships(Source),
-	length([R || R <- Rels,
+%% all outgoing connection rows from Source, read from Project's own
+%% relationships table directly. graphdb_mgr:get_relationships/1 is
+%% environment-only and has no project-taking twin (SP2 T10 only added one
+%% for get_node/retire_node/unretire_node/update_node_avps/delete_node).
+mutate_conn_rows(Project, Source) ->
+	{atomic, Rows} = mnesia:transaction(fun() ->
+		mnesia:index_read(graphdb_ns:rel_table(Project), Source,
+			#relationship.source_nref)
+	end),
+	Rows.
+
+%% outgoing connection arc targets from Source with characterization Char.
+mutate_conn_targets(Project, Source, Char) ->
+	[R#relationship.target_nref || R <- mutate_conn_rows(Project, Source),
 		R#relationship.kind =:= connection,
-		R#relationship.characterization =:= Char,
-		R#relationship.target_nref =:= Target]).
+		R#relationship.characterization =:= Char].
+
+%% count outgoing connection rows Source--Char-->Target.
+mutate_conn_count(Project, Source, Char, Target) ->
+	length([T || T <- mutate_conn_targets(Project, Source, Char), T =:= Target]).
 
 mutate_remove_relationship(_Config) ->
+	Project = proj(),
 	{ok, Class}   = graphdb_class:create_class("MRemoveOrg", 3),
-	{ok, A, _} = graphdb_instance:create_instance(sess(), "MRA", Class, 5),
-	{ok, B, _} = graphdb_instance:create_instance(sess(), "MRB", Class, 5),
+	{ok, A, _} = graphdb_instance:create_instance(Project, "MRA", Class, root()),
+	{ok, B, _} = graphdb_instance:create_instance(Project, "MRB", Class, root()),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("MRKnows", "MRKnownBy",
 			instance),
-	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
-	?assertEqual(1, mutate_conn_count(A, Char, B)),
+	ok = graphdb_instance:add_relationship(Project, A, Char, B, Recip),
+	?assertEqual(1, mutate_conn_count(Project, A, Char, B)),
 	?assertEqual({ok, [ok]},
-		graphdb_mgr:mutate([{remove_relationship, A, Char, B}])),
-	?assertEqual(0, mutate_conn_count(A, Char, B)),
-	?assertEqual(0, mutate_conn_count(B, Recip, A)),
+		graphdb_mgr:mutate(Project, [{remove_relationship, A, Char, B}])),
+	?assertEqual(0, mutate_conn_count(Project, A, Char, B)),
+	?assertEqual(0, mutate_conn_count(Project, B, Recip, A)),
 	ok = graphdb_mgr:verify_caches().
 
 mutate_update_relationship(_Config) ->
+	Project = proj(),
 	{ok, Class}   = graphdb_class:create_class("MUpdOrg", 3),
-	{ok, A, _} = graphdb_instance:create_instance(sess(), "MUA", Class, 5),
-	{ok, B, _} = graphdb_instance:create_instance(sess(), "MUB", Class, 5),
+	{ok, A, _} = graphdb_instance:create_instance(Project, "MUA", Class, root()),
+	{ok, B, _} = graphdb_instance:create_instance(Project, "MUB", Class, root()),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("MUKnows", "MUKnownBy",
 			instance),
 	{ok, Note} = graphdb_attr:create_literal_attribute("munote", string),
-	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
-	?assertEqual({ok, [ok, ok]}, graphdb_mgr:mutate([
+	ok = graphdb_instance:add_relationship(Project, A, Char, B, Recip),
+	?assertEqual({ok, [ok, ok]}, graphdb_mgr:mutate(Project, [
 		{update_relationship, A, Char, B, [#{attribute => Note, value => "f"}]},
 		{update_relationship_both, A, Char, B,
 			{[#{attribute => Note, value => "F"}],
@@ -1518,36 +1600,182 @@ mutate_update_relationship(_Config) ->
 	ok = graphdb_mgr:verify_caches().
 
 mutate_mixed_rollback(_Config) ->
+	Project = proj(),
 	{ok, Class}   = graphdb_class:create_class("MMixOrg", 3),
-	{ok, A, _} = graphdb_instance:create_instance(sess(), "MMA", Class, 5),
-	{ok, B, _} = graphdb_instance:create_instance(sess(), "MMB", Class, 5),
+	{ok, A, _} = graphdb_instance:create_instance(Project, "MMA", Class, root()),
+	{ok, B, _} = graphdb_instance:create_instance(Project, "MMB", Class, root()),
 	{ok, {Char, Recip}} =
 		graphdb_attr:create_relationship_attribute_pair("MMKnows", "MMKnownBy",
 			instance),
-	ok = graphdb_instance:add_relationship(sess(), A, Char, B, Recip),
+	ok = graphdb_instance:add_relationship(Project, A, Char, B, Recip),
 	%% second mutation removes a non-existent edge -> whole batch rolls back
-	?assertEqual({error, relationship_not_found}, graphdb_mgr:mutate([
+	?assertEqual({error, relationship_not_found}, graphdb_mgr:mutate(Project, [
 		{remove_relationship, A, Char, B},
 		{remove_relationship, A, Char, B}])),
 	%% the first remove was rolled back -- the edge is still present
-	?assertEqual(1, mutate_conn_count(A, Char, B)),
-	?assertEqual(1, mutate_conn_count(B, Recip, A)),
+	?assertEqual(1, mutate_conn_count(Project, A, Char, B)),
+	?assertEqual(1, mutate_conn_count(Project, B, Recip, A)),
 	ok = graphdb_mgr:verify_caches().
 
-%%---------------------------------------------------------------------
-%% sess() -> Session
+%%=============================================================================
+%% Project-taking twins (SP2 T10): get_node/2, retire_node/2,
+%% update_node_avps/3, delete_node/2.
 %%
-%% SP1 test helper: returns a project session, memoised per test-case
-%% process.  Registers a project under Projects (nref 5) on first use and
-%% opens a session against it; subsequent calls in the same process reuse it.
+%% proj() (defined below, near the end of this file) is a normal per-suite
+%% CT helper -- each SP2-era suite defines its own memoised copy.
+%%=============================================================================
+
+get_node_2_reads_project_instance(_Config) ->
+	Project = proj(),
+	{ok, Nref, _Report} = graphdb_instance:create_instance(Project, "Widget",
+		widget_class(), root_instance(Project)),
+	{ok, #node{nref = Nref, kind = instance}} =
+		graphdb_mgr:get_node(Project, Nref).
+
+get_node_2_does_not_leak_into_environment_table(_Config) ->
+	Project = proj(),
+	%% A project instance's nref must not resolve to whatever node carries
+	%% that same integer in the environment's own nodes table -- get_node/2
+	%% reads must stay scoped to Project's own table (never fall through
+	%% to, or collide with, the environment's nref space). Nref is bound to
+	%% whatever the project allocator actually returns rather than assumed
+	%% to be 1 -- root_instance/1 draws the project's first nref for its
+	%% seeded root, so the real instance created below does not land on 1.
+	{ok, Nref, _Report} = graphdb_instance:create_instance(Project, "First",
+		widget_class(), root_instance(Project)),
+	{ok, #node{kind = instance}} = graphdb_mgr:get_node(Project, Nref),
+	{ok, #node{kind = category}} = graphdb_mgr:get_node(?NREF_ROOT).
+
+retire_node_2_retires_a_project_instance(_Config) ->
+	Project = proj(),
+	{ok, Nref, _Report} = graphdb_instance:create_instance(Project, "Widget",
+		widget_class(), root_instance(Project)),
+	ok = graphdb_mgr:retire_node(Project, Nref),
+	{ok, #node{attribute_value_pairs = AVPs}} = graphdb_mgr:get_node(Project, Nref),
+	?assert(lists:any(fun(#{value := true}) -> true; (_) -> false end, AVPs)).
+
+update_node_avps_3_edits_a_project_instance(_Config) ->
+	Project = proj(),
+	{ok, Nref, _Report} = graphdb_instance:create_instance(Project, "Widget",
+		widget_class(), root_instance(Project)),
+	Colour = ensure_colour_attribute(),
+	ok = graphdb_mgr:update_node_avps(Project, Nref,
+		[#{attribute => Colour, value => "blue"}]),
+	{ok, #node{attribute_value_pairs = AVPs}} =
+		graphdb_mgr:get_node(Project, Nref),
+	?assertEqual({ok, "blue"}, find_avp(AVPs, Colour)).
+
+delete_node_2_reports_not_implemented(_Config) ->
+	Project = proj(),
+	{ok, Nref, _Report} = graphdb_instance:create_instance(Project, "Widget",
+		widget_class(), root_instance(Project)),
+	?assertEqual({error, not_implemented}, graphdb_mgr:delete_node(Project, Nref)).
+
 %%---------------------------------------------------------------------
-sess() ->
-	case get(sp1_session) of
+%% widget_class() -> ClassNref
+%%
+%% Throwaway environment-scoped class for the project-twin tests. Classes
+%% live in the environment regardless of which project instantiates them.
+%%---------------------------------------------------------------------
+widget_class() ->
+	{ok, ClassNref} = graphdb_class:create_class("T10Widget", 3),
+	ClassNref.
+
+%%---------------------------------------------------------------------
+%% root_instance(Project) -> Nref
+%%
+%% Seeds a throwaway compositional-root instance directly into Project's
+%% own (initially empty) nodes table, bypassing create_instance's parent
+%% validation (do_validate_parent/3 requires the parent to already exist,
+%% and a fresh project store has nothing yet to point at).
+%%---------------------------------------------------------------------
+root_instance(Project) ->
+	Nref = graphdb_project:next_nref(Project),
+	Node = #node{nref = Nref, kind = instance, attribute_value_pairs = []},
+	ok = mnesia:dirty_write(graphdb_ns:node_table(Project), Node),
+	Nref.
+
+%%---------------------------------------------------------------------
+%% ensure_colour_attribute() -> AttrNref
+%%
+%% Throwaway environment-scoped literal attribute, memoised per test-case
+%% process.
+%%---------------------------------------------------------------------
+ensure_colour_attribute() ->
+	case get(t10_colour_attr) of
 		undefined ->
-			{ok, P} = graphdb_project:register_project("SP1 test session"),
-			{ok, S} = graphdb_project:open_session(P),
-			put(sp1_session, S),
-			S;
-		S ->
-			S
+			{ok, AttrNref} =
+				graphdb_attr:create_literal_attribute("T10Colour", string),
+			put(t10_colour_attr, AttrNref),
+			AttrNref;
+		AttrNref ->
+			AttrNref
+	end.
+
+%%---------------------------------------------------------------------
+%% connects_to_attrs() -> {CharNref, RecipNref}
+%%
+%% Throwaway environment-scoped reciprocal connection-attribute pair for
+%% mutate/2's add_relationship test, memoised per test-case process.
+%% Follows the same pattern as add_relationship_delegates/1's inline
+%% create_relationship_attribute_pair call.
+%%---------------------------------------------------------------------
+connects_to_attrs() ->
+	case get(t11_connects_to_attrs) of
+		undefined ->
+			{ok, {CharNref, RecipNref}} =
+				graphdb_attr:create_relationship_attribute_pair("T11ConnectsTo",
+					"T11ConnectedBy", instance),
+			put(t11_connects_to_attrs, {CharNref, RecipNref}),
+			{CharNref, RecipNref};
+		Pair ->
+			Pair
+	end.
+
+%% find_avp(AVPs, AttrNref) -> {ok, Value} | not_found
+%% Searches an AVP list for an entry whose attribute key equals AttrNref;
+%% returns {ok, Value} on the first match, not_found if absent.
+find_avp(AVPs, A) ->
+	case lists:search(fun(#{attribute := X}) -> X =:= A end, AVPs) of
+		{value, #{value := V}} -> {ok, V};
+		false                  -> not_found
+	end.
+
+%%---------------------------------------------------------------------
+%% proj() -> Project
+%%
+%% SP2 test helper: returns a project handle, memoised per test-case
+%% process. Registers a project under Projects (nref 5) on first use and
+%% opens it; subsequent calls in the same process reuse it.
+%%---------------------------------------------------------------------
+proj() ->
+	case get(sp2_project) of
+		undefined ->
+			{ok, P} = graphdb_project:register_project("SP2 test project"),
+			{ok, Project} = graphdb_project:open(P),
+			put(sp2_project, Project),
+			Project;
+		Project ->
+			Project
+	end.
+
+%%---------------------------------------------------------------------
+%% root() -> Nref
+%%
+%% SP2 test helper: returns a shared compositional-root instance nref for
+%% proj(), memoised per test-case process (mirrors proj()'s own memo
+%% pattern) so every create_instance/4 call in one test case that used
+%% to pass the old single-store stand-in parent (bare 5 -- an environment
+%% category nref that happened to always exist in the pre-SP2 shared
+%% table) shares the SAME project-local parent. Seeds via root_instance/1
+%% on first use.
+%%---------------------------------------------------------------------
+root() ->
+	case get(sp2_root) of
+		undefined ->
+			Nref = root_instance(proj()),
+			put(sp2_root, Nref),
+			Nref;
+		Nref ->
+			Nref
 	end.

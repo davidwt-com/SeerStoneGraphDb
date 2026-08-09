@@ -78,8 +78,8 @@ end)).
 %%---------------------------------------------------------------------
 %% Exports
 %%---------------------------------------------------------------------
--export([register_project/1, is_project/1, open_session/1, session_project/1,
-		require_session/1,
+-export([register_project/1, is_project/1, open/1,
+		require_project/1, next_nref/1, next_rel_id_pair/1,
 		add_relationship/5, add_relationship/6, add_relationship/7,
 		add_class_membership/3,
 		remove_relationship/4, remove_relationship/5,
@@ -94,16 +94,85 @@ end)).
 %%---------------------------------------------------------------------
 %% register_project(Name) -> {ok, ProjectNref} | {error, term()}
 %%
-%% Creates a kind=instance node in the environment under the Projects
-%% category (nref 5) via a pair of category composition arcs, then
-%% returns the new node's nref.
+%% Creates the project's anchor node (a kind=instance node in the
+%% environment under the Projects category, nref 5) then its three
+%% physical tables (nodes_<A>, relationships_<A>, counters_<A>).
 %%
-%% The nref and rel-id pair are allocated OUTSIDE the transaction fun:
-%% calling gen_servers (graphdb_nref, rel_id_server) inside a Mnesia
-%% activity is a latent deadlock — load-bearing invariant in this
+%% mnesia:create_table/2 is a schema operation and cannot run inside a
+%% transaction, so table creation happens AFTER the anchor write, not
+%% atomically with it. Both steps are create-if-absent: create_anchor/1
+%% looks up an existing project anchor by Name first and reuses it if
+%% found; ensure_tables/1 treats already_exists as success. A retried
+%% register_project/1 call for the same Name therefore converges on the
+%% same anchor and the same tables, rather than allocating a duplicate
+%% anchor each time (this was NOT true before -- see TASKS.md).
+%%
+%% The anchor's nref and rel-id pair are allocated OUTSIDE the transaction
+%% fun: calling gen_servers (graphdb_nref, rel_id_server) inside a Mnesia
+%% activity is a latent deadlock -- load-bearing invariant in this
 %% codebase.
 %%---------------------------------------------------------------------
 register_project(Name) when is_list(Name) ->
+	case create_anchor(Name) of
+		{ok, Nref} ->
+			try
+				ok = ensure_tables(Nref),
+				{ok, Nref}
+			catch
+				throw:{error, _} = Err -> Err
+			end;
+		{error, _} = Err ->
+			Err
+	end.
+
+%%---------------------------------------------------------------------
+%% create_anchor(Name) -> {ok, Nref} | {error, term()}
+%%
+%% Create-if-absent: looks up an existing project anchor by Name under
+%% Projects (nref 5) first; if found, reuses its nref without allocating
+%% a new one or writing anything. Otherwise allocates a fresh nref and
+%% writes a new anchor node + composition arc pair. The by-name lookup
+%% and the write are two separate transactions (nref/rel-id allocation
+%% must stay outside any transaction fun), so this narrows but does not
+%% eliminate the race between two concurrent first-time registrations of
+%% the same Name -- unchanged from the existing rel_id_server/graphdb_nref
+%% discipline used elsewhere (e.g. graphdb_attr:ensure_seed/2).
+%%---------------------------------------------------------------------
+create_anchor(Name) ->
+	case find_anchor_by_name(Name) of
+		{ok, Nref}       -> {ok, Nref};
+		not_found        -> create_new_anchor(Name);
+		{error, _} = Err -> Err
+	end.
+
+find_anchor_by_name(Name) ->
+	F = fun() ->
+		Arcs = mnesia:index_read(relationships, ?NREF_PROJECTS,
+			#relationship.source_nref),
+		ChildNrefs = [A#relationship.target_nref || A <- Arcs,
+			A#relationship.kind =:= composition,
+			A#relationship.characterization =:= ?ARC_CAT_CHILD],
+		Children = lists:flatmap(fun(N) -> mnesia:read(nodes, N) end,
+			ChildNrefs),
+		case lists:search(fun(N) -> anchor_has_name(N, Name) end, Children) of
+			{value, #node{nref = Nref}} -> {ok, Nref};
+			false                       -> not_found
+		end
+	end,
+	case graphdb_mgr:transaction(F) of
+		{ok, Result}    -> Result;
+		{error, Reason} -> {error, Reason}
+	end.
+
+anchor_has_name(#node{kind = instance, attribute_value_pairs = AVPs}, Name) ->
+	lists:any(fun
+		(#{attribute := ?NAME_ATTR_INSTANCE, value := V}) -> V =:= Name;
+		(_) -> false
+	end, AVPs);
+anchor_has_name(_, _) ->
+	false.
+
+create_new_anchor(Name) ->
 	Nref = graphdb_nref:get_next(),
 	{Id1, Id2} = rel_id_server:get_id_pair(),
 	NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
@@ -130,6 +199,46 @@ register_project(Name) when is_list(Name) ->
 
 
 %%---------------------------------------------------------------------
+%% ensure_tables(Anchor) -> ok    (throws {error, {create_table_failed, ...}})
+%%
+%% Creates the project's three physical tables if absent. Mirrors
+%% graphdb_bootstrap:create_tables/0's shape (disc_copies, record_info-
+%% derived attributes, source_nref/target_nref index on relationships).
+%% The counters table has no fixed record shape -- it is looked up by a
+%% bare {Key, Value} tuple via mnesia:dirty_update_counter/3.
+%%---------------------------------------------------------------------
+ensure_tables(Anchor) ->
+	NodeList = [node()],
+	ok = ensure_table(nodes_table(Anchor), [
+		{record_name, node},
+		{attributes, record_info(fields, node)},
+		{disc_copies, NodeList}
+	]),
+	ok = ensure_table(rels_table(Anchor), [
+		{record_name, relationship},
+		{attributes, record_info(fields, relationship)},
+		{disc_copies, NodeList},
+		{index, [source_nref, target_nref]}
+	]),
+	ok = ensure_table(counters_table(Anchor), [
+		{disc_copies, NodeList}
+	]),
+	ok.
+
+ensure_table(Name, Opts) ->
+	case mnesia:create_table(Name, Opts) of
+		{atomic, ok}                       -> ok;
+		{aborted, {already_exists, Name}}  -> ok;
+		{aborted, Reason} ->
+			throw({error, {create_table_failed, Name, Reason}})
+	end.
+
+nodes_table(Anchor)    -> list_to_atom("nodes_" ++ integer_to_list(Anchor)).
+rels_table(Anchor)     -> list_to_atom("relationships_" ++ integer_to_list(Anchor)).
+counters_table(Anchor) -> list_to_atom("counters_" ++ integer_to_list(Anchor)).
+
+
+%%---------------------------------------------------------------------
 %% is_project(Nref) -> boolean()
 %%
 %% Returns true iff the node at Nref has ?NREF_PROJECTS (5) in its
@@ -143,86 +252,116 @@ is_project(Nref) ->
 
 
 %%---------------------------------------------------------------------
-%% open_session(ProjectNref) -> {ok, Session} | {error, not_a_project}
+%% open(ProjectNref) ->
+%%     {ok, Project} | {error, not_a_project} | {error, no_store}
 %%
-%% Opens a session on a registered project. Returns an opaque Session map
-%% if the nref is a registered project, otherwise {error, not_a_project}.
-%% Session is #{kind => project_session, project => Nref}.
+%% Resolves a registered project's nref into its physical store handle.
+%% {error, no_store} covers an anchor that predates SP2 (registered, but
+%% without tables); SP4's migration resolves that state -- open/1 reports
+%% it rather than silently creating an empty store.
 %%---------------------------------------------------------------------
-open_session(ProjectNref) ->
+open(ProjectNref) ->
 	case is_project(ProjectNref) of
-		true  -> {ok, #{kind => project_session, project => ProjectNref}};
-		false -> {error, not_a_project}
+		false ->
+			{error, not_a_project};
+		true ->
+			case tables_exist(ProjectNref) of
+				true ->
+					{ok, #{anchor   => ProjectNref,
+						   nodes    => nodes_table(ProjectNref),
+						   rels     => rels_table(ProjectNref),
+						   counters => counters_table(ProjectNref)}};
+				false ->
+					{error, no_store}
+			end
 	end.
 
+tables_exist(Anchor) ->
+	Tables = mnesia:system_info(tables),
+	lists:all(fun(T) -> lists:member(T, Tables) end,
+		[nodes_table(Anchor), rels_table(Anchor), counters_table(Anchor)]).
+
 
 %%---------------------------------------------------------------------
-%% session_project(Session) -> ProjectNref
+%% require_project(Project) -> ok | {error, invalid_project}
 %%
-%% Extracts the project nref from an opaque session map.
+%% Gate for project-scoped operations: a well-formed Project handle
+%% passes; any other term is rejected. Pure (no store access) -- the
+%% handle was already validated against the registry by open/1.
 %%---------------------------------------------------------------------
-session_project(#{kind := project_session, project := Nref}) -> Nref.
+require_project(#{anchor := _, nodes := _, rels := _, counters := _}) -> ok;
+require_project(_)                                                    ->
+	{error, invalid_project}.
 
 
 %%---------------------------------------------------------------------
-%% require_session(Session) -> ok | {error, invalid_session}
+%% next_nref(Project) -> pos_integer()
+%% next_rel_id_pair(Project) -> {pos_integer(), pos_integer()}
 %%
-%% Gate for project-scoped operations: a well-formed project session
-%% passes; any other term is rejected.  Pure (no store access) — the
-%% session was already validated against the registry by open_session/1.
+%% Project-local allocators. mnesia:dirty_update_counter/3 on a key that
+%% has never been written creates it with the increment as its value, so
+%% the first call to either yields the low end of the unbounded monotonic
+%% space -- no seeding needed at register_project/1 time. Dirty ops do not
+%% participate in a surrounding transaction; callers must invoke these
+%% OUTSIDE any transaction fun, same discipline as graphdb_nref:get_next/0
+%% and rel_id_server:get_id_pair/0 for the environment.
 %%---------------------------------------------------------------------
-require_session(#{kind := project_session, project := _}) -> ok;
-require_session(_)                                        -> {error, invalid_session}.
+next_nref(#{counters := Counters}) ->
+	mnesia:dirty_update_counter(Counters, nref, 1).
+
+next_rel_id_pair(#{counters := Counters}) ->
+	Id2 = mnesia:dirty_update_counter(Counters, rel_id, 2),
+	{Id2 - 1, Id2}.
 
 
 %%=====================================================================
 %% Canonical project-scoped relationship API (SP1 §8 relocation).
 %%
 %% These are the project side of the environment/project split: they
-%% take a project Session as the first argument and delegate to the
-%% graphdb_instance implementations.  The session is validated inside
-%% graphdb_instance via require_session/1.
+%% take a Project handle as the first argument and delegate to the
+%% graphdb_instance implementations.  The handle is validated inside
+%% graphdb_instance via require_project/1.
 %%=====================================================================
 
-add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
-	graphdb_instance:add_relationship(Session, SourceNref, CharNref,
+add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+	graphdb_instance:add_relationship(Project, SourceNref, CharNref,
 		TargetNref, ReciprocalNref).
 
-add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
+add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref) ->
-	graphdb_instance:add_relationship(Session, SourceNref, CharNref,
+	graphdb_instance:add_relationship(Project, SourceNref, CharNref,
 		TargetNref, ReciprocalNref, TemplateNref).
 
-add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
+add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref, AVPSpec) ->
-	graphdb_instance:add_relationship(Session, SourceNref, CharNref,
+	graphdb_instance:add_relationship(Project, SourceNref, CharNref,
 		TargetNref, ReciprocalNref, TemplateNref, AVPSpec).
 
-add_class_membership(Session, InstanceNref, ClassNref) ->
-	graphdb_instance:add_class_membership(Session, InstanceNref, ClassNref).
+add_class_membership(Project, InstanceNref, ClassNref) ->
+	graphdb_instance:add_class_membership(Project, InstanceNref, ClassNref).
 
-remove_relationship(Session, SourceNref, CharNref, TargetNref) ->
-	graphdb_instance:remove_relationship(Session, SourceNref, CharNref,
+remove_relationship(Project, SourceNref, CharNref, TargetNref) ->
+	graphdb_instance:remove_relationship(Project, SourceNref, CharNref,
 		TargetNref).
 
-remove_relationship(Session, SourceNref, CharNref, TargetNref, TemplateNref) ->
-	graphdb_instance:remove_relationship(Session, SourceNref, CharNref,
+remove_relationship(Project, SourceNref, CharNref, TargetNref, TemplateNref) ->
+	graphdb_instance:remove_relationship(Project, SourceNref, CharNref,
 		TargetNref, TemplateNref).
 
-update_relationship(Session, SourceNref, CharNref, TargetNref, Updates) ->
-	graphdb_instance:update_relationship(Session, SourceNref, CharNref,
+update_relationship(Project, SourceNref, CharNref, TargetNref, Updates) ->
+	graphdb_instance:update_relationship(Project, SourceNref, CharNref,
 		TargetNref, Updates).
 
-update_relationship(Session, SourceNref, CharNref, TargetNref, TemplateNref,
+update_relationship(Project, SourceNref, CharNref, TargetNref, TemplateNref,
 		Updates) ->
-	graphdb_instance:update_relationship(Session, SourceNref, CharNref,
+	graphdb_instance:update_relationship(Project, SourceNref, CharNref,
 		TargetNref, TemplateNref, Updates).
 
-update_relationship_both(Session, SourceNref, CharNref, TargetNref, Pair) ->
-	graphdb_instance:update_relationship_both(Session, SourceNref, CharNref,
+update_relationship_both(Project, SourceNref, CharNref, TargetNref, Pair) ->
+	graphdb_instance:update_relationship_both(Project, SourceNref, CharNref,
 		TargetNref, Pair).
 
-update_relationship_both(Session, SourceNref, CharNref, TargetNref, TemplateNref,
+update_relationship_both(Project, SourceNref, CharNref, TargetNref, TemplateNref,
 		Pair) ->
-	graphdb_instance:update_relationship_both(Session, SourceNref, CharNref,
+	graphdb_instance:update_relationship_both(Project, SourceNref, CharNref,
 		TargetNref, TemplateNref, Pair).

@@ -31,8 +31,8 @@
 %%---------------------------------------------------------------------
 %% Rev A Date: April 2026 Author: (completion of Dallas Noyes's design)
 %% Initial implementation: compositional hierarchy over Mnesia.
-%% Provides create_instance/3,4, add_relationship/4, get_instance/1,
-%% children/1, compositional_ancestors/1, resolve_value/2.
+%% Provides create_instance/4,5,6, add_relationship/5,6,7, get_instance/2,
+%% children/2, compositional_ancestors/2, resolve_value/3.
 %%---------------------------------------------------------------------
 -module(graphdb_instance).
 -behaviour(gen_server).
@@ -130,27 +130,27 @@
 		add_relationship/7,
 		add_class_membership/3,
 		%% Tier-1 in-transaction primitive (write-path seam)
-		add_relationship_in_txn/9,
+		add_relationship_in_txn/10,
 		remove_relationship/4,
 		remove_relationship/5,
-		remove_relationship_in_txn/4,
-		resolve_forward_connection/4,
+		remove_relationship_in_txn/5,
+		resolve_forward_connection/5,
 		template_of/1,
 		update_relationship/5,
 		update_relationship/6,
-		update_relationship_avps_in_txn/5,
+		update_relationship_avps_in_txn/6,
 		has_template_update/1,
 		update_relationship_both/5,
 		update_relationship_both/6,
-		update_relationship_both_in_txn/6,
+		update_relationship_both_in_txn/7,
 		%% Lookups
-		get_instance/1,
-		children/1,
-		compositional_ancestors/1,
-		class_of/1,
-		class_memberships/1,
+		get_instance/2,
+		children/2,
+		compositional_ancestors/2,
+		class_of/2,
+		class_memberships/2,
 		%% Inheritance
-		resolve_value/2,
+		resolve_value/3,
 		%% Proxy recognizer
 		remote_reference_class/0,
 		is_proxy/1,
@@ -204,8 +204,8 @@ start_link() ->
 %%   - instance→class membership arc pair (char=29/30)
 %%   - compositional parent→child arc pair (char=28/27)
 %%-----------------------------------------------------------------------------
-create_instance(Session, Name, ClassNref, ParentNref) ->
-	create_instance(Session, Name, ClassNref, ParentNref, fun report_only/1).
+create_instance(Project, Name, ClassNref, ParentNref) ->
+	create_instance(Project, Name, ClassNref, ParentNref, fun report_only/1).
 
 %%-----------------------------------------------------------------------------
 %% create_instance(Name, ClassNref, ParentNref, ConnResolver) ->
@@ -216,9 +216,9 @@ create_instance(Session, Name, ClassNref, ParentNref) ->
 %% outcome and nothing is connected.  /4 supplies the built-in default
 %% conflict resolver.
 %%-----------------------------------------------------------------------------
-create_instance(Session, Name, ClassNref, ParentNref, ConnResolver)
+create_instance(Project, Name, ClassNref, ParentNref, ConnResolver)
 		when is_function(ConnResolver, 1) ->
-	create_instance(Session, Name, ClassNref, ParentNref, ConnResolver,
+	create_instance(Project, Name, ClassNref, ParentNref, ConnResolver,
 					graphdb_rules:default_conflict_resolver()).
 
 %%-----------------------------------------------------------------------------
@@ -229,12 +229,12 @@ create_instance(Session, Name, ClassNref, ParentNref, ConnResolver)
 %% in the CALLER's process (where seeded_nrefs/0 is safe) and applied per
 %% cascade level for composition rules and per plan node for connection rules.
 %%-----------------------------------------------------------------------------
-create_instance(Session, Name, ClassNref, ParentNref, ConnResolver,
+create_instance(Project, Name, ClassNref, ParentNref, ConnResolver,
 		ConflictResolver)
 		when is_function(ConnResolver, 1), is_function(ConflictResolver, 1) ->
-	with_session(Session, fun() ->
+	with_project(Project, fun(P) ->
 		gen_server:call(?MODULE,
-			{create_instance, Name, ClassNref, ParentNref, ConnResolver,
+			{create_instance, P, Name, ClassNref, ParentNref, ConnResolver,
 			 ConflictResolver})
 	end).
 
@@ -256,10 +256,10 @@ report_only(_Ctx) -> defer.
 %% its default template removed; the caller must then use /5 to provide
 %% an explicit template.
 %%-----------------------------------------------------------------------------
-add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
-	with_session(Session, fun() ->
+add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
+	with_project(Project, fun(P) ->
 		gen_server:call(?MODULE,
-			{add_relationship, SourceNref, CharNref, TargetNref,
+			{add_relationship, P, SourceNref, CharNref, TargetNref,
 				ReciprocalNref, default, {[], []}})
 	end).
 
@@ -276,11 +276,11 @@ add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref) ->
 %% whose parent class is in the taxonomic ancestry of the source's
 %% class or the target's class.
 %%-----------------------------------------------------------------------------
-add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
+add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref) when is_integer(TemplateNref) ->
-	with_session(Session, fun() ->
+	with_project(Project, fun(P) ->
 		gen_server:call(?MODULE,
-			{add_relationship, SourceNref, CharNref, TargetNref,
+			{add_relationship, P, SourceNref, CharNref, TargetNref,
 				ReciprocalNref, TemplateNref, {[], []}})
 	end).
 
@@ -297,69 +297,90 @@ add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
 %% The Template AVP (#{attribute => 31, value => TemplateNref}) is
 %% prepended to each direction's user-supplied AVP list.
 %%-----------------------------------------------------------------------------
-add_relationship(Session, SourceNref, CharNref, TargetNref, ReciprocalNref,
+add_relationship(Project, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref, {FwdAVPs, RevAVPs} = AVPSpec)
 		when is_integer(TemplateNref), is_list(FwdAVPs), is_list(RevAVPs) ->
-	with_session(Session, fun() ->
+	with_project(Project, fun(P) ->
 		gen_server:call(?MODULE,
-			{add_relationship, SourceNref, CharNref, TargetNref,
+			{add_relationship, P, SourceNref, CharNref, TargetNref,
 				ReciprocalNref, TemplateNref, AVPSpec})
 	end).
 
 
 %%-----------------------------------------------------------------------------
-%% get_instance(Nref) -> {ok, #node{}} | {error, not_found | not_an_instance}
+%% get_instance(Project, Nref) -> {ok, #node{}} | {error, not_found | not_an_instance}
+%%
+%% Gated by with_home/2 (SP2 review wave B): Project can be `environment`
+%% (graphdb_query's resolve_home/2 legitimately resolves a bare nref to the
+%% environment) or a well-formed Project handle -- either way the guard runs
+%% BEFORE the gen_server:call, so a malformed handle never reaches the
+%% singleton.  See with_home/2's own header for the full rationale.
 %%-----------------------------------------------------------------------------
-get_instance(Nref) ->
-	gen_server:call(?MODULE, {get_instance, Nref}).
+get_instance(Project, Nref) ->
+	with_home(Project, fun(P) ->
+		gen_server:call(?MODULE, {get_instance, P, Nref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
-%% children(Nref) -> {ok, [#node{}]} | {error, term()}
+%% children(Project, Nref) -> {ok, [#node{}]} | {error, term()}
 %%
 %% Returns all direct instance-kind children of the given node (uses
-%% Mnesia index on parent).
+%% Mnesia index on parent).  Gated by with_home/2 -- see get_instance/2.
 %%-----------------------------------------------------------------------------
-children(Nref) ->
-	gen_server:call(?MODULE, {children, Nref}).
+children(Project, Nref) ->
+	with_home(Project, fun(P) ->
+		gen_server:call(?MODULE, {children, P, Nref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
-%% compositional_ancestors(Nref) -> {ok, [#node{}]} | {error, term()}
+%% compositional_ancestors(Project, Nref) -> {ok, [#node{}]} | {error, term()}
 %%
 %% Returns the ancestor chain of the given instance, starting from its
 %% immediate parent up through the compositional hierarchy.  Stops at
 %% a non-instance node or the end of the chain.  Returns nearest-first.
+%% Gated by with_home/2 -- see get_instance/2.  graphdb_query threads
+%% resolve_home/2's result straight into this function, and that result can
+%% be the atom `environment`, so this MUST accept environment as well as a
+%% Project handle (plain with_project/2 would wrongly reject it).
 %%-----------------------------------------------------------------------------
-compositional_ancestors(Nref) ->
-	gen_server:call(?MODULE, {compositional_ancestors, Nref}).
+compositional_ancestors(Project, Nref) ->
+	with_home(Project, fun(P) ->
+		gen_server:call(?MODULE, {compositional_ancestors, P, Nref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
-%% class_of(InstanceNref) ->
+%% class_of(Project, InstanceNref) ->
 %%     {ok, ClassNref} | not_found | {error, term()}
 %%
 %% Resolves the class membership of an instance via the membership arc
 %% (characterization=29).  Returns the class nref, or `not_found` if
 %% the instance has no class membership arc.  When an instance belongs
-%% to multiple classes (see `class_memberships/1`), returns whichever
+%% to multiple classes (see `class_memberships/2`), returns whichever
 %% Mnesia surfaces first; callers needing the full set must use
-%% `class_memberships/1`.
+%% `class_memberships/2`.  Gated by with_home/2 -- see get_instance/2.
 %%-----------------------------------------------------------------------------
-class_of(InstanceNref) ->
-	gen_server:call(?MODULE, {class_of, InstanceNref}).
+class_of(Project, InstanceNref) ->
+	with_home(Project, fun(P) ->
+		gen_server:call(?MODULE, {class_of, P, InstanceNref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
-%% class_memberships(InstanceNref) ->
+%% class_memberships(Project, InstanceNref) ->
 %%     {ok, [ClassNref]} | {error, term()}
 %%
 %% Returns every class the instance belongs to.  Read from the
 %% `node.classes` cache (kept consistent with the 29-characterized
 %% outgoing arcs by the cache invariant — see `graphdb_mgr:verify_caches/0`).
+%% Gated by with_home/2 -- see get_instance/2.
 %%-----------------------------------------------------------------------------
-class_memberships(InstanceNref) ->
-	gen_server:call(?MODULE, {class_memberships, InstanceNref}).
+class_memberships(Project, InstanceNref) ->
+	with_home(Project, fun(P) ->
+		gen_server:call(?MODULE, {class_memberships, P, InstanceNref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -371,15 +392,15 @@ class_memberships(InstanceNref) ->
 %% a class already present returns ok without writing.  Validates that
 %% the subject is an instance and the target is a class.
 %%-----------------------------------------------------------------------------
-add_class_membership(Session, InstanceNref, ClassNref) ->
-	with_session(Session, fun() ->
+add_class_membership(Project, InstanceNref, ClassNref) ->
+	with_project(Project, fun(P) ->
 		gen_server:call(?MODULE,
-			{add_class_membership, InstanceNref, ClassNref})
+			{add_class_membership, P, InstanceNref, ClassNref})
 	end).
 
 
 %%-----------------------------------------------------------------------------
-%% resolve_value(InstanceNref, AttrNref) ->
+%% resolve_value(Project, InstanceNref, AttrNref) ->
 %%     {ok, Value, Source} | not_found | {error, term()}
 %%
 %% Full inheritance resolution following priority order:
@@ -394,9 +415,15 @@ add_class_membership(Session, InstanceNref, ClassNref) ->
 %% direct class memberships).  For Priority 3, AncNref is the
 %% compositional-ancestor instance node.  For Priority 4, NodeNref is
 %% the directly-connected node (one level deep).
+%%
+%% Gated by with_home/2 -- see get_instance/2.  graphdb_query threads
+%% resolve_home/2's result straight into this function (same as
+%% compositional_ancestors/2 above), so this too MUST accept `environment`.
 %%-----------------------------------------------------------------------------
-resolve_value(InstanceNref, AttrNref) ->
-	gen_server:call(?MODULE, {resolve_value, InstanceNref, AttrNref}).
+resolve_value(Project, InstanceNref, AttrNref) ->
+	with_home(Project, fun(P) ->
+		gen_server:call(?MODULE, {resolve_value, P, InstanceNref, AttrNref})
+	end).
 
 
 %%-----------------------------------------------------------------------------
@@ -477,48 +504,49 @@ init([]) ->
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Creators
 %%-----------------------------------------------------------------------------
-handle_call({create_instance, Name, ClassNref, ParentNref, Resolver,
+handle_call({create_instance, Project, Name, ClassNref, ParentNref, Resolver,
 			 ConflictResolver}, _From,
 		#state{instantiable_nref = InstAttr, retired_nref = RetAttr} = State) ->
 	Ctx = #{inst_attr => InstAttr, ret_attr => RetAttr, on_path => [],
 			resolver => Resolver, conflict_resolver => ConflictResolver,
-			root_parent => ParentNref, root_source => undefined},
+			project => Project, root_parent => ParentNref,
+			root_source => undefined},
 	{reply, do_create_instance(Name, ClassNref, ParentNref, Ctx), State};
 
-handle_call({add_relationship, S, C, T, R, TemplateSpec, AVPSpec},
+handle_call({add_relationship, Home, S, C, T, R, TemplateSpec, AVPSpec},
 		_From, State) ->
 	{reply,
-		do_add_relationship(S, C, T, R, TemplateSpec, AVPSpec, State),
+		do_add_relationship(Home, S, C, T, R, TemplateSpec, AVPSpec, State),
 		State};
 
-handle_call({add_class_membership, InstanceNref, ClassNref}, _From,
+handle_call({add_class_membership, Project, InstanceNref, ClassNref}, _From,
 		#state{instantiable_nref = InstAttr, retired_nref = RetAttr} = State) ->
-	{reply, do_add_class_membership(InstanceNref, ClassNref, InstAttr, RetAttr),
-		State};
+	{reply, do_add_class_membership(Project, InstanceNref, ClassNref, InstAttr,
+		RetAttr), State};
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Lookups
 %%-----------------------------------------------------------------------------
-handle_call({get_instance, Nref}, _From, State) ->
-	{reply, do_get_instance(Nref), State};
+handle_call({get_instance, Project, Nref}, _From, State) ->
+	{reply, do_get_instance(Project, Nref), State};
 
-handle_call({children, Nref}, _From, State) ->
-	{reply, do_children(Nref), State};
+handle_call({children, Project, Nref}, _From, State) ->
+	{reply, do_children(Project, Nref), State};
 
-handle_call({compositional_ancestors, Nref}, _From, State) ->
-	{reply, do_compositional_ancestors(Nref), State};
+handle_call({compositional_ancestors, Project, Nref}, _From, State) ->
+	{reply, do_compositional_ancestors(Project, Nref), State};
 
-handle_call({class_of, Nref}, _From, State) ->
-	{reply, do_class_of(Nref), State};
+handle_call({class_of, Project, Nref}, _From, State) ->
+	{reply, do_class_of(Project, Nref), State};
 
-handle_call({class_memberships, Nref}, _From, State) ->
-	{reply, do_class_memberships(Nref), State};
+handle_call({class_memberships, Project, Nref}, _From, State) ->
+	{reply, do_class_memberships(Project, Nref), State};
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Inheritance
 %%-----------------------------------------------------------------------------
-handle_call({resolve_value, InstNref, AttrNref}, _From, State) ->
-	{reply, do_resolve_value(InstNref, AttrNref), State};
+handle_call({resolve_value, Project, InstNref, AttrNref}, _From, State) ->
+	{reply, do_resolve_value(Project, InstNref, AttrNref), State};
 
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Proxy accessor
@@ -655,9 +683,10 @@ class_has_name(#node{attribute_value_pairs = AVPs}, Name) ->
 do_create_instance(Name, ClassNref, ParentNref, Ctx) ->
 	InstAttr = maps:get(inst_attr, Ctx),
 	RetAttr  = maps:get(ret_attr, Ctx),
+	Project  = maps:get(project, Ctx),
 	case do_validate_class(ClassNref, InstAttr, RetAttr) of
 		ok ->
-			case do_validate_parent(ParentNref, RetAttr) of
+			case do_validate_parent(Project, ParentNref, RetAttr) of
 				ok ->
 					fire_create(Name, ClassNref, ParentNref, Ctx);
 				{error, _} = Err ->
@@ -724,9 +753,10 @@ bind_root_source(Ctx, RootNref) ->
 %% (the post-commit auto-connection write list — empty in this task).
 %%-----------------------------------------------------------------------------
 execute(RootName, _RootClass, RootParent, Ctx, PlanTree) ->
+	Project = maps:get(project, Ctx),
 	%% Annotate the plan tree with allocated nrefs (root uses caller's Name).
-	InstPlan = allocate_plan(PlanTree#{name => RootName}),
-	{Writes, CompOutcomes} = plan_writes(InstPlan, RootParent),
+	InstPlan = allocate_plan(PlanTree#{name => RootName}, Project),
+	{Writes, CompOutcomes} = plan_writes(InstPlan, RootParent, Project),
 	RootNref = maps:get(nref, InstPlan),
 	Ctx1 = bind_root_source(Ctx, RootNref),
 	case resolve_connections(InstPlan, Ctx1) of
@@ -835,8 +865,9 @@ resolve_rules([{Rule, Deploy, Spec} | Rest], SourceNref, Ctx, Acc) ->
 %%-----------------------------------------------------------------------------
 connect_targets(mandatory, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
 		{Rows, Auto, Rep}) ->
+	Project = maps:get(project, Ctx),
 	TClass = maps:get(target_class, Spec),
-	case partition_targets(List, TClass, SourceNref) of
+	case partition_targets(List, TClass, SourceNref, Project) of
 		{error, Reason} ->
 			%% an invalid target on a committed mandatory rule aborts the create
 			{error, {invalid_connection_target, Reason},
@@ -851,7 +882,8 @@ connect_targets(mandatory, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
 					ToWrite = cap(Valid, Max),
 					Template = maps:get(template, Deploy),
 					{NewRows, NewOuts} =
-						mandatory_rows(ToWrite, SourceNref, Spec, Template),
+						mandatory_rows(ToWrite, SourceNref, Spec, Template,
+							Project),
 					Rep1 = lists:foldl(
 						fun(O, R) -> add_outcome(R, Rule, Deploy, O) end,
 						Rep, NewOuts),
@@ -862,8 +894,9 @@ connect_targets(mandatory, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
 
 connect_targets(auto, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
 		{Rows, Auto, Rep}) ->
+	Project = maps:get(project, Ctx),
 	TClass = maps:get(target_class, Spec),
-	{Valid, Invalid} = split_valid(List, TClass, SourceNref),
+	{Valid, Invalid} = split_valid(List, TClass, SourceNref, Project),
 	%% auto does NOT enforce the floor -- Min is ignored; only Max caps.
 	{_Min, Max} = maps:get(multiplicity, Deploy, {1, 1}),
 	ToConnect = cap(Valid, Max),
@@ -879,30 +912,31 @@ connect_targets(auto, List, Rule, Deploy, Spec, SourceNref, Rest, Ctx,
 	%% valid targets are queued for the post-commit writer
 	AutoEntry = #{rule => Rule, deploy => Deploy, spec => Spec,
 				  source => SourceNref, template => maps:get(template, Deploy),
-				  targets => ToConnect},
+				  targets => ToConnect, project => Project},
 	resolve_rules(Rest, SourceNref, Ctx, {Rows, Auto ++ [AutoEntry], Rep1}).
 
-%% split_valid(List, TClass, SourceNref) ->
+%% split_valid(List, TClass, SourceNref, Project) ->
 %%     {Valid :: [Target], Invalid :: [{Target, Reason}]}
 %% For AUTO: partition rather than abort -- invalids are reported, valids written.
-split_valid(List, TClass, SourceNref) ->
+split_valid(List, TClass, SourceNref, Project) ->
 	lists:foldr(
 		fun(T, {Vs, Is}) ->
-			case validate_target(T, TClass, SourceNref) of
+			case validate_target(T, TClass, SourceNref, Project) of
 				ok              -> {[T | Vs], Is};
 				{error, Reason} -> {Vs, [{T, Reason} | Is]}
 			end
 		end, {[], []}, List).
 
-%% partition_targets(List, TargetClass, SourceNref) -> {ok, [Target]} | {error, R}
+%% partition_targets(List, TargetClass, SourceNref, Project) ->
+%%     {ok, [Target]} | {error, R}
 %% For a MANDATORY rule: the first invalid target aborts with its reason; an
 %% all-valid list returns the (order-preserved) valid targets.
-partition_targets([], _TClass, _SourceNref) ->
+partition_targets([], _TClass, _SourceNref, _Project) ->
 	{ok, []};
-partition_targets([T | Rest], TClass, SourceNref) ->
-	case validate_target(T, TClass, SourceNref) of
+partition_targets([T | Rest], TClass, SourceNref, Project) ->
+	case validate_target(T, TClass, SourceNref, Project) of
 		ok ->
-			case partition_targets(Rest, TClass, SourceNref) of
+			case partition_targets(Rest, TClass, SourceNref, Project) of
 				{ok, Vs}         -> {ok, [T | Vs]};
 				{error, _} = Err -> Err
 			end;
@@ -914,18 +948,18 @@ partition_targets([T | Rest], TClass, SourceNref) ->
 cap(List, unbounded) -> List;
 cap(List, Max)       -> lists:sublist(List, Max).
 
-%% mandatory_rows(Targets, SourceNref, Spec, Template) -> {Rows, Outcomes}
+%% mandatory_rows(Targets, SourceNref, Spec, Template, Project) -> {Rows, Outcomes}
 %% Builds the connection rows for each target plus a (tentative) `connected`
 %% outcome indexed 1..N.  Outcomes are returned to the report only on commit.
-mandatory_rows(Targets, SourceNref, Spec, Template) ->
+mandatory_rows(Targets, SourceNref, Spec, Template, Project) ->
 	Char   = maps:get(characterization, Spec),
 	Recip  = maps:get(reciprocal, Spec),
 	TClass = maps:get(target_class, Spec),
 	{Rows, Outs, _} = lists:foldl(
 		fun(T, {RAcc, OAcc, I}) ->
 			TNref = target_nref(T),
-			Rows0 = build_connection_rows(SourceNref, Char, TNref, Recip,
-										  Template, target_avps(T)),
+			Rows0 = build_connection_rows(Project, SourceNref, Char, TNref,
+										  Recip, Template, target_avps(T)),
 			Out = #{source => SourceNref, index => I, status => connected,
 					target => TNref, characterization => Char,
 					target_class => TClass},
@@ -947,16 +981,16 @@ conn_fail(Reason, CulpritRule, Spec, RepAcc) ->
 		  target_class => maps:get(target_class, Spec)}).
 
 %%-----------------------------------------------------------------------------
-%% validate_target(Target, TargetClass, SourceNref) -> ok | {error, Reason}
+%% validate_target(Target, TargetClass, SourceNref, Project) -> ok | {error, Reason}
 %%
 %% Target is a bare nref or {Nref, {Fwd, Rev}}.  Valid iff the nref exists, is a
 %% kind=instance node, and is an instance of TargetClass or a subclass of it.
 %% No self-check is needed: the source is uncommitted at RESOLVE, so a readable
 %% instance is necessarily distinct from it.
 %%-----------------------------------------------------------------------------
-validate_target(Target, TargetClass, _SourceNref) ->
+validate_target(Target, TargetClass, _SourceNref, Project) ->
 	Nref = target_nref(Target),
-	case mnesia:dirty_read(nodes, Nref) of
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), Nref) of
 		[#node{kind = instance, classes = Classes}] ->
 			case lists:any(
 					fun(C) -> graphdb_class:class_in_ancestry(TargetClass, C) end,
@@ -1014,15 +1048,16 @@ fire_connections(AutoConnPlan) ->
 %% fire_auto_connection(AutoEntry, Acc) -> report()
 fire_auto_connection(#{rule := Rule, deploy := Deploy, spec := Spec,
 					   source := SourceNref, template := Template,
-					   targets := Targets}, Acc) ->
+					   targets := Targets, project := Project}, Acc) ->
 	Char   = maps:get(characterization, Spec),
 	Recip  = maps:get(reciprocal, Spec),
 	TClass = maps:get(target_class, Spec),
 	{_I, Acc1} = lists:foldl(
 		fun(T, {I, A}) ->
 			TNref = target_nref(T),
-			Outcome = case write_connection_arcs(SourceNref, Char, TNref, Recip,
-												 Template, target_avps(T)) of
+			Outcome = case write_connection_arcs(Project, SourceNref, Char,
+												 TNref, Recip, Template,
+												 target_avps(T)) of
 				ok ->
 					#{source => SourceNref, index => I, status => connected,
 					  target => TNref, characterization => Char,
@@ -1037,47 +1072,49 @@ fire_auto_connection(#{rule := Rule, deploy := Deploy, spec := Spec,
 	Acc1.
 
 %%-----------------------------------------------------------------------------
-%% allocate_plan(PlanNode) -> InstPlanNode (same tree + nref per node)
+%% allocate_plan(PlanNode, Project) -> InstPlanNode (same tree + nref per node)
 %%
-%% Depth-first pre-order walk: allocates one nref per node OUTSIDE the
-%% Mnesia transaction.
+%% Depth-first pre-order walk: allocates one nref per node from Project's
+%% own counter, OUTSIDE the Mnesia transaction.
 %%-----------------------------------------------------------------------------
-allocate_plan(#{mandatory_children := Kids} = Node) ->
-	Nref = graphdb_nref:get_next(),
+allocate_plan(#{mandatory_children := Kids} = Node, Project) ->
+	Nref = graphdb_project:next_nref(Project),
 	Node#{nref => Nref,
-		  mandatory_children => [allocate_plan(K) || K <- Kids]}.
+		  mandatory_children => [allocate_plan(K, Project) || K <- Kids]}.
 
 %%-----------------------------------------------------------------------------
-%% plan_writes(InstPlan, RootParent) -> {Writes, Outcomes}
+%% plan_writes(InstPlan, RootParent, Project) -> {Writes, Outcomes}
 %%
 %% Pre-order DFS over the instantiated plan tree.  The root emits only its
 %% own five records.  Each mandated descendant emits its records plus one
 %% `fired` outcome under its rule, indexed 1..N within that rule.
 %%-----------------------------------------------------------------------------
 plan_writes(#{nref := RootNref, class := Class, name := Name,
-			  mandatory_children := Kids}, RootParent) ->
-	Acc0 = {instance_records(RootNref, Class, Name, RootParent), []},
-	write_children(Kids, RootNref, Acc0).
+			  mandatory_children := Kids}, RootParent, Project) ->
+	Acc0 = {instance_records(RootNref, Class, Name, RootParent, Project), []},
+	write_children(Kids, RootNref, Acc0, Project).
 
 %%-----------------------------------------------------------------------------
-%% write_children(Siblings, OwnerNref, {Writes, Outcomes}) -> {Writes, Outcomes}
+%% write_children(Siblings, OwnerNref, {Writes, Outcomes}, Project) ->
+%%     {Writes, Outcomes}
 %%
 %% Numbers siblings within their mandating rule (1-based), emits each
 %% child's records + fired outcome (with real `deploy` map), then recurses
 %% into the child's own mandatory children.
 %%-----------------------------------------------------------------------------
-write_children(Siblings, OwnerNref, Acc) ->
+write_children(Siblings, OwnerNref, Acc, Project) ->
 	{_Counts, Result} =
 		lists:foldl(
 			fun(#{nref := CNref, class := CClass, name := CName,
 				  rule := Rule, deploy := Deploy,
 				  mandatory_children := GKids}, {Counts, {W, O}}) ->
 				Idx = maps:get(rule_key(Rule), Counts, 0) + 1,
-				W1 = W ++ instance_records(CNref, CClass, CName, OwnerNref),
+				W1 = W ++ instance_records(CNref, CClass, CName, OwnerNref,
+					Project),
 				O1 = add_outcome(O, Rule, Deploy,
 						#{owner => OwnerNref, index => Idx,
 						  status => fired, child => CNref}),
-				{W2, O2} = write_children(GKids, CNref, {W1, O1}),
+				{W2, O2} = write_children(GKids, CNref, {W1, O1}, Project),
 				{Counts#{rule_key(Rule) => Idx}, {W2, O2}}
 			end, {#{}, Acc}, Siblings),
 	Result.
@@ -1085,16 +1122,42 @@ write_children(Siblings, OwnerNref, Acc) ->
 rule_key(#node{nref = N}) -> N.
 
 %%-----------------------------------------------------------------------------
-%% instance_records(Nref, ClassNref, Name, ParentNref) -> [{Tab, Rec}]
+%% instance_records(Nref, ClassNref, Name, ParentNref, Project) -> [{Tab, Rec}]
 %%
-%% Builds the five Mnesia records for one instance node.  Rel-IDs are
-%% allocated here (outside the transaction by the allocate_plan caller
-%% chain; this function is called from plan_writes/write_children which
-%% are invoked in execute/5 before the transaction).
+%% Builds the five Mnesia records for one instance node. Rel-IDs come from
+%% Project's own counter (allocated here, outside the transaction, same as
+%% before -- only the source changed from rel_id_server to
+%% graphdb_project:next_rel_id_pair/1). Node record and both composition rows
+%% tag their table via graphdb_ns:node_table/rel_table; the instantiation
+%% pair's class-side row (C2I) still writes to Project's own relationships
+%% table -- the row lives wherever its SOURCE lives (source_nref = ClassNref
+%% would suggest environment, but per the design's arc-shape table the
+%% class->instance membership row's source_nref routes environment while its
+%% home store is still recorded with the instance -- see Task 5's
+%% add_relationship_in_txn for the general rule; membership rows are written
+%% here directly rather than through that general primitive, and both rows
+%% of this specific arc pair are written to the SAME table as the instance
+%% they describe, matching how SP1/pre-SP2 always wrote them together).
+%%
+%% Design note: the class->instance membership row (C2I, whose source_nref is
+%% the environment ClassNref) is written to the PROJECT's relationships
+%% table, not split across two stores. This is a deliberate, narrow
+%% exception to "route by source's home": SP2 keeps both directions of one
+%% arc-write co-located with the instance they describe so a project remains
+%% a genuinely single relocatable unit (design §2's stated goal) -- a
+%% project's full membership history lives with it. Reads of this row still
+%% resolve correctly under the home-relative rule because a reader who
+%% already knows the row is a char=30 reciprocal reaches it via target_nref
+%% from the project side, never by scanning the environment's relationships
+%% table by source_nref=ClassNref for this purpose. add_relationship_in_txn
+%% (Task 5) does NOT follow this exception -- it is the general
+%% connection-arc primitive and routes each row by its own endpoints.
 %%-----------------------------------------------------------------------------
-instance_records(Nref, ClassNref, Name, ParentNref) ->
-	{MembId1, MembId2} = rel_id_server:get_id_pair(),
-	{CompId1, CompId2} = rel_id_server:get_id_pair(),
+instance_records(Nref, ClassNref, Name, ParentNref, Project) ->
+	{MembId1, MembId2} = graphdb_project:next_rel_id_pair(Project),
+	{CompId1, CompId2} = graphdb_project:next_rel_id_pair(Project),
+	NodesTab = graphdb_ns:node_table(Project),
+	RelsTab  = graphdb_ns:rel_table(Project),
 	NameAVP = #{attribute => ?NAME_ATTR_INSTANCE, value => Name},
 	Node = #node{nref = Nref, kind = instance, parents = [ParentNref],
 				 classes = [ClassNref], attribute_value_pairs = [NameAVP]},
@@ -1114,8 +1177,8 @@ instance_records(Nref, ClassNref, Name, ParentNref) ->
 	C2P = #relationship{id = CompId2, kind = composition, source_nref = Nref,
 		characterization = ?ARC_INST_PARENT, target_nref = ParentNref,
 		reciprocal = ?ARC_INST_CHILD, avps = []},
-	[{nodes, Node}, {relationships, I2C}, {relationships, C2I},
-	 {relationships, P2C}, {relationships, C2P}].
+	[{NodesTab, Node}, {RelsTab, I2C}, {RelsTab, C2I},
+	 {RelsTab, P2C}, {RelsTab, C2P}].
 
 %%-----------------------------------------------------------------------------
 %% fire_auto(InstPlan, Ctx) -> report()
@@ -1318,13 +1381,15 @@ is_retired(AVPs, RetAttr) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_validate_parent(ParentNref, RetAttr) -> ok | {error, term()}
+%% do_validate_parent(Project, ParentNref, RetAttr) -> ok | {error, term()}
 %%
 %% Validates that ParentNref references an existing node and is not
-%% retired (retired => true AVP under RetAttr).
+%% retired (retired => true AVP under RetAttr).  The compositional parent is
+%% always another instance in the same project (design §6, "node.parents ...
+%% home-relative"), so this reads Project's own nodes table.
 %%-----------------------------------------------------------------------------
-do_validate_parent(ParentNref, RetAttr) ->
-	case mnesia:dirty_read(nodes, ParentNref) of
+do_validate_parent(Project, ParentNref, RetAttr) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), ParentNref) of
 		[#node{attribute_value_pairs = AVPs}] ->
 			case is_retired(AVPs, RetAttr) of
 				true  -> {error, {parent_retired, ParentNref}};
@@ -1335,29 +1400,33 @@ do_validate_parent(ParentNref, RetAttr) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+%% do_add_relationship(Home, SourceNref, CharNref, TargetNref, ReciprocalNref,
 %%                     TemplateSpec, AVPSpec, State) -> ok | {error, term()}
 %%
 %% Validates endpoints, resolves class membership and template scope, then
 %% writes the two directed connection rows -- all in one graphdb_mgr:transaction/1
 %% (TOCTOU-isolated).  The rel-id pair is allocated up-front, outside the
-%% transaction: get_id_pair is a gen_server call and must never run inside an
-%% mnesia fun.  A validation abort orphans that pair -- harmless (allocate-
-%% outside-transaction doctrine).  Phase order: validate endpoints ->
-%% resolve classes -> resolve template -> validate scope -> write.
+%% transaction: get_id_pair/next_rel_id_pair is a gen_server call and must
+%% never run inside an mnesia fun.  A validation abort orphans that pair --
+%% harmless (allocate-outside-transaction doctrine).  Phase order: validate
+%% endpoints -> resolve classes -> resolve template -> validate scope -> write.
 %%-----------------------------------------------------------------------------
-do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
+do_add_relationship(Home, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateSpec, AVPSpec, State) ->
 	TkAttr  = State#state.target_kind_avp_nref,
 	RetAttr = State#state.retired_nref,
-	%% Allocate the rel-id pair up-front, OUTSIDE the transaction: get_id_pair
-	%% is a gen_server call and must never run inside an mnesia fun.  A
-	%% validation abort inside the primitive orphans this pair -- harmless
-	%% (allocate-outside-transaction doctrine).
-	IdPair = rel_id_server:get_id_pair(),
+	%% Allocate the rel-id pair up-front, OUTSIDE the transaction:
+	%% get_id_pair/next_rel_id_pair is a gen_server call and must never run
+	%% inside an mnesia fun.  A validation abort inside the primitive orphans
+	%% this pair -- harmless (allocate-outside-transaction doctrine).
+	IdPair = case Home of
+		environment -> rel_id_server:get_id_pair();
+		_           -> graphdb_project:next_rel_id_pair(Home)
+	end,
 	case graphdb_mgr:transaction(fun() ->
-			add_relationship_in_txn(IdPair, SourceNref, CharNref, TargetNref,
-				ReciprocalNref, TemplateSpec, AVPSpec, TkAttr, RetAttr)
+			add_relationship_in_txn(Home, IdPair, SourceNref, CharNref,
+				TargetNref, ReciprocalNref, TemplateSpec, AVPSpec, TkAttr,
+				RetAttr)
 		end) of
 		{ok, ok}         -> ok;
 		{error, _} = Err -> Err
@@ -1365,47 +1434,53 @@ do_add_relationship(SourceNref, CharNref, TargetNref, ReciprocalNref,
 
 
 %%-----------------------------------------------------------------------------
-%% add_relationship_in_txn(IdPair, Source, Char, Target, Reciprocal,
+%% add_relationship_in_txn(Home, IdPair, Source, Char, Target, Reciprocal,
 %%     TemplateSpec, AVPSpec, TkAttr, RetAttr) -> ok
 %%
 %% Tier-1 write-path primitive.  Must run inside an active mnesia transaction;
 %% never opens its own.  Validates endpoints, resolves source/target class and
 %% template scope, then writes the two directed connection rows -- all with
 %% bare mnesia ops, signalling any domain failure via mnesia:abort/1.  The
-%% rel-id pair must be allocated by the caller (get_id_pair is a gen_server
-%% call and must never run inside an mnesia fun).  Composes into a caller's
-%% single transaction (the write-path seam's tier-1 contract); used by both
-%% do_add_relationship/7 (tier-2) and graphdb_mgr:mutate/1 (tier-3).
-%% Phase order: validate endpoints -> resolve classes -> resolve template ->
-%% validate scope -> write.
+%% rel-id pair must be allocated by the caller (get_id_pair/next_rel_id_pair
+%% is a gen_server call and must never run inside an mnesia fun).  Composes
+%% into a caller's single transaction (the write-path seam's tier-1
+%% contract); used by both do_add_relationship/8 (tier-2) and
+%% graphdb_mgr:mutate/1,2 (tier-3).  Home routes SourceNref/TargetNref
+%% (via graphdb_ns:node_table/1, rel_table/1); CharNref/ReciprocalNref always
+%% read from the literal environment (they are always environment attribute
+%% nrefs).  Phase order: validate endpoints -> resolve classes -> resolve
+%% template -> validate scope -> write.
 %%-----------------------------------------------------------------------------
-add_relationship_in_txn({_Id1, _Id2} = IdPair, SourceNref, CharNref,
+add_relationship_in_txn(Home, {_Id1, _Id2} = IdPair, SourceNref, CharNref,
 		TargetNref, ReciprocalNref, TemplateSpec, AVPSpec, TkAttr, RetAttr) ->
-	ok = validate_arc_endpoints_in_txn(SourceNref, CharNref, TargetNref,
+	ok = validate_arc_endpoints_in_txn(Home, SourceNref, CharNref, TargetNref,
 		ReciprocalNref, TkAttr, RetAttr),
 	{SourceClass, TargetClass} =
-		resolve_arc_classes_in_txn(SourceNref, TargetNref),
+		resolve_arc_classes_in_txn(Home, SourceNref, TargetNref),
 	TemplateNref = resolve_template_in_txn(TemplateSpec, SourceClass),
 	ok = graphdb_class:validate_template_scope_in_txn(TemplateNref,
 		SourceClass, TargetClass),
-	Rows = build_connection_rows(IdPair, SourceNref, CharNref, TargetNref,
+	Rows = build_connection_rows(Home, IdPair, SourceNref, CharNref, TargetNref,
 		ReciprocalNref, TemplateNref, AVPSpec),
 	lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
 		Rows).
 
 
 %%-----------------------------------------------------------------------------
-%% resolve_forward_connection(SourceNref, CharNref, TargetNref, TemplateSpec)
-%%   -> {ok, #relationship{}} | not_found | {ambiguous, [TemplateNref]}
+%% resolve_forward_connection(Home, SourceNref, CharNref, TargetNref,
+%%     TemplateSpec) -> {ok, #relationship{}} | not_found
+%%                      | {ambiguous, [TemplateNref]}
 %%
 %% Tier-1 in-transaction helper.  Finds the directed connection row(s) whose
 %% (source, characterization, target) match, narrowed by TemplateSpec
 %% (`any` = ignore template; an integer = match that template AVP).  Classifies
 %% none / exactly-one / many; the ambiguous case carries each matching row's
 %% template so a /3 caller can re-issue as /4.  Reads only; never aborts.
+%% SourceNref routes through Home's relationships table (SP2); CharNref and
+%% TargetNref are only compared in-memory against already-read rows.
 %%-----------------------------------------------------------------------------
-resolve_forward_connection(SourceNref, CharNref, TargetNref, TemplateSpec) ->
-	Rows = mnesia:index_read(relationships, SourceNref,
+resolve_forward_connection(Home, SourceNref, CharNref, TargetNref, TemplateSpec) ->
+	Rows = mnesia:index_read(graphdb_ns:rel_table(Home), SourceNref,
 		#relationship.source_nref),
 	Matches = [R || R <- Rows,
 		R#relationship.kind =:= connection,
@@ -1431,8 +1506,8 @@ template_of(#relationship{avps = AVPs}) ->
 	end.
 
 %%-----------------------------------------------------------------------------
-%% remove_relationship_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec)
-%%   -> ok    (aborts the enclosing transaction on any failure)
+%% remove_relationship_in_txn(Home, SourceNref, CharNref, TargetNref,
+%%     TemplateSpec) -> ok    (aborts the enclosing transaction on any failure)
 %%
 %% Tier-1 primitive.  Must run inside an active mnesia transaction; never opens
 %% its own.  Resolves the forward row (relationship_not_found /
@@ -1440,10 +1515,11 @@ template_of(#relationship{avps = AVPs}) ->
 %% (T, R, S) under the same concrete template, and deletes both rows.  A
 %% missing partner is an integrity violation -- aborts {dangling_half_edge, Id}
 %% rather than deleting a half-edge.  Used by remove_relationship/3,4 (tier-2)
-%% and graphdb_mgr:mutate/1 (tier-3).
+%% and graphdb_mgr:mutate/1 (tier-3).  Both rows live in Home's relationships
+%% table (SP2).
 %%-----------------------------------------------------------------------------
-remove_relationship_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec) ->
-	case resolve_forward_connection(SourceNref, CharNref, TargetNref,
+remove_relationship_in_txn(Home, SourceNref, CharNref, TargetNref, TemplateSpec) ->
+	case resolve_forward_connection(Home, SourceNref, CharNref, TargetNref,
 			TemplateSpec) of
 		not_found ->
 			mnesia:abort(relationship_not_found);
@@ -1452,11 +1528,12 @@ remove_relationship_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec) ->
 		{ok, Fwd} ->
 			Recip = Fwd#relationship.reciprocal,
 			Tmpl  = template_of(Fwd),
-			case resolve_forward_connection(TargetNref, Recip, SourceNref,
+			case resolve_forward_connection(Home, TargetNref, Recip, SourceNref,
 					Tmpl) of
 				{ok, Rev} ->
-					ok = mnesia:delete_object(relationships, Fwd, write),
-					ok = mnesia:delete_object(relationships, Rev, write);
+					RelsTab = graphdb_ns:rel_table(Home),
+					ok = mnesia:delete_object(RelsTab, Fwd, write),
+					ok = mnesia:delete_object(RelsTab, Rev, write);
 				_ ->
 					mnesia:abort({dangling_half_edge, Fwd#relationship.id})
 			end
@@ -1472,18 +1549,18 @@ remove_relationship_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec) ->
 %% narrows by an explicit template.  Plain functions owning one
 %% graphdb_mgr:transaction/1 in the caller's process (no gen_server state).
 %%-----------------------------------------------------------------------------
-remove_relationship(Session, SourceNref, CharNref, TargetNref) ->
-	with_session(Session, fun() ->
+remove_relationship(Project, SourceNref, CharNref, TargetNref) ->
+	with_project(Project, fun(P) ->
 		txn_ok(fun() ->
-			remove_relationship_in_txn(SourceNref, CharNref, TargetNref, any)
+			remove_relationship_in_txn(P, SourceNref, CharNref, TargetNref, any)
 		end)
 	end).
 
-remove_relationship(Session, SourceNref, CharNref, TargetNref, TemplateNref)
+remove_relationship(Project, SourceNref, CharNref, TargetNref, TemplateNref)
 		when is_integer(TemplateNref) ->
-	with_session(Session, fun() ->
+	with_project(Project, fun(P) ->
 		txn_ok(fun() ->
-			remove_relationship_in_txn(SourceNref, CharNref, TargetNref,
+			remove_relationship_in_txn(P, SourceNref, CharNref, TargetNref,
 				TemplateNref)
 		end)
 	end).
@@ -1495,18 +1572,45 @@ txn_ok(Fun) ->
 		{error, _} = Err -> Err
 	end.
 
-%% Gate a project operation on a valid project session (SP1).  A missing or
-%% malformed session short-circuits with {error, invalid_session}; a valid
-%% one runs Fun.  The session is required but otherwise inert against today's
-%% single store (SP2 gives it physical routing).
-with_session(Session, Fun) ->
-	case graphdb_project:require_session(Session) of
-		ok               -> Fun();
+%% Gate a project operation on a valid Project handle. A missing or
+%% malformed handle short-circuits with {error, invalid_project}; a valid
+%% one runs Fun(Project). SP2: Fun now receives Project so it can route.
+with_project(Project, Fun) when is_function(Fun, 1) ->
+	case graphdb_project:require_project(Project) of
+		ok               -> Fun(Project);
 		{error, _} = Err -> Err
 	end.
 
 %%-----------------------------------------------------------------------------
-%% update_relationship_avps_in_txn(S, C, T, TemplateSpec, Updates) -> ok
+%% with_home(Home, Fun) -> term()
+%%
+%% Read-path twin of with_project/2 (SP2 review wave B fix). The write path
+%% is Project-only, so with_project/2's require_project/1 gate is correct
+%% there. Reads are different: graphdb_query:resolve_home/2 is the only
+%% caller that hands this module a bare-nref-resolved Home, and its result
+%% can legitimately be the atom `environment` (an ordinary environment-
+%% resident nref) as well as a Project handle -- graphdb_project:
+%% require_project/1 REJECTS `environment` outright, so gating the six reads
+%% (get_instance/2, children/2, compositional_ancestors/2, class_of/2,
+%% class_memberships/2, resolve_value/3) with plain with_project/2 would
+%% break every graphdb_query call that resolves to the environment.
+%%
+%% with_home/2 accepts environment OR a well-formed Project map and rejects
+%% only genuine garbage (an unregistered nref, a bare atom that isn't
+%% `environment`, a malformed map, etc.) with {error, invalid_project} --
+%% BEFORE the gen_server:call, so a bad handle never reaches the singleton
+%% and trips graphdb_ns:node_table/1's bare two-clause match from inside the
+%% worker process (the exact hazard with_project/2 already guards against on
+%% the write path; see graphdb_mgr.erl's with_project/2 header for the same
+%% reasoning applied there).
+%%-----------------------------------------------------------------------------
+with_home(environment, Fun) when is_function(Fun, 1) ->
+	Fun(environment);
+with_home(Project, Fun) when is_function(Fun, 1) ->
+	with_project(Project, Fun).
+
+%%-----------------------------------------------------------------------------
+%% update_relationship_avps_in_txn(Home, S, C, T, TemplateSpec, Updates) -> ok
 %%   (aborts the enclosing transaction on any failure)
 %%
 %% Tier-1 primitive: edits the AVPs of the SINGLE directed connection row named
@@ -1514,16 +1618,16 @@ with_session(Session, Fun) ->
 %% apply_avp_updates/2 (merge/upsert/delete).  The ?ARC_TEMPLATE scope AVP is
 %% protected -- any update targeting it aborts.  Same not-found / ambiguity
 %% arms as remove.  The Template AVP at index 0 survives because no update may
-%% reference it.
+%% reference it.  The row lives in Home's relationships table (SP2).
 %%-----------------------------------------------------------------------------
-update_relationship_avps_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
-		Updates) ->
+update_relationship_avps_in_txn(Home, SourceNref, CharNref, TargetNref,
+		TemplateSpec, Updates) ->
 	case has_template_update(Updates) of
 		true ->
 			mnesia:abort({protected_relationship_avp, ?ARC_TEMPLATE});
 		false ->
-			case resolve_forward_connection(SourceNref, CharNref, TargetNref,
-					TemplateSpec) of
+			case resolve_forward_connection(Home, SourceNref, CharNref,
+					TargetNref, TemplateSpec) of
 				not_found ->
 					mnesia:abort(relationship_not_found);
 				{ambiguous, Templates} ->
@@ -1531,7 +1635,7 @@ update_relationship_avps_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
 				{ok, Row} ->
 					New = graphdb_mgr:apply_avp_updates(
 						Row#relationship.avps, Updates),
-					mnesia:write(relationships,
+					mnesia:write(graphdb_ns:rel_table(Home),
 						Row#relationship{avps = New}, write)
 			end
 	end.
@@ -1548,24 +1652,24 @@ has_template_update(Updates) ->
 %% (S, C, T).  Validates the update grammar client-side (slice B), then owns
 %% one transaction.
 %%-----------------------------------------------------------------------------
-update_relationship(Session, SourceNref, CharNref, TargetNref, Updates) ->
-	with_session(Session, fun() ->
-		do_update_relationship(SourceNref, CharNref, TargetNref, any, Updates)
+update_relationship(Project, SourceNref, CharNref, TargetNref, Updates) ->
+	with_project(Project, fun(P) ->
+		do_update_relationship(P, SourceNref, CharNref, TargetNref, any, Updates)
 	end).
 
-update_relationship(Session, SourceNref, CharNref, TargetNref, TemplateNref,
+update_relationship(Project, SourceNref, CharNref, TargetNref, TemplateNref,
 		Updates) when is_integer(TemplateNref) ->
-	with_session(Session, fun() ->
-		do_update_relationship(SourceNref, CharNref, TargetNref, TemplateNref,
+	with_project(Project, fun(P) ->
+		do_update_relationship(P, SourceNref, CharNref, TargetNref, TemplateNref,
 			Updates)
 	end).
 
-do_update_relationship(SourceNref, CharNref, TargetNref, TemplateSpec,
+do_update_relationship(Home, SourceNref, CharNref, TargetNref, TemplateSpec,
 		Updates) ->
 	case graphdb_mgr:validate_avp_updates(Updates) of
 		ok ->
 			txn_ok(fun() ->
-				update_relationship_avps_in_txn(SourceNref, CharNref,
+				update_relationship_avps_in_txn(Home, SourceNref, CharNref,
 					TargetNref, TemplateSpec, Updates)
 			end);
 		{error, _} = Err ->
@@ -1573,18 +1677,19 @@ do_update_relationship(SourceNref, CharNref, TargetNref, TemplateSpec,
 	end.
 
 %%-----------------------------------------------------------------------------
-%% update_relationship_both_in_txn(S, C, T, TemplateSpec, FwdUpdates,
+%% update_relationship_both_in_txn(Home, S, C, T, TemplateSpec, FwdUpdates,
 %%   RevUpdates) -> ok    (aborts the enclosing transaction on any failure)
 %%
 %% Tier-1 composite: resolves the forward row to discover the reciprocal label
 %% and the concrete template, then edits both directed rows -- FwdUpdates on
 %% (S, C, T), RevUpdates on (T, R, S) -- EACH through the single-edge primitive
-%% (update_relationship_avps_in_txn/5).  Reused by the tier-2 wrappers and by
-%% graphdb_mgr:mutate/1.  The two directions' updates are independent.
+%% (update_relationship_avps_in_txn/6).  Reused by the tier-2 wrappers and by
+%% graphdb_mgr:mutate/1.  The two directions' updates are independent.  Both
+%% rows live in Home's relationships table (SP2).
 %%-----------------------------------------------------------------------------
-update_relationship_both_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
-		FwdUpdates, RevUpdates) ->
-	case resolve_forward_connection(SourceNref, CharNref, TargetNref,
+update_relationship_both_in_txn(Home, SourceNref, CharNref, TargetNref,
+		TemplateSpec, FwdUpdates, RevUpdates) ->
+	case resolve_forward_connection(Home, SourceNref, CharNref, TargetNref,
 			TemplateSpec) of
 		not_found ->
 			mnesia:abort(relationship_not_found);
@@ -1597,13 +1702,13 @@ update_relationship_both_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
 			%% so a corrupt half-edge surfaces {dangling_half_edge, Id} (the
 			%% same arm as remove) rather than a misleading relationship_not_found
 			%% from the second single-edge edit.
-			case resolve_forward_connection(TargetNref, Recip, SourceNref,
+			case resolve_forward_connection(Home, TargetNref, Recip, SourceNref,
 					Tmpl) of
 				{ok, _Rev} ->
-					ok = update_relationship_avps_in_txn(SourceNref, CharNref,
-						TargetNref, Tmpl, FwdUpdates),
-					ok = update_relationship_avps_in_txn(TargetNref, Recip,
-						SourceNref, Tmpl, RevUpdates);
+					ok = update_relationship_avps_in_txn(Home, SourceNref,
+						CharNref, TargetNref, Tmpl, FwdUpdates),
+					ok = update_relationship_avps_in_txn(Home, TargetNref,
+						Recip, SourceNref, Tmpl, RevUpdates);
 				_ ->
 					mnesia:abort({dangling_half_edge, Fwd#relationship.id})
 			end
@@ -1619,24 +1724,24 @@ update_relationship_both_in_txn(SourceNref, CharNref, TargetNref, TemplateSpec,
 %% transaction.  The two update lists are independent (forward need not mirror
 %% reverse).  Both lists are validated client-side (slice B grammar).
 %%-----------------------------------------------------------------------------
-update_relationship_both(Session, SourceNref, CharNref, TargetNref,
+update_relationship_both(Project, SourceNref, CharNref, TargetNref,
 		{Fwd, Rev}) ->
-	with_session(Session, fun() ->
-		do_update_both(SourceNref, CharNref, TargetNref, any, Fwd, Rev)
+	with_project(Project, fun(P) ->
+		do_update_both(P, SourceNref, CharNref, TargetNref, any, Fwd, Rev)
 	end).
 
-update_relationship_both(Session, SourceNref, CharNref, TargetNref, TemplateNref,
+update_relationship_both(Project, SourceNref, CharNref, TargetNref, TemplateNref,
 		{Fwd, Rev}) when is_integer(TemplateNref) ->
-	with_session(Session, fun() ->
-		do_update_both(SourceNref, CharNref, TargetNref, TemplateNref, Fwd, Rev)
+	with_project(Project, fun(P) ->
+		do_update_both(P, SourceNref, CharNref, TargetNref, TemplateNref, Fwd, Rev)
 	end).
 
-do_update_both(SourceNref, CharNref, TargetNref, TemplateSpec, Fwd, Rev) ->
+do_update_both(Home, SourceNref, CharNref, TargetNref, TemplateSpec, Fwd, Rev) ->
 	case {graphdb_mgr:validate_avp_updates(Fwd),
 		  graphdb_mgr:validate_avp_updates(Rev)} of
 		{ok, ok} ->
 			txn_ok(fun() ->
-				update_relationship_both_in_txn(SourceNref, CharNref,
+				update_relationship_both_in_txn(Home, SourceNref, CharNref,
 					TargetNref, TemplateSpec, Fwd, Rev)
 			end);
 		{{error, _} = Err, _} -> Err;
@@ -1645,17 +1750,20 @@ do_update_both(SourceNref, CharNref, TargetNref, TemplateSpec, Fwd, Rev) ->
 
 
 %%-----------------------------------------------------------------------------
-%% validate_arc_endpoints_in_txn(Source, Char, Target, Reciprocal, TkAttr,
-%%     RetAttr) -> ok    (aborts the enclosing transaction on any violation)
+%% validate_arc_endpoints_in_txn(Home, Source, Char, Target, Reciprocal,
+%%     TkAttr, RetAttr) -> ok  (aborts the enclosing transaction on violation)
 %%
 %% In-transaction endpoint validation.  Assumes it runs inside an active mnesia
 %% activity; reads the four nodes with bare mnesia:read and signals every
 %% violation via mnesia:abort/1 (same Reason terms as the prior own-txn form).
+%% Source/Target route through Home; Char/Recip always read from the literal
+%% environment `nodes` table (characterization/reciprocal are always
+%% environment attribute nrefs).
 %%-----------------------------------------------------------------------------
-validate_arc_endpoints_in_txn(SourceNref, CharNref, TargetNref, ReciprocalNref,
-		TkAttr, RetAttr) ->
-	Source = mnesia:read(nodes, SourceNref),
-	Target = mnesia:read(nodes, TargetNref),
+validate_arc_endpoints_in_txn(Home, SourceNref, CharNref, TargetNref,
+		ReciprocalNref, TkAttr, RetAttr) ->
+	Source = mnesia:read(graphdb_ns:node_table(Home), SourceNref),
+	Target = mnesia:read(graphdb_ns:node_table(Home), TargetNref),
 	Char   = mnesia:read(nodes, CharNref),
 	Recip  = mnesia:read(nodes, ReciprocalNref),
 	case {Source, Target, Char, Recip} of
@@ -1717,19 +1825,19 @@ check_target_kind(#node{attribute_value_pairs = AVPs}, ActualKind, TkAttr) ->
 
 
 %%-----------------------------------------------------------------------------
-%% resolve_arc_classes_in_txn(SourceNref, TargetNref) ->
+%% resolve_arc_classes_in_txn(Home, SourceNref, TargetNref) ->
 %%     {SourceClass, TargetClass}    (aborts on a missing class)
 %%
 %% In-transaction class resolution.  class_of_in_txn returns only {ok,_} |
 %% not_found inside a txn (a read error aborts the txn directly), so the
 %% no-class arms abort with the same Reason terms the prior form returned.
 %%-----------------------------------------------------------------------------
-resolve_arc_classes_in_txn(SourceNref, TargetNref) ->
-	SourceClass = case class_of_in_txn(SourceNref) of
+resolve_arc_classes_in_txn(Home, SourceNref, TargetNref) ->
+	SourceClass = case class_of_in_txn(Home, SourceNref) of
 		{ok, SC}  -> SC;
 		not_found -> mnesia:abort({source_has_no_class, SourceNref})
 	end,
-	TargetClass = case class_of_in_txn(TargetNref) of
+	TargetClass = case class_of_in_txn(Home, TargetNref) of
 		{ok, TC}  -> TC;
 		not_found -> mnesia:abort({target_has_no_class, TargetNref})
 	end,
@@ -1751,28 +1859,37 @@ resolve_template_in_txn(TemplateNref, _SourceClass)
 
 
 %%-----------------------------------------------------------------------------
-%% build_connection_rows(S, C, T, R, TemplateNref, {FwdAVPs, RevAVPs})
-%%   -> [{relationships, #relationship{}}]
+%% build_connection_rows(Home, S, C, T, R, TemplateNref, {FwdAVPs, RevAVPs})
+%%   -> [{RelsTable, #relationship{}}]
 %%
 %% Builds the two directed connection rows (Template AVP at index 0).  Rel-ids
 %% are allocated here, OUTSIDE any transaction.  No write -- the caller
 %% decides which transaction the rows land in (mandatory connections ride the
 %% composition root txn; auto connections are written post-commit).
 %%-----------------------------------------------------------------------------
-build_connection_rows(SourceNref, CharNref, TargetNref, ReciprocalNref,
+build_connection_rows(Home, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref, AVPSpec) ->
-	IdPair = rel_id_server:get_id_pair(),
-	build_connection_rows(IdPair, SourceNref, CharNref, TargetNref,
+	IdPair = case Home of
+		environment -> rel_id_server:get_id_pair();
+		_           -> graphdb_project:next_rel_id_pair(Home)
+	end,
+	build_connection_rows(Home, IdPair, SourceNref, CharNref, TargetNref,
 		ReciprocalNref, TemplateNref, AVPSpec).
 
-%% build_connection_rows({Id1, Id2}, S, C, T, R, TemplateNref, {FwdAVPs,RevAVPs})
-%%   -> [{relationships, #relationship{}}]
+%% build_connection_rows(Home, {Id1, Id2}, S, C, T, R, TemplateNref,
+%%     {FwdAVPs, RevAVPs}) -> [{RelsTable, #relationship{}}]
 %%
 %% Pure builder: no allocation.  The caller supplies the rel-id pair (allocated
 %% up-front, outside any transaction) so the rows can be built inside a caller's
-%% transaction.  Template AVP rides index 0 of each direction.
-build_connection_rows({Id1, Id2}, SourceNref, CharNref, TargetNref,
+%% transaction.  Template AVP rides index 0 of each direction.  Both rows land
+%% in the SAME RelsTab: Source/Target are always both-project or
+%% both-environment for a connection arc between two instances of the same
+%% Home (connection rules never cross project boundaries per SP1's
+%% proxy-indirection contract, and this module never builds a connection row
+%% between an instance and an environment node).
+build_connection_rows(Home, {Id1, Id2}, SourceNref, CharNref, TargetNref,
 		ReciprocalNref, TemplateNref, {FwdAVPs, RevAVPs}) ->
+	RelsTab = graphdb_ns:rel_table(Home),
 	TemplateAVP = #{attribute => ?ARC_TEMPLATE, value => TemplateNref},
 	Fwd = #relationship{
 		id = Id1, kind = connection,
@@ -1790,17 +1907,16 @@ build_connection_rows({Id1, Id2}, SourceNref, CharNref, TargetNref,
 		reciprocal = CharNref,
 		avps = [TemplateAVP | RevAVPs]
 	},
-	[{relationships, Fwd}, {relationships, Rev}].
+	[{RelsTab, Fwd}, {RelsTab, Rev}].
 
-%% write_connection_arcs(S, C, T, R, TemplateNref, {FwdAVPs, RevAVPs}) ->
+%% write_connection_arcs(Home, S, C, T, R, TemplateNref, {FwdAVPs, RevAVPs}) ->
 %%     ok | {error, term()}
 %%
 %% Builds the two connection rows and writes them in their OWN transaction.
-%% Used by add_relationship/4,5,6 and by the post-commit auto-connection pass.
 %%-----------------------------------------------------------------------------
-write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
+write_connection_arcs(Home, SourceNref, CharNref, TargetNref, ReciprocalNref,
 		TemplateNref, AVPSpec) ->
-	Rows = build_connection_rows(SourceNref, CharNref, TargetNref,
+	Rows = build_connection_rows(Home, SourceNref, CharNref, TargetNref,
 								 ReciprocalNref, TemplateNref, AVPSpec),
 	Txn = fun() ->
 		lists:foreach(fun({Tab, Rec}) -> ok = mnesia:write(Tab, Rec, write) end,
@@ -1813,31 +1929,40 @@ write_connection_arcs(SourceNref, CharNref, TargetNref, ReciprocalNref,
 
 
 %%-----------------------------------------------------------------------------
-%% do_add_class_membership(InstanceNref, ClassNref, InstAttr, RetAttr) ->
-%%     ok | {error, term()}
+%% do_add_class_membership(Project, InstanceNref, ClassNref, InstAttr, RetAttr)
+%%     -> ok | {error, term()}
 %%
 %% Validates the subject (must be an instance) and the target (must be
 %% a class, not retired, and instantiable), then atomically writes the
 %% 29/30 arc pair and appends ClassNref to the instance's classes cache.
 %% Idempotent.
+%%
+%% Project-routed: the instance node lives in the Project's node table and
+%% the 29/30 membership arc pair is written to the Project's relationship
+%% table -- including the class->instance direction, whose source_nref is
+%% an environment class nref (per the knowledge model, membership arcs are
+%% project-database writes, not environment writes).  ClassNref itself is
+%% validated against the literal environment via do_validate_class/3.
 %%-----------------------------------------------------------------------------
-do_add_class_membership(InstanceNref, ClassNref, InstAttr, RetAttr) ->
-	case do_get_instance(InstanceNref) of
+do_add_class_membership(Project, InstanceNref, ClassNref, InstAttr, RetAttr) ->
+	case do_get_instance(Project, InstanceNref) of
 		{ok, _} ->
 			case do_validate_class(ClassNref, InstAttr, RetAttr) of
-				ok               -> do_write_class_membership(InstanceNref,
-									ClassNref);
+				ok               -> do_write_class_membership(Project,
+									InstanceNref, ClassNref);
 				{error, _} = Err -> Err
 			end;
 		{error, _} = Err ->
 			Err
 	end.
 
-do_write_class_membership(InstanceNref, ClassNref) ->
-	{Id1, Id2} = rel_id_server:get_id_pair(),
+do_write_class_membership(Project, InstanceNref, ClassNref) ->
+	{Id1, Id2} = graphdb_project:next_rel_id_pair(Project),
+	NodesTab = graphdb_ns:node_table(Project),
+	RelsTab  = graphdb_ns:rel_table(Project),
 	Txn = fun() ->
 		[#node{kind = instance, classes = Classes} = Node] =
-			mnesia:read(nodes, InstanceNref),
+			mnesia:read(NodesTab, InstanceNref),
 		case lists:member(ClassNref, Classes) of
 			true ->
 				already_exists;
@@ -1859,9 +1984,9 @@ do_write_class_membership(InstanceNref, ClassNref) ->
 					avps = []
 				},
 				Updated = Node#node{classes = Classes ++ [ClassNref]},
-				ok = mnesia:write(nodes, Updated, write),
-				ok = mnesia:write(relationships, I2C, write),
-				ok = mnesia:write(relationships, C2I, write),
+				ok = mnesia:write(NodesTab, Updated, write),
+				ok = mnesia:write(RelsTab, I2C, write),
+				ok = mnesia:write(RelsTab, C2I, write),
 				ok
 		end
 	end,
@@ -1873,26 +1998,26 @@ do_write_class_membership(InstanceNref, ClassNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_class_memberships(InstanceNref) ->
+%% do_class_memberships(Project, InstanceNref) ->
 %%     {ok, [ClassNref]} | {error, term()}
 %%
 %% Reads the instance's `classes` cache (authoritative-equivalent to the
 %% 29-characterized outgoing arcs by the cache invariant).
 %%-----------------------------------------------------------------------------
-do_class_memberships(InstanceNref) ->
-	case do_get_instance(InstanceNref) of
+do_class_memberships(Project, InstanceNref) ->
+	case do_get_instance(Project, InstanceNref) of
 		{ok, #node{classes = Classes}} -> {ok, Classes};
 		{error, _} = Err               -> Err
 	end.
 
 
 %%-----------------------------------------------------------------------------
-%% do_class_of(InstanceNref) ->
+%% do_class_of(Project, InstanceNref) ->
 %%     {ok, ClassNref} | not_found | {error, term()}
 %%-----------------------------------------------------------------------------
-do_class_of(InstanceNref) ->
+do_class_of(Project, InstanceNref) ->
 	F = fun() ->
-		Rels = mnesia:index_read(relationships, InstanceNref,
+		Rels = mnesia:index_read(graphdb_ns:rel_table(Project), InstanceNref,
 			#relationship.source_nref),
 		lists:search(
 			fun(R) ->
@@ -1908,14 +2033,15 @@ do_class_of(InstanceNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% class_of_in_txn(InstanceNref) -> {ok, ClassNref} | not_found
+%% class_of_in_txn(Home, InstanceNref) -> {ok, ClassNref} | not_found
 %%
-%% Tier-1 in-transaction twin of do_class_of/1.  Assumes it runs inside an
-%% active mnesia activity; uses a bare index_read.  do_class_of/1 keeps its
-%% own transaction for its public class_of caller.
+%% Tier-1 in-transaction twin of do_class_of/2.  Assumes it runs inside an
+%% active mnesia activity; uses a bare index_read against Home's relationship
+%% table.  do_class_of/2 keeps its own transaction for its public class_of
+%% caller.
 %%-----------------------------------------------------------------------------
-class_of_in_txn(InstanceNref) ->
-	Rels = mnesia:index_read(relationships, InstanceNref,
+class_of_in_txn(Home, InstanceNref) ->
+	Rels = mnesia:index_read(graphdb_ns:rel_table(Home), InstanceNref,
 		#relationship.source_nref),
 	case lists:search(
 			fun(R) ->
@@ -1927,11 +2053,11 @@ class_of_in_txn(InstanceNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_get_instance(Nref) ->
+%% do_get_instance(Project, Nref) ->
 %%     {ok, #node{}} | {error, not_found | not_an_instance | term()}
 %%-----------------------------------------------------------------------------
-do_get_instance(Nref) ->
-	case mnesia:dirty_read(nodes, Nref) of
+do_get_instance(Project, Nref) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), Nref) of
 		[#node{kind = instance} = Node] -> {ok, Node};
 		[_Other]                        -> {error, not_an_instance};
 		[]                              -> {error, not_found}
@@ -1939,13 +2065,13 @@ do_get_instance(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_children(Nref) -> {ok, [#node{}]} | {error, term()}
+%% do_children(Project, Nref) -> {ok, [#node{}]} | {error, term()}
 %%
 %% Returns all direct instance-kind children of the given node.
 %%-----------------------------------------------------------------------------
-do_children(Nref) ->
+do_children(Project, Nref) ->
 	F = fun() ->
-		Children = downward_children_by_arc(Nref, ?ARC_INST_CHILD,
+		Children = downward_children_by_arc(Project, Nref, ?ARC_INST_CHILD,
 			composition),
 		[N || N <- Children, N#node.kind =:= instance]
 	end,
@@ -1953,28 +2079,28 @@ do_children(Nref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% do_compositional_ancestors(Nref) -> {ok, [#node{}]} | {error, term()}
+%% do_compositional_ancestors(Project, Nref) -> {ok, [#node{}]} | {error, term()}
 %%
 %% Walks the parent chain from the instance's parent.  Collects only
 %% instance-kind ancestors.  Stops at a non-instance node or missing
 %% node.  Returns nearest-first order.
 %%-----------------------------------------------------------------------------
-do_compositional_ancestors(Nref) ->
-	case mnesia:dirty_read(nodes, Nref) of
+do_compositional_ancestors(Project, Nref) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), Nref) of
 		[#node{kind = instance, parents = Parents}] ->
-			do_walk_ancestors(head_parent(Parents), []);
+			do_walk_ancestors(Project, head_parent(Parents), []);
 		[_] ->
 			{error, not_an_instance};
 		[] ->
 			{error, not_found}
 	end.
 
-do_walk_ancestors(undefined, Acc) ->
+do_walk_ancestors(_Project, undefined, Acc) ->
 	{ok, lists:reverse(Acc)};
-do_walk_ancestors(Nref, Acc) ->
-	case mnesia:dirty_read(nodes, Nref) of
+do_walk_ancestors(Project, Nref, Acc) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), Nref) of
 		[#node{kind = instance, parents = Parents} = Node] ->
-			do_walk_ancestors(head_parent(Parents), [Node | Acc]);
+			do_walk_ancestors(Project, head_parent(Parents), [Node | Acc]);
 		[_] ->
 			%% Hit a non-instance node (e.g., category anchor) — stop
 			{ok, lists:reverse(Acc)};
@@ -1988,7 +2114,7 @@ do_walk_ancestors(Nref, Acc) ->
 %%=============================================================================
 
 %%-----------------------------------------------------------------------------
-%% do_resolve_value(InstNref, AttrNref) ->
+%% do_resolve_value(Project, InstNref, AttrNref) ->
 %%     {ok, Value, Source} | not_found | {error, term()}
 %%
 %% Full four-level inheritance resolution.  Source identifies the
@@ -1998,40 +2124,53 @@ do_walk_ancestors(Nref, Acc) ->
 %%   - `{compositional, Nref}`  (Priority 3, the ancestor instance)
 %%   - `{connected,     Nref}`  (Priority 4, the directly-connected node)
 %%-----------------------------------------------------------------------------
-do_resolve_value(InstNref, AttrNref) ->
-	case do_get_instance(InstNref) of
+do_resolve_value(Project, InstNref, AttrNref) ->
+	case do_get_instance(Project, InstNref) of
 		{ok, Node} ->
 			%% Priority 1: Local values
 			case find_avp_value(Node#node.attribute_value_pairs, AttrNref) of
 				{ok, V} ->
 					{ok, V, local};
 				not_found ->
-					%% Priority 2: Class-level bound values
-					case resolve_from_class(InstNref, AttrNref) of
-						{ok, V, ClassNref} ->
-							{ok, V, {class, ClassNref}};
+					resolve_value_priority_2_and_below(Project, Node, AttrNref)
+			end;
+		{error, _} = Err ->
+			Err
+	end.
+
+%%-----------------------------------------------------------------------------
+%% resolve_value_priority_2_and_below(Project, Node, AttrNref) ->
+%%     {ok, Value, Source} | not_found | {error, term()}
+%%
+%% Priorities 2-4, threaded with Project for the home-relative reads
+%% (compositional ancestors and directly-connected nodes both live in
+%% Project; class-level lookups stay environment-bound inside
+%% resolve_from_class/3).
+%%-----------------------------------------------------------------------------
+resolve_value_priority_2_and_below(Project, Node, AttrNref) ->
+	InstNref = Node#node.nref,
+	%% Priority 2: Class-level bound values
+	case resolve_from_class(Project, InstNref, AttrNref) of
+		{ok, V, ClassNref} ->
+			{ok, V, {class, ClassNref}};
+		not_found ->
+			%% Priority 3: Compositional ancestors
+			case resolve_from_ancestors(Project,
+					head_parent(Node#node.parents),
+					AttrNref) of
+				{ok, V, AncNref} ->
+					{ok, V, {compositional, AncNref}};
+				not_found ->
+					%% Priority 4: Directly connected nodes
+					case resolve_from_connected(Project,
+						InstNref, AttrNref) of
+						{ok, V, ConnNref} ->
+							{ok, V, {connected, ConnNref}};
 						not_found ->
-							%% Priority 3: Compositional ancestors
-							case resolve_from_ancestors(
-									head_parent(Node#node.parents),
-									AttrNref) of
-								{ok, V, AncNref} ->
-									{ok, V, {compositional, AncNref}};
-								not_found ->
-									%% Priority 4: Directly connected nodes
-									case resolve_from_connected(
-										InstNref, AttrNref) of
-										{ok, V, ConnNref} ->
-											{ok, V, {connected, ConnNref}};
-										not_found ->
-											not_found
-									end;
-								{error, _} = Err ->
-									Err
-							end;
-						{error, _} = Err ->
-							Err
-					end
+							not_found
+					end;
+				{error, _} = Err ->
+					Err
 			end;
 		{error, _} = Err ->
 			Err
@@ -2039,12 +2178,14 @@ do_resolve_value(InstNref, AttrNref) ->
 
 
 %%-----------------------------------------------------------------------------
-%% resolve_from_class(InstNref, AttrNref) ->
+%% resolve_from_class(Project, InstNref, AttrNref) ->
 %%     {ok, Value, ClassNref} | not_found |
 %%     {error, {ambiguous_class_value, AttrNref, [{ClassNref, Value}]}}
 %%
 %% Reads every class membership and, for each one, walks the class node
-%% plus its taxonomy ancestors (nearest-first) for an AVP match.
+%% plus its taxonomy ancestors (nearest-first) for an AVP match.  Class
+%% membership is read from Project (`do_class_memberships/2`); the class
+%% nodes themselves are always environment (`graphdb_class:search_class_taxonomy/2`).
 %%
 %% - 0 hits across all memberships -> not_found (caller falls through
 %%   to Priority 3).
@@ -2057,8 +2198,8 @@ do_resolve_value(InstNref, AttrNref) ->
 %%   AttrNref, [{ClassNref, Value}]}}, where ClassNref is the class
 %%   where the value was actually found.
 %%-----------------------------------------------------------------------------
-resolve_from_class(InstNref, AttrNref) ->
-	case do_class_memberships(InstNref) of
+resolve_from_class(Project, InstNref, AttrNref) ->
+	case do_class_memberships(Project, InstNref) of
 		{ok, []} ->
 			not_found;
 		{ok, Classes} ->
@@ -2088,7 +2229,7 @@ classify_class_hits([{ClassNref, _} | _] = Hits, AttrNref) ->
 	end.
 
 %%-----------------------------------------------------------------------------
-%% resolve_from_ancestors(ParentNref, AttrNref) ->
+%% resolve_from_ancestors(Project, ParentNref, AttrNref) ->
 %%     {ok, Value, AncestorNref} | not_found | {error, term()}
 %%
 %% Walks up the compositional parent chain, checking each instance
@@ -2096,15 +2237,15 @@ classify_class_hits([{ClassNref, _} | _] = Hits, AttrNref) ->
 %% match is found, returns the nref of the ancestor instance that held
 %% the value.
 %%-----------------------------------------------------------------------------
-resolve_from_ancestors(undefined, _AttrNref) ->
+resolve_from_ancestors(_Project, undefined, _AttrNref) ->
 	not_found;
-resolve_from_ancestors(ParentNref, AttrNref) ->
-	case mnesia:dirty_read(nodes, ParentNref) of
+resolve_from_ancestors(Project, ParentNref, AttrNref) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), ParentNref) of
 		[#node{kind = instance, parents = GrandParents,
 				attribute_value_pairs = AVPs}] ->
 			case find_avp_value(AVPs, AttrNref) of
 				{ok, V}   -> {ok, V, ParentNref};
-				not_found -> resolve_from_ancestors(
+				not_found -> resolve_from_ancestors(Project,
 								head_parent(GrandParents), AttrNref)
 			end;
 		[_] ->
@@ -2126,24 +2267,25 @@ head_parent([P | _]) -> P.
 
 
 %%-----------------------------------------------------------------------------
-%% downward_children_by_arc(ParentNref, ChildArc, RelKind) -> [#node{}]
+%% downward_children_by_arc(Project, ParentNref, ChildArc, RelKind) -> [#node{}]
 %%
 %% Replaces the retired #node.parent secondary index.  Reads outgoing
 %% arcs from ParentNref of the given Kind/characterization and
 %% dereferences each target nref to a node record.  Must run inside an
 %% active mnesia transaction.
 %%-----------------------------------------------------------------------------
-downward_children_by_arc(ParentNref, ChildArc, RelKind) ->
-	Arcs = mnesia:index_read(relationships, ParentNref,
+downward_children_by_arc(Project, ParentNref, ChildArc, RelKind) ->
+	Arcs = mnesia:index_read(graphdb_ns:rel_table(Project), ParentNref,
 		#relationship.source_nref),
 	Nrefs = [A#relationship.target_nref || A <- Arcs,
 		A#relationship.kind =:= RelKind,
 		A#relationship.characterization =:= ChildArc],
-	lists:flatmap(fun(N) -> mnesia:read(nodes, N) end, Nrefs).
+	lists:flatmap(fun(N) -> mnesia:read(graphdb_ns:node_table(Project), N) end,
+		Nrefs).
 
 
 %%-----------------------------------------------------------------------------
-%% resolve_from_connected(InstNref, AttrNref) ->
+%% resolve_from_connected(Project, InstNref, AttrNref) ->
 %%     {ok, Value, NodeNref} | not_found
 %%
 %% Checks all directly connected nodes (one level deep).  Only
@@ -2153,9 +2295,9 @@ downward_children_by_arc(ParentNref, ChildArc, RelKind) ->
 %% connected node that held the AVP; the caller wraps it as
 %% {connected, NodeNref} for the Source tag.
 %%-----------------------------------------------------------------------------
-resolve_from_connected(InstNref, AttrNref) ->
+resolve_from_connected(Project, InstNref, AttrNref) ->
 	F = fun() ->
-		mnesia:index_read(relationships, InstNref,
+		mnesia:index_read(graphdb_ns:rel_table(Project), InstNref,
 			#relationship.source_nref)
 	end,
 	case graphdb_mgr:transaction(F) of
@@ -2163,30 +2305,30 @@ resolve_from_connected(InstNref, AttrNref) ->
 			TargetNrefs = lists:usort(
 				[R#relationship.target_nref
 					|| R <- Rels, R#relationship.kind =:= connection]),
-			search_targets(TargetNrefs, AttrNref);
+			search_targets(Project, TargetNrefs, AttrNref);
 		{error, _} ->
 			not_found
 	end.
 
 
 %%-----------------------------------------------------------------------------
-%% search_targets(Nrefs, AttrNref) ->
+%% search_targets(Project, Nrefs, AttrNref) ->
 %%     {ok, Value, NodeNref} | not_found
 %%
 %% Checks each target node's AVPs for the attribute.  Returns the
 %% first match together with the nref of the node that held the value.
 %%-----------------------------------------------------------------------------
-search_targets([], _AttrNref) ->
+search_targets(_Project, [], _AttrNref) ->
 	not_found;
-search_targets([Nref | Rest], AttrNref) ->
-	case mnesia:dirty_read(nodes, Nref) of
+search_targets(Project, [Nref | Rest], AttrNref) ->
+	case mnesia:dirty_read(graphdb_ns:node_table(Project), Nref) of
 		[#node{attribute_value_pairs = AVPs}] ->
 			case find_avp_value(AVPs, AttrNref) of
 				{ok, V}   -> {ok, V, Nref};
-				not_found -> search_targets(Rest, AttrNref)
+				not_found -> search_targets(Project, Rest, AttrNref)
 			end;
 		_ ->
-			search_targets(Rest, AttrNref)
+			search_targets(Project, Rest, AttrNref)
 	end.
 
 

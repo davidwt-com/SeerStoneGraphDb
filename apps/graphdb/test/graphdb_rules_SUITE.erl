@@ -42,6 +42,17 @@
 	avps
 }).
 
+%%---------------------------------------------------------------------
+%% Dummy project-scope fixture -- a synthetic but realistically-shaped
+%% Project handle (see graphdb_project:register_project/1), used by the
+%% {project, _} stub-path scope tests below.  graphdb_rules does not
+%% dereference any of these fields; the stub path matches on the
+%% {project, _} wildcard, so the shape only needs to read as "a project
+%% scope" rather than an arbitrary term.
+%%---------------------------------------------------------------------
+-define(DUMMY_PROJECT, #{anchor => 1, nodes => nodes_1,
+						  rels => relationships_1, counters => counters_1}).
+
 
 %%---------------------------------------------------------------------
 %% Common Test callbacks
@@ -955,22 +966,22 @@ project_scope_rejected_on_create(_Config) ->
 	Child  = make_class("Engine"),
 	?assertEqual({error, project_rules_not_yet_supported},
 		graphdb_rules:create_composition_rule(
-			{project, 1}, "x", Parent, Child, mandatory, {1, 1})),
+			{project, ?DUMMY_PROJECT}, "x", Parent, Child, mandatory, {1, 1})),
 	Source = make_class("Order"),
 	Target = make_class("Customer"),
 	{Char, Recip} = make_rel_pair("placed_by", "placed"),
 	?assertEqual({error, project_rules_not_yet_supported},
 		graphdb_rules:create_connection_rule(
-			{project, 1}, "x", Source, Char, Recip, Target, mandatory, {1, 1})).
+			{project, ?DUMMY_PROJECT}, "x", Source, Char, Recip, Target, mandatory, {1, 1})).
 
 project_scope_returns_empty_on_retrieve(_Config) ->
 	Car = make_class("Car"),
 	?assertEqual({ok, []},
-		graphdb_rules:rules_for_class({project, 1}, Car)),
+		graphdb_rules:rules_for_class({project, ?DUMMY_PROJECT}, Car)),
 	?assertEqual({ok, []},
-		graphdb_rules:composition_rules_for_class({project, 1}, Car)),
-	?assertEqual({ok, []}, graphdb_rules:list_rules({project, 1})),
-	?assertEqual(not_found, graphdb_rules:get_rule({project, 1}, 999999)).
+		graphdb_rules:composition_rules_for_class({project, ?DUMMY_PROJECT}, Car)),
+	?assertEqual({ok, []}, graphdb_rules:list_rules({project, ?DUMMY_PROJECT})),
+	?assertEqual(not_found, graphdb_rules:get_rule({project, ?DUMMY_PROJECT}, 999999)).
 
 
 %%=============================================================================
@@ -1205,7 +1216,7 @@ mixed_kinds_returned(_Config) ->
 project_scope_empty(_Config) ->
 	Car = make_class("Car"),
 	?assertEqual({ok, []},
-		graphdb_rules:effective_rules_for_class({project, 1}, Car)).
+		graphdb_rules:effective_rules_for_class({project, ?DUMMY_PROJECT}, Car)).
 
 unknown_class_empty(_Config) ->
 	%% Non-existent nref: ancestors/1 -> {error, not_found}, mapped to [].
@@ -1246,7 +1257,7 @@ effective_connection_rules_excludes_composition(_Config) ->
 effective_connection_rules_project_scope_empty(_Config) ->
 	Source = make_class("Car"),
 	?assertEqual({ok, []},
-		graphdb_rules:effective_connection_rules({project, p1}, Source)).
+		graphdb_rules:effective_connection_rules({project, ?DUMMY_PROJECT}, Source)).
 
 
 %%=============================================================================
@@ -1363,7 +1374,7 @@ plan_project_scope_is_leaf(Config) ->
 	{ok, _} = graphdb_rules:create_composition_rule(
 		environment, "OB", Owner, Bolt, mandatory, {1, 1}),
 	{ok, #{class := Owner, mandatory_children := [], auto_rules := []}} =
-		graphdb_rules:plan_composition_firing({project, p1}, Owner).
+		graphdb_rules:plan_composition_firing({project, ?DUMMY_PROJECT}, Owner).
 
 
 %%=============================================================================
