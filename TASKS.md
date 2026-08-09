@@ -533,7 +533,7 @@ SP1/SP2 without one). 15 call sites across 11 test functions in
 found zero production callers, so this is an API-completeness gap, not a
 live bug — pick it up when a project-side relationship-read caller appears.
 
-**Open defect (Important) — query traversal silently truncates
+**RESOLVED (query-traversal Home routing) — query traversal silently truncated
 environment-only paths under a project-bound session.**
 `graphdb_query:session_read_arcs/4` and `is_scaffold_node/2` push every
 *arc-discovered* nref through `resolve_home/2`, which was designed for
@@ -552,24 +552,23 @@ shadows nref 6 and any with ≥35 shadows the whole bootstrap scaffold, so
 this is high-likelihood, not theoretical. The result is silently wrong: no
 error, only a collision warning in the log.
 
-**Designed — see `docs/designs/query-traversal-home-routing-design.md`.**
-Arc-discovered nrefs *do* have context, so the guess is replaced by a
-deterministic lookup. Two halves: (A) a new pure
-`graphdb_ns:arc_target_namespace(Home, Kind, Char)` routes on
-`#relationship.kind`, with the 29/30 membership pair distinguished by
-characterization; (B) the BFS frontier, visited set, and target comparison
-become Home-qualified — without B, project-6 and environment-6 collapse into
-one visited entry and a bare-nref target test reports a *false* `found`.
-`resolve_home/2` and `session_read_arcs/4` are untouched; only
-`bfs_step/5` changes caller, to the existing `session_read_arcs_home/5`.
+**Implemented.** Half A: `graphdb_ns:arc_target_namespace(Home, Kind, Char)`
+derives an arc-discovered nref's store from `#relationship.kind`, with the
+29/30 membership pair split on characterization. Half B: the BFS frontier,
+visited set, and target comparison are Home-qualified via
+`home_id() :: environment | {project, Anchor}`; path edges disclose `home`
+when a hop crosses stores; `resume/2` rejects a continuation carrying a
+foreign project id. `resolve_home/2` and `session_read_arcs/4` are unchanged
+— only `bfs_step/5` changed caller, to `session_read_arcs_home/5`. Design:
+`docs/designs/query-traversal-home-routing-design.md`.
 
-> **Superseded fix direction.** This entry previously said to route via
-> `graphdb_ns:target_namespace/2` on the arc's `target_kind`. That does not
-> work: bootstrap arc labels 21–30 carry **no `target_kind` AVP**
-> (`bootstrap.terms:122-131` creates them with `[]`; `graphdb_attr:init/1`
-> retro-stamps only `attribute_type`), and arcs 23/24 are the decisive hops
-> in the repro above. Only runtime-created pairs carry `target_kind`. See
-> the design doc's correction note.
+Still open, deliberately out of that scope: BFS at an environment-homed node
+reads only the environment relationship table, so an environment class cannot
+reach its project instances across arc 30 (`?ARC_CLASS_TO_INST`).
+`#q_instances_of{}` keeps its `session_read_arcs_home/5` special case. Also
+still open: backfilling `target_kind` onto bootstrap arc labels 21–30, which
+would let `graphdb_instance:check_target_kind/3` drop its permissive legacy
+arm.
 
 **Open defect (Important, pre-existing, unrelated to SP2) —
 `rel_id_server:seed_from_mnesia/0` calls a nonexistent function.**

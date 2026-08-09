@@ -17,7 +17,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_sup.erl`       | OTP `supervisor` behaviour callback module                                                                                                                                                     |
 | `graphdb_nref.erl`      | Switchable node-nref allocation facade gen_server (first child; permanent during init)                                                                                                         |
 | `graphdb_bootstrap.erl` | Bootstrap file loader + Mnesia schema creator (implemented)                                                                                                                                    |
-| `graphdb_ns.erl`        | Pure namespace-resolution module (SP1+SP2) — `namespace_of/2`, `target_namespace/2` (home-relative), `node_table/1`, `rel_table/1`; the code expression of the field-role namespace map          |
+| `graphdb_ns.erl`        | Pure namespace-resolution module (SP1+SP2) — `namespace_of/2`, `target_namespace/2` (home-relative), `node_table/1`, `rel_table/1`, `arc_target_namespace/3` (arc-discovered nref routing by `#relationship.kind`); the code expression of the field-role namespace map          |
 | `graphdb_project.erl`   | Project registry + physical store (SP1+SP2) — `register_project/1` (also creates the project's three tables), `is_project/1`, `open/1`, `require_project/1`, `next_nref/1`, `next_rel_id_pair/1`; canonical project-scoped relationship API surface |
 | `graphdb_mgr.erl`       | Primary coordinator gen_server (implemented — bootstrap init, read API, category guard)                                                                                                        |
 | `graphdb_rules.erl`     | Graph rules gen_server (implemented — F4 Phase A+B1+B2+B3+B4+B5: rule meta-ontology, create/retrieve, taxonomy walk, composition firing, propose mode, connection firing, conflict precedence) |
@@ -443,11 +443,18 @@ Parses and executes graph queries. Public API:
 Queries are represented as records defined in
 `apps/graphdb/include/graphdb_query.hrl`. Every Mnesia read goes
 through `session_read_node/2` or `session_read_arcs/4`; direct
-`mnesia:dirty_*` calls outside those helpers are a code smell. Every
-bare-nref read resolves its physical table via `resolve_home/2` (SP2):
-try the session's bound `Project` first, fall back to the environment,
-and log a warning if the nref genuinely exists in both — the project's
-copy wins on the theory that a project-bound session is caller intent.
+`mnesia:dirty_*` calls outside those helpers are a code smell. Bare-nref
+**entry-point** reads (`#q_get_node{}`, `#q_get_arcs{}`, `#q_describe{}`,
+and `#q_find_path{}`'s two endpoints) resolve `Home` via `resolve_home/2`
+(SP2): try the session's bound `Project` first, fall back to the
+environment, and log a warning if the nref genuinely exists in both — the
+project's copy wins on the theory that a project-bound session is caller
+intent. Arc-discovered nrefs found mid-traversal during BFS route
+deterministically instead, via `graphdb_ns:arc_target_namespace/3`
+(keyed on `#relationship.kind`, with the 29/30 membership pair split on
+characterization) — no guessing. `#q_find_path{}` state (frontier,
+visited set, target) is Home-qualified via `home_id()`, and a path edge
+discloses `home` when a hop crosses stores.
 
 See `docs/designs/f3-graphdb-query-design.md` for the architectural contract.
 
