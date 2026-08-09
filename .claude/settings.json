@@ -72,7 +72,12 @@
   "permissions": {
     "allow": [
       "Bash(./scripts/test-ct-parallel.sh:*)",
-      "Bash(scripts/test-ct-parallel.sh:*)"
+      "Bash(scripts/test-ct-parallel.sh:*)",
+      "Bash(./rebar3 ct:*)",
+      "Bash(./rebar3 compile:*)",
+      "Bash(./rebar3 eunit:*)",
+      "Bash(./rebar3 xref:*)",
+      "Bash(make test-ct-parallel:*)"
     ]
   }
 }
