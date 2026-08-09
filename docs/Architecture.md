@@ -29,7 +29,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_rules`     | Implemented — rule meta-ontology, applies_to attachment, scope-aware create/retrieve, taxonomy-walking effective-rules read, composition firing engine, propose mode, connection firing, horizontal conflict precedence                                                                                                                                                                                                                                                                                                                                                 |
 | `graphdb_language`  | Implemented — multilingual overlay layer (label resolution, dialect chains, per-language Mnesia overlay tables)                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `graphdb_query`     | Implemented — query language with snapshot-semantics sessions and continuation-based bounded BFS. SP2: `new_session/1` binds a `Project`; bare-nref **entry-point** reads resolve `Home` via `resolve_home/2`, while arc-discovered nrefs during BFS route deterministically via `graphdb_ns:arc_target_namespace/3`. `#q_find_path{}` state is Home-qualified and path edges disclose `home` on a store crossing.                                                                                                                                                                                        |
-| Tests               | 677 passing (532 Common Test + 145 EUnit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Tests               | 701 passing (550 Common Test + 151 EUnit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 The kernel is functional under multi-inheritance, multi-class-
 membership, and per-class template semantics.  Multilingual label
@@ -436,8 +436,10 @@ and SP2 (physical project store) are both implemented:
   against once the store is split. `get_relationships` has no
   Project-taking twin yet (tracked in `../TASKS.md`).
 - **`graphdb_query` sessions bind a `Project` (SP2)** — `new_session/1`;
-  bare-nref reads resolve `Home` per nref via `resolve_home/2`, trying the
-  bound project first and falling back to the environment.
+  bare-nref **entry-point** reads resolve `Home` via `resolve_home/2`,
+  trying the bound project first and falling back to the environment;
+  arc-discovered nrefs during BFS route deterministically instead, via
+  `graphdb_ns:arc_target_namespace/3`.
 - **Proxy contract** — a cross-project link is a local node of the seeded
   "Remote Reference" class carrying `remote_project` / `remote_nref` AVP
   payload; no structural reference crosses a project boundary. Recognized by

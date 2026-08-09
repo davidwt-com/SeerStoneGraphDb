@@ -113,11 +113,13 @@ namespace model) and SP2 (physical project store) are both implemented:
   `update_node_avps`) stay environment-only; `mutate/1` in particular stays
   environment-only by design (a batch is inherently single-table once the
   physical split exists).
-- **`graphdb_query` sessions bind a `Project`** — `new_session/1`. Every
-  bare-nref read resolves its `Home` via `resolve_home/2`: try the bound
-  project's table first, fall back to the environment, and log if the nref
-  genuinely exists in both (a real collision, resolved in the project's
-  favor on the theory that a project-bound session is evidence of intent).
+- **`graphdb_query` sessions bind a `Project`** — `new_session/1`.
+  Bare-nref **entry-point** reads resolve their `Home` via `resolve_home/2`:
+  try the bound project's table first, fall back to the environment, and
+  log if the nref genuinely exists in both (a real collision, resolved in
+  the project's favor on the theory that a project-bound session is
+  evidence of intent). Arc-discovered nrefs during BFS route
+  deterministically instead, via `graphdb_ns:arc_target_namespace/3`.
 - **Proxy contract** — cross-project links are local nodes of the seeded
   "Remote Reference" class carrying `remote_project` / `remote_nref` AVP
   payload; no structural reference crosses a project boundary. Recognized by
