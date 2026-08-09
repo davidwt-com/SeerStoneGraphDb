@@ -19,11 +19,17 @@
 %% SP2: home-relative routing.  namespace_of/1 and target_namespace/1
 %% replaced by /2 forms taking a Home (environment | project handle).
 %% node_table/1 and rel_table/1 added.
+%% Rev PA3 Date: 2026-08-09 Author: David W. Thomas
+%% arc_target_namespace/3 added -- routes an arc-discovered nref's Home
+%% off #relationship.kind/characterization instead of target_kind, so
+%% graphdb_query's BFS can stop re-guessing Home mid-traversal.
 %%---------------------------------------------------------------------
 
 -module(graphdb_ns).
+-include_lib("graphdb/include/graphdb_nrefs.hrl").
 
--export([namespace_of/2, target_namespace/2, node_table/1, rel_table/1]).
+-export([namespace_of/2, target_namespace/2, arc_target_namespace/3,
+	node_table/1, rel_table/1]).
 
 %%---------------------------------------------------------------------
 %% NYI / UEM Macros
@@ -68,6 +74,51 @@ target_namespace(_Home, category)  -> environment;
 target_namespace(_Home, attribute) -> environment;
 target_namespace(_Home, class)     -> environment;
 target_namespace(Home,  instance)  -> Home.
+
+
+%%---------------------------------------------------------------------
+%% arc_target_namespace(Home, ArcKind, Characterization)
+%%     -> environment | Home
+%%
+%% The arc-row analogue of namespace_of/2, for a traversal that has an
+%% arc in hand.  `Home` is the store the arc row was READ from.
+%%
+%% Unlike a bare nref, an nref reached BY TRAVERSING AN ARC is not
+%% ambiguous: #relationship.kind and .characterization are present on
+%% every row and together determine the target's store outright.  This
+%% is what lets graphdb_query stop guessing mid-traversal.
+%%
+%%   taxonomy      -- class/attribute refinement; projects hold only
+%%                    instances, so the target is always environment.
+%%   composition   -- home-relative: category/class composition is
+%%                    environment<->environment, instance composition is
+%%                    project<->project.
+%%   connection    -- instance<->instance inside one store.
+%%   instantiation -- the 29/30 membership pair.  BOTH rows live in the
+%%                    project's table, but 29 (instance->class) targets
+%%                    an environment class while 30 (class->instance)
+%%                    targets a project instance.  This is the one arc
+%%                    shape whose ends deliberately differ in Home, and
+%%                    the characterization is exactly what says which
+%%                    direction we are walking.
+%%
+%% Deliberately total.  A caller of this module is the graphdb_query
+%% singleton; a function_clause here would take the query server down
+%% for every session over one malformed row, so an unrecognised shape
+%% logs and degrades to same-store (which is what that row did before
+%% this function existed).
+%%---------------------------------------------------------------------
+arc_target_namespace(_Home, taxonomy,    _Char) -> environment;
+arc_target_namespace(Home,  composition, _Char) -> Home;
+arc_target_namespace(Home,  connection,  _Char) -> Home;
+arc_target_namespace(_Home, instantiation, ?ARC_INST_TO_CLASS) -> environment;
+arc_target_namespace(Home,  instantiation, ?ARC_CLASS_TO_INST) -> Home;
+arc_target_namespace(Home,  Kind, Char) ->
+	logger:warning(
+		"graphdb_ns: unroutable arc kind ~p (characterization ~p) -- "
+		"defaulting to same store ~p",
+		[Kind, Char, Home]),
+	Home.
 
 
 %%---------------------------------------------------------------------

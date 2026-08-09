@@ -179,12 +179,24 @@ execute_query(Query, Session) when is_map(Session) ->
 
 %% resume(Cont, Session) -> {ok, _, _} | {partial, _, _, _} | {error, _}
 %%
-%% Same gate as execute_query/2 above -- resume/2 also dispatches Session
-%% straight into a handle_call that resolves bare nrefs via resolve_home/2.
+%% Same gate as execute_query/2 above, but load-bearing for a different
+%% reason here: resume/2 never calls resolve_home/2 (bfs_step/5 uses
+%% home_of_id/2 + session_read_arcs_home/5, and is_scaffold_node/2 takes an
+%% already-resolved Home). validate_session_home/1 must still run first,
+%% though -- it has to complete before validate_cont_homes/2 below, whose
+%% home_id(maps:get(project, Session, environment)) would function_clause
+%% on a malformed Project handle.
 resume(Cont, Session) when is_map(Session) ->
     case validate_session_home(Session) of
-        ok               -> gen_server:call(?MODULE, {resume, Cont, Session});
-        {error, _} = Err -> Err
+        ok ->
+            case validate_cont_homes(Cont, Session) of
+                ok ->
+                    gen_server:call(?MODULE, {resume, Cont, Session});
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
     end.
 
 %% validate_session_home(Session) -> ok | {error, invalid_project}
@@ -198,6 +210,42 @@ validate_session_home(Session) ->
     case maps:get(project, Session, environment) of
         environment -> ok;
         Project     -> graphdb_project:require_project(Project)
+    end.
+
+%% validate_cont_homes(Cont, Session) -> ok | {error, session_project_mismatch}
+%%
+%% Every home_id() a continuation can feed to home_of_id/2 must be
+%% resolvable against THIS session. Checked on the caller side, before
+%% the gen_server:call, for the same reason validate_session_home/1 is:
+%% home_of_id/2 would otherwise return the wrong project's handle (or
+%% `undefined` for an environment-bound session) deep inside the
+%% singleton's own handle_call.
+%%
+%% Only the target and the frontier are checked. Visited keys are never
+%% resolved -- they are compared, and a foreign id there can only ever
+%% fail to match, which is harmless.
+%%
+%% FrontierOk/1 folds a shape check into the same lists:all/2 pass: a
+%% frontier element of the wrong arity does not match {Id, _N, _P} and
+%% falls to the catch-all `false` clause, rather than being silently
+%% dropped by a list-comprehension generator (as a plain `[Id || {Id, _N,
+%% _P} <- Frontier]` would do) and passing the gate unchecked. #cont_path{}
+%% is defined in a public header and resume/2's Cont argument is
+%% unguarded, so a malformed frontier element must fail closed here --
+%% bfs_step/5's fold would otherwise function_clause deep inside this
+%% gen_server's singleton process.
+validate_cont_homes(#cont_path{target = {TargetId, _Nref},
+                               frontier = Frontier}, Session) ->
+    Bound = home_id(maps:get(project, Session, environment)),
+    HomeOk = fun(environment) -> true;
+                (Id)          -> Id =:= Bound
+             end,
+    FrontierOk = fun({Id, _N, _P}) -> HomeOk(Id);
+                    (_Malformed)   -> false
+                 end,
+    case HomeOk(TargetId) andalso lists:all(FrontierOk, Frontier) of
+        true  -> ok;
+        false -> {error, session_project_mismatch}
     end.
 
 %% find_path/3 — public convenience matching the query task spec API.
@@ -321,12 +369,19 @@ dispatch(#q_instances_of{class = C, recursive = Recursive}, Session) ->
 dispatch(#q_find_path{from = From, to = To, max_depth = D,
                        arc_kinds = Kinds}, Session) ->
     SnapshotAt = maps:get(snapshot_at, Session),
+    %% Entry points -- and ONLY entry points -- resolve Home by
+    %% guessing. resolve_home/2 was designed for exactly this position:
+    %% a bare nref with no characterization context. From here on Home
+    %% travels with the frontier and is derived from each arc (see
+    %% graphdb_ns:arc_target_namespace/3); it is never re-guessed.
+    FromId = home_id(resolve_home(Session, From)),
+    ToId   = home_id(resolve_home(Session, To)),
     %% Initial budget D doubles as the resume budget — partial conts
     %% carry max_depth as remaining_depth so resume gets a fresh full
     %% allotment rather than the exhausted 0.
-    bfs(SnapshotAt, To, D, D, Kinds,
-        #{From => true},
-        [{From, []}],
+    bfs(SnapshotAt, {ToId, To}, D, D, Kinds,
+        #{{FromId, From} => true},
+        [{FromId, From, []}],
         Session);
 dispatch(_Query, Session) ->
     {{error, not_implemented}, Session}.
@@ -378,6 +433,28 @@ resolve_home(#{project := Project}, Nref) when Project =/= undefined ->
     end;
 resolve_home(_Session, _Nref) ->
     environment.
+
+%%---------------------------------------------------------------------
+%% home_id(Home)              -> home_id()
+%% home_of_id(Session, Id)    -> environment | Project
+%%
+%% `home_id()` is the compact, comparable form of a Home and is what
+%% travels in the BFS frontier, the visited set, #cont_path{}, and the
+%% public result. The full Project handle stays out of all four: it
+%% carries physical table atoms, and it makes an unwieldy map key.
+%%
+%% home_of_id/2 is the inverse, and is total for any id a session can
+%% legitimately produce: a session binds at most ONE Project, so a
+%% {project, _} id can only mean that one. resume/2 gates continuations
+%% carrying a foreign id before they ever reach here (validate_cont_homes/2).
+%%---------------------------------------------------------------------
+home_id(environment)         -> environment;
+home_id(#{anchor := Anchor}) -> {project, Anchor}.
+
+home_of_id(_Session, environment) ->
+    environment;
+home_of_id(Session, {project, _Anchor}) ->
+    maps:get(project, Session).
 
 %%---------------------------------------------------------------------
 %% session_read_node(Session, Nref) -> {Node | not_found, Session1}
@@ -845,7 +922,7 @@ all_subclasses(C) ->
 %% bfs(SnapshotAt, Target, ResumeBudget, RemainingDepth, ArcKinds,
 %%     Visited, Frontier, Session) -> {Reply, Session1}
 %%
-%%     Frontier   :: [{Nref, PathToHere}]
+%%     Frontier   :: [{HomeId, Nref, PathToHere}]
 %%     PathToHere :: [#{from, via, to, kind}]   (edges already taken)
 %%
 %% ResumeBudget is the original max_depth — stored on the cont so resume
@@ -857,73 +934,101 @@ all_subclasses(C) ->
 %%   {{ok, no_path}, Session1}                        -- frontier emptied
 %%   {{partial, BestSoFar, #cont_path{}}, Session1}   -- depth-bounded
 %%---------------------------------------------------------------------
-bfs(_Snap, _To, _Budget, _D, _Kinds, _Vis, [], Session) ->
+bfs(_Snap, _ToKey, _Budget, _D, _Kinds, _Vis, [], Session) ->
     {{ok, no_path}, Session};
-bfs(Snap, To, Budget, 0, Kinds, Vis, Frontier, Session) ->
-    %% Depth exhausted but frontier non-empty -- partial.
-    BestSoFar = case Frontier of
-        [{_, P} | _] -> P;
-        []           -> []
-    end,
+bfs(Snap, ToKey, Budget, 0, Kinds, Vis, Frontier, Session) ->
+    %% Depth exhausted but frontier non-empty -- partial. The first bfs/8
+    %% clause above already matches an empty Frontier (any D) and returns
+    %% before this clause is reached, so Frontier is guaranteed non-empty
+    %% here; no `[] -> []` fallback arm is reachable.
+    [{_HomeId, _Nref, BestSoFar} | _] = Frontier,
     Cont = #cont_path{snapshot_at     = Snap,
-                      target          = To,
+                      target          = ToKey,
                       arc_kinds       = Kinds,
                       remaining_depth = Budget,
                       visited         = Vis,
                       frontier        = Frontier},
     {{partial, BestSoFar, Cont}, Session};
-bfs(Snap, To, Budget, D, Kinds, Vis, Frontier, Session) ->
+bfs(Snap, ToKey, Budget, D, Kinds, Vis, Frontier, Session) ->
     {NextFrontier, Vis1, FoundPath, Session1} =
-        bfs_step(To, Kinds, Frontier, Vis, Session),
+        bfs_step(ToKey, Kinds, Frontier, Vis, Session),
     case FoundPath of
         {found, Path} ->
             {{ok, Path}, Session1};
         not_found ->
-            bfs(Snap, To, Budget, D - 1, Kinds, Vis1, NextFrontier,
+            bfs(Snap, ToKey, Budget, D - 1, Kinds, Vis1, NextFrontier,
                 Session1)
     end.
 
-bfs_step(To, Kinds, Frontier, Vis, Session) ->
+bfs_step(ToKey, Kinds, Frontier, Vis, Session) ->
     lists:foldl(
-        fun({Nref, PathToHere}, {Acc, V, Found, S}) ->
+        fun({HomeId, Nref, PathToHere}, {Acc, V, Found, S}) ->
             case Found of
                 {found, _} ->
                     {Acc, V, Found, S};
                 not_found ->
-                    {Arcs, S1} = session_read_arcs(S, Nref, outgoing,
-                                                   Kinds),
-                    expand_arcs(To, Nref, PathToHere, Arcs, V, Acc,
-                                Found, S1)
+                    %% session_read_arcs_home/5, NOT session_read_arcs/4:
+                    %% the Home is known, so there is nothing to guess.
+                    Home = home_of_id(S, HomeId),
+                    {Arcs, S1} = session_read_arcs_home(S, Home, Nref,
+                                                        outgoing, Kinds),
+                    expand_arcs(ToKey, HomeId, Home, Nref, PathToHere,
+                                Arcs, V, Acc, Found, S1)
             end
         end, {[], Vis, not_found, Session}, Frontier).
 
-expand_arcs(_To, _From, _PathHere, [], V, Acc, Found, S) ->
+expand_arcs(_ToKey, _FromId, _FromHome, _From, _PathHere, [], V, Acc,
+            Found, S) ->
     {Acc, V, Found, S};
-expand_arcs(To, From, PathHere,
+expand_arcs(ToKey, FromId, FromHome, From, PathHere,
             [#relationship{kind             = K,
                            characterization = C,
                            target_nref      = T} | Rest],
             V, Acc, Found, S) ->
-    Edge = #{from => From, via => C, to => T, kind => K},
+    %% Half A: the target's Home is DERIVED from the arc we arrived on,
+    %% never guessed from the bare nref.
+    TargetHome = graphdb_ns:arc_target_namespace(FromHome, K, C),
+    TargetId   = home_id(TargetHome),
+    Edge = make_edge(From, C, T, K, FromId, TargetId),
     NewPath = PathHere ++ [Edge],
-    case T of
-        To ->
+    %% Half B: compare and remember the Home-qualified key. A bare nref
+    %% is unique only within a Home.
+    Key = {TargetId, T},
+    case Key of
+        ToKey ->
             {Acc, V, {found, NewPath}, S};
         _ ->
-            case maps:is_key(T, V) orelse is_scaffold_node(S, T) of
+            case maps:is_key(Key, V) orelse is_scaffold_node(TargetHome, T) of
                 true ->
-                    expand_arcs(To, From, PathHere, Rest, V, Acc,
-                                Found, S);
+                    expand_arcs(ToKey, FromId, FromHome, From, PathHere,
+                                Rest, V, Acc, Found, S);
                 false ->
-                    V1 = V#{T => true},
-                    Acc1 = Acc ++ [{T, NewPath}],
-                    expand_arcs(To, From, PathHere, Rest, V1, Acc1,
-                                Found, S)
+                    V1 = V#{Key => true},
+                    Acc1 = Acc ++ [{TargetId, T, NewPath}],
+                    expand_arcs(ToKey, FromId, FromHome, From, PathHere,
+                                Rest, V1, Acc1, Found, S)
             end
     end.
 
 %%---------------------------------------------------------------------
-%% is_scaffold_node(Session, Nref) -> boolean()
+%% make_edge(From, Char, To, Kind, FromId, TargetId) -> map()
+%%
+%% A path edge discloses `home` iff this hop crosses stores. The absent
+%% key means "same store as the previous hop"; the first edge's store is
+%% the one the caller named in `from`. A consumer reconstructs the whole
+%% Home sequence by carrying the last disclosed value forward.
+%%
+%% The value is a home_id(), never the raw Project handle -- results
+%% must not leak physical table atoms.
+%%---------------------------------------------------------------------
+make_edge(From, Char, To, Kind, HomeId, HomeId) ->
+    #{from => From, via => Char, to => To, kind => Kind};
+make_edge(From, Char, To, Kind, _FromId, TargetId) ->
+    #{from => From, via => Char, to => To, kind => Kind,
+      home => TargetId}.
+
+%%---------------------------------------------------------------------
+%% is_scaffold_node(Home, Nref) -> boolean()
 %%
 %% Category nodes are structural scaffold (nrefs 1-5) -- never
 %% traversed by graph queries.  Matches the semantics already encoded
@@ -932,16 +1037,13 @@ expand_arcs(To, From, PathHere,
 %% NREF_CLASSES as a parent would be considered taxonomically
 %% connected, which contradicts both the design and existing helpers.
 %%
-%% Home-routed via resolve_home/2: a project instance can legitimately
-%% collide in key with an environment scaffold nref (1-5). Without this,
-%% BFS would silently skip a real project-instance hop as if it were
-%% scaffold, producing a wrong path result with no error. When the
-%% collision resolves to the project, the project's node is read (never
-%% kind=category there), so is_scaffold_node correctly returns false and
-%% the real instance hop is traversed.
+%% Takes a resolved Home rather than a Session: the caller already
+%% derived it from the arc. This needs no policy about what
+%% scaffold-ness means under a project session -- a project-homed nref
+%% reads from the project's table, finds kind=instance, and yields
+%% false, which is the right answer reached structurally.
 %%---------------------------------------------------------------------
-is_scaffold_node(Session, Nref) ->
-    Home = resolve_home(Session, Nref),
+is_scaffold_node(Home, Nref) ->
     case mnesia:dirty_read(graphdb_ns:node_table(Home), Nref) of
         [#node{kind = category}] -> true;
         _                        -> false

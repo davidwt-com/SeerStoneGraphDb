@@ -28,8 +28,8 @@ SPDX-License-Identifier: GPL-2.0-or-later
 | `graphdb_instance`  | Implemented — compositional hierarchy + four-level inheritance with multi-class membership and ambiguity-detecting class resolver; refuses instantiation/membership of abstract classes; refuses retired nodes as new instance targets, compositional parents, and arc endpoints; fires composition rules on `create_instance/4` and surfaces `proposed` outcomes for propose-mode rules; fires connection rules via a caller-supplied resolver on `create_instance/5`; applies horizontal conflict precedence via a caller-overridable resolver on `create_instance/6`. SP2: every public function, including the instance reads, takes a leading `Project` handle — fully Project-routed (§6) |
 | `graphdb_rules`     | Implemented — rule meta-ontology, applies_to attachment, scope-aware create/retrieve, taxonomy-walking effective-rules read, composition firing engine, propose mode, connection firing, horizontal conflict precedence                                                                                                                                                                                                                                                                                                                                                 |
 | `graphdb_language`  | Implemented — multilingual overlay layer (label resolution, dialect chains, per-language Mnesia overlay tables)                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `graphdb_query`     | Implemented — query language with snapshot-semantics sessions and continuation-based bounded BFS. SP2: `new_session/1` binds a `Project`; bare-nref reads resolve `Home` via `resolve_home/2`.                                                                                                                                                                                                                                                                                                                                                                        |
-| Tests               | 677 passing (532 Common Test + 145 EUnit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `graphdb_query`     | Implemented — query language with snapshot-semantics sessions and continuation-based bounded BFS. SP2: `new_session/1` binds a `Project`; bare-nref **entry-point** reads resolve `Home` via `resolve_home/2`, while arc-discovered nrefs during BFS route deterministically via `graphdb_ns:arc_target_namespace/3`. `#q_find_path{}` state is Home-qualified and path edges disclose `home` on a store crossing.                                                                                                                                                                                        |
+| Tests               | 701 passing (550 Common Test + 151 EUnit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 The kernel is functional under multi-inheritance, multi-class-
 membership, and per-class template semantics.  Multilingual label
@@ -352,10 +352,16 @@ that `Home` — not the nref's numeric value — selects the physical table.
 | `characterization`, `reciprocal`   | Always the environment                                          |
 | `target_nref`                      | Routed by the arc label's `target_kind` AVP: `category`/`attribute`/`class` → always the environment; `instance` → `Home` |
 
-`target_kind :: category | attribute | class | instance` is stored as a
-literal AVP on every arc-label attribute node. Built-in arc labels
-(nrefs 21–30) carry it; `graphdb_attr:create_relationship_attribute_pair/4`
-requires it for runtime additions.
+`target_kind :: category | attribute | class | instance` is a literal AVP
+that `graphdb_attr:create_relationship_attribute_pair/4` requires on every
+**runtime-created** relationship-attribute pair. The ten built-in arc
+labels (nrefs 21–30) do **not** carry it — `graphdb_attr:init/1` retro-stamps
+only `attribute_type` on the bootstrap scaffold — so consumers must tolerate
+its absence rather than assume it; `target_namespace/2` currently has no
+production caller for this reason (only its own EUnit suite exercises it).
+Arc-discovered traversal (`graphdb_query`'s bounded BFS) instead routes
+on `#relationship.kind`/`characterization` via
+`graphdb_ns:arc_target_namespace/3`, which needs no `target_kind` lookup.
 
 This routing table is the code contract of the pure module `graphdb_ns`
 (`namespace_of/2`, `target_namespace/2` — both `Home`-first — plus
@@ -404,7 +410,10 @@ and SP2 (physical project store) are both implemented:
 - **`graphdb_ns`** — pure namespace-resolution module encoding the routing
   table above; `namespace_of/2` / `target_namespace/2` take a leading `Home`
   and resolve every nref field to `environment | Home`; `node_table/1` /
-  `rel_table/1` map a `Home` to its physical table atom.
+  `rel_table/1` map a `Home` to its physical table atom; `arc_target_namespace/3`
+  routes an arc-discovered nref by `#relationship.kind` (with the 29/30
+  membership pair split on characterization) for deterministic mid-traversal
+  Home resolution.
 - **`graphdb_project`** — project registry and physical store.
   `register_project/1` creates the nref-5-child anchor node **and** the
   project's three Mnesia tables (`nodes_<Anchor>`, `relationships_<Anchor>`,
@@ -433,8 +442,10 @@ and SP2 (physical project store) are both implemented:
   against once the store is split. `get_relationships` has no
   Project-taking twin yet (tracked in `../TASKS.md`).
 - **`graphdb_query` sessions bind a `Project` (SP2)** — `new_session/1`;
-  bare-nref reads resolve `Home` per nref via `resolve_home/2`, trying the
-  bound project first and falling back to the environment.
+  bare-nref **entry-point** reads resolve `Home` via `resolve_home/2`,
+  trying the bound project first and falling back to the environment;
+  arc-discovered nrefs during BFS route deterministically instead, via
+  `graphdb_ns:arc_target_namespace/3`.
 - **Proxy contract** — a cross-project link is a local node of the seeded
   "Remote Reference" class carrying `remote_project` / `remote_nref` AVP
   payload; no structural reference crosses a project boundary. Recognized by

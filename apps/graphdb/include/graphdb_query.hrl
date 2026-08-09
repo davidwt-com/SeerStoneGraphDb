@@ -52,18 +52,29 @@
     arc_kinds :: [arc_kind()]
 }).
 
+%% -- Home identity ----------------------------------------------------
+%% Compact, comparable form of a Home: the atom `environment`, or a
+%% project named by its anchor nref.  Deliberately NOT the full Project
+%% handle -- that carries physical Mnesia table atoms, which have no
+%% business in continuation state or in query results.
+-type home_id() :: environment | {project, integer()}.
+
 %% -- Continuation -----------------------------------------------------
 %% Returned by bounded queries (currently only Q6). Tagged with the
 %% snapshot it was issued against; resuming with a mismatched session
 %% returns {error, snapshot_expired}.
+%%
+%% Every nref here is Home-qualified: a bare nref is unique only within
+%% a Home, so project-6 and environment-6 must never collapse into one
+%% visited entry.
 -record(cont_path, {
     snapshot_at      :: erlang:timestamp(),
-    target           :: integer(),
+    target           :: {home_id(), integer()},
     arc_kinds        :: [arc_kind()],
     remaining_depth  :: non_neg_integer(),
-    visited          :: #{integer() => true},
-    %% [{Nref, PathToHere}] — frontier nodes to expand on resume
-    frontier         :: [{integer(), [map()]}]
+    visited          :: #{{home_id(), integer()} => true},
+    %% [{HomeId, Nref, PathToHere}] — frontier nodes to expand on resume
+    frontier         :: [{home_id(), integer(), [map()]}]
 }).
 
 -endif.

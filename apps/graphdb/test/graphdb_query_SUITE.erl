@@ -112,7 +112,15 @@
     resolve_home_prefers_project_and_logs_on_collision/1,
     %% SP2 review wave B Fix 2 — malformed-handle read-path gating
     execute_query_2_rejects_bad_session_project/1,
-    resume_rejects_bad_session_project/1
+    resume_rejects_bad_session_project/1,
+    %% SP2 follow-up — Home routing for arc-discovered nrefs
+    t1_env_only_path_identical_across_sessions/1,
+    t2_shadowed_target_is_not_falsely_found/1,
+    t5_cross_store_edge_discloses_home/1,
+    t3_continuation_state_is_home_qualified/1,
+    t6_resume_round_trip_under_project_session/1,
+    resume_rejects_foreign_project_continuation/1,
+    resume_rejects_malformed_frontier_continuation/1
 ]).
 
 suite() ->
@@ -122,7 +130,8 @@ all() ->
     [{group, skeleton}, {group, q1_get_node}, {group, q1b_get_arcs},
      {group, q2_describe_attribute}, {group, q3_describe_class},
      {group, q4_describe_instance}, {group, q5_list_instances_of},
-     {group, q6_find_path}, {group, sp2_project_session}].
+     {group, q6_find_path}, {group, sp2_project_session},
+     {group, sp2_traversal_home_routing}].
 
 groups() ->
     [{skeleton, [], [
@@ -192,6 +201,15 @@ groups() ->
         resolve_home_prefers_project_and_logs_on_collision,
         execute_query_2_rejects_bad_session_project,
         resume_rejects_bad_session_project
+     ]},
+     {sp2_traversal_home_routing, [], [
+        t1_env_only_path_identical_across_sessions,
+        t2_shadowed_target_is_not_falsely_found,
+        t5_cross_store_edge_discloses_home,
+        t3_continuation_state_is_home_qualified,
+        t6_resume_round_trip_under_project_session,
+        resume_rejects_foreign_project_continuation,
+        resume_rejects_malformed_frontier_continuation
      ]}].
 
 
@@ -932,6 +950,215 @@ resume_rejects_bad_session_project(_Config) ->
     PidBefore = whereis(graphdb_query),
     ?assertEqual({error, invalid_project},
                  graphdb_query:resume(Cont, BadSession)),
+    ?assertEqual(PidBefore, whereis(graphdb_query)).
+
+%%=====================================================================
+%% SP2 follow-up — Home routing for arc-discovered nrefs
+%% (docs/designs/query-traversal-home-routing-design.md)
+%%=====================================================================
+
+%%---------------------------------------------------------------------
+%% T1 -- the invariant that broke.  An environment-only path must be
+%% returned IDENTICALLY under an environment session, under a project
+%% that does not shadow the intermediate hop, and under a project that
+%% does.  Before the fix the third case returned {ok, no_path}.
+%%---------------------------------------------------------------------
+t1_env_only_path_identical_across_sessions(_Config) ->
+    %% Both attributes are created under bootstrap nref 6 ("Names"), and
+    %% graphdb_attr writes the taxonomy pair 6 -24-> New / New -23-> 6.
+    %% So the only [taxonomy] route from A1 to A2 runs through 6.
+    {ok, A1} = graphdb_attr:create_name_attribute("T1Alpha"),
+    {ok, A2} = graphdb_attr:create_name_attribute("T1Beta"),
+    Q = #q_find_path{from = A1, to = A2, max_depth = 4,
+                     arc_kinds = [taxonomy]},
+
+    {ok, EnvPath, _} =
+        graphdb_query:execute_query(Q, graphdb_query:new_session()),
+
+    %% (b) a project holding a single node -- nref 6 is NOT shadowed.
+    {ok, SmallP} = graphdb_project:register_project("T1 small"),
+    {ok, Small}  = graphdb_project:open(SmallP),
+    _ = root_instance(Small),
+    {ok, SmallPath, _} =
+        graphdb_query:execute_query(Q, graphdb_query:new_session(Small)),
+
+    %% (c) a project holding >= 6 nodes -- nref 6 IS shadowed.  Project
+    %% allocators start at 1, so this is the steady state of any real
+    %% project, not a contrived setup.
+    {ok, BigP} = graphdb_project:register_project("T1 shadowing"),
+    {ok, Big}  = graphdb_project:open(BigP),
+    Seeded = [root_instance(Big) || _ <- lists:seq(1, 6)],
+    ?assert(lists:member(?NREF_NAMES, Seeded)),
+    {ok, BigPath, _} =
+        graphdb_query:execute_query(Q, graphdb_query:new_session(Big)),
+
+    ?assertEqual(EnvPath, SmallPath),
+    ?assertEqual(EnvPath, BigPath),
+    ?assertMatch([#{from := A1, via := ?ARC_ATTR_PARENT,
+                    to := ?NREF_NAMES, kind := taxonomy},
+                  #{from := ?NREF_NAMES, via := ?ARC_ATTR_CHILD,
+                    to := A2, kind := taxonomy}], EnvPath),
+    %% An environment-only path crosses no store, so no edge discloses
+    %% a Home (see Task 3).
+    ?assertEqual([], [E || E <- EnvPath, maps:is_key(home, E)]).
+
+%%---------------------------------------------------------------------
+%% T2 -- false `found` via the bare-nref target comparison.  With
+%% to = 6 under a shadowing project, resolve_home/2 resolves the
+%% ENDPOINT to the project's instance 6 (documented, intentional).  A
+%% walk through the environment's attribute 6 must therefore NOT count
+%% as having found it.  Pre-fix, `case T of To` compared 6 =:= 6 and
+%% returned a one-edge path -- a fabricated result.
+%%
+%% max_depth = 2 makes the post-fix outcome deterministic: level 1
+%% expands A1 to {6}, level 2 expands 6's children, none of which is
+%% the project's instance 6, and the budget runs out with a non-empty
+%% frontier -> partial.
+%%---------------------------------------------------------------------
+t2_shadowed_target_is_not_falsely_found(_Config) ->
+    {ok, A1} = graphdb_attr:create_name_attribute("T2Alpha"),
+    {ok, P}  = graphdb_project:register_project("T2 shadowing"),
+    {ok, Project} = graphdb_project:open(P),
+    Seeded = [root_instance(Project) || _ <- lists:seq(1, 6)],
+    ?assert(lists:member(?NREF_NAMES, Seeded)),
+    Session = graphdb_query:new_session(Project),
+    Reply = graphdb_query:execute_query(
+        #q_find_path{from = A1, to = ?NREF_NAMES, max_depth = 2,
+                     arc_kinds = [taxonomy]}, Session),
+    %% The invariant: no path is fabricated.
+    ?assertNotMatch({ok, [_ | _], _}, Reply),
+    ?assertMatch({partial, _Best, _Cont, _S}, Reply).
+
+%%---------------------------------------------------------------------
+%% T5 -- a path that crosses stores says so.  A project instance's
+%% outgoing membership row (characterization 29) lives in the PROJECT's
+%% relationship table but targets an environment class, so this is the
+%% one crossing reachable under this scope.  The edge must disclose
+%% `home => environment`; an environment-only path (T1) discloses
+%% nothing.
+%%---------------------------------------------------------------------
+t5_cross_store_edge_discloses_home(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, X, _} = graphdb_instance:create_instance(Project, "T5X", Cls,
+                                                  root()),
+    Session = graphdb_query:new_session(Project),
+    {ok, Path, _} = graphdb_query:execute_query(
+        #q_find_path{from = X, to = Cls, max_depth = 2,
+                     arc_kinds = [instantiation]}, Session),
+    ?assertMatch([#{from := X, via := ?ARC_INST_TO_CLASS, to := Cls,
+                    kind := instantiation, home := environment}], Path).
+
+%%---------------------------------------------------------------------
+%% T3' -- Half B's state shape, asserted where it is observable.
+%% (The design's original T3 -- visiting project-6 must not suppress
+%% environment-6 -- is not constructible under this scope; see the
+%% plan's Task 4 scope note.)
+%%---------------------------------------------------------------------
+t3_continuation_state_is_home_qualified(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, A, _} = graphdb_instance:create_instance(Project, "T3A", Cls,
+                                                  root()),
+    {ok, B, _} = graphdb_instance:create_instance(Project, "T3B", Cls, A),
+    {ok, C, _} = graphdb_instance:create_instance(Project, "T3C", Cls, B),
+    {ok, D, _} = graphdb_instance:create_instance(Project, "T3D", Cls, C),
+    Anchor = maps:get(anchor, Project),
+    Q = #q_find_path{from = D, to = A, max_depth = 1,
+                     arc_kinds = [composition]},
+    {partial, _Best, Cont, _S1} = graphdb_query:execute_query(
+        Q, graphdb_query:new_session(Project)),
+    #cont_path{target = Target, visited = Visited, frontier = Frontier} =
+        Cont,
+    ?assertEqual({{project, Anchor}, A}, Target),
+    ?assert(lists:all(fun({_HomeId, N}) when is_integer(N) -> true;
+                         (_)                               -> false
+                      end, maps:keys(Visited))),
+    ?assert(lists:all(fun({_HomeId, N, P}) -> is_integer(N)
+                                              andalso is_list(P);
+                         (_)                -> false
+                      end, Frontier)).
+
+%%---------------------------------------------------------------------
+%% T6 -- the new frontier/visited shapes survive a round trip through
+%% #cont_path{}: partial + resume must equal an unbounded run.
+%%---------------------------------------------------------------------
+t6_resume_round_trip_under_project_session(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, A, _} = graphdb_instance:create_instance(Project, "T6A", Cls,
+                                                  root()),
+    {ok, B, _} = graphdb_instance:create_instance(Project, "T6B", Cls, A),
+    {ok, C, _} = graphdb_instance:create_instance(Project, "T6C", Cls, B),
+    {ok, D, _} = graphdb_instance:create_instance(Project, "T6D", Cls, C),
+    Bounded = #q_find_path{from = D, to = A, max_depth = 2,
+                           arc_kinds = [composition]},
+    S0 = graphdb_query:new_session(Project),
+    {partial, _Best, Cont, S1} = graphdb_query:execute_query(Bounded, S0),
+    {ok, Resumed, _S2} = graphdb_query:resume(Cont, S1),
+    {ok, Direct, _S3} = graphdb_query:execute_query(
+        #q_find_path{from = D, to = A, max_depth = 9,
+                     arc_kinds = [composition]},
+        graphdb_query:new_session(Project)),
+    ?assertEqual(Direct, Resumed).
+
+%%---------------------------------------------------------------------
+%% A continuation carrying a project id the session is not bound to must
+%% be rejected on the caller side, not carried into home_of_id/2 inside
+%% the singleton. Same reasoning as validate_session_home/1: the pid
+%% must be unchanged afterwards.
+%%---------------------------------------------------------------------
+resume_rejects_foreign_project_continuation(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, A, _} = graphdb_instance:create_instance(Project, "TFA", Cls,
+                                                  root()),
+    {ok, B, _} = graphdb_instance:create_instance(Project, "TFB", Cls, A),
+    {ok, C, _} = graphdb_instance:create_instance(Project, "TFC", Cls, B),
+    {ok, D, _} = graphdb_instance:create_instance(Project, "TFD", Cls, C),
+    Q = #q_find_path{from = D, to = A, max_depth = 1,
+                     arc_kinds = [composition]},
+    S0 = graphdb_query:new_session(Project),
+    {partial, _, Cont, S1} = graphdb_query:execute_query(Q, S0),
+    {ok, OtherP}  = graphdb_project:register_project("TF other"),
+    {ok, Other}   = graphdb_project:open(OtherP),
+    OtherSession  = S1#{project => Other,
+                        snapshot_at => maps:get(snapshot_at, S1)},
+    PidBefore = whereis(graphdb_query),
+    ?assertEqual({error, session_project_mismatch},
+                 graphdb_query:resume(Cont, OtherSession)),
+    ?assertEqual(PidBefore, whereis(graphdb_query)).
+
+%%---------------------------------------------------------------------
+%% A continuation whose frontier carries a malformed (wrong-arity) element
+%% must be rejected on the caller side too, not just a foreign home id.
+%% Pre-fix, `[Id || {Id, _N, _P} <- Frontier]` silently dropped the bad
+%% element instead of failing the gate; a hand-built continuation with a
+%% valid target and one malformed frontier tuple would then pass
+%% validate_cont_homes/2 and function_clause inside bfs_step/5's fold --
+%% INSIDE the graphdb_query singleton, taking it down for every session in
+%% the VM. The pid assertion is the point: it proves the singleton
+%% survived.
+%%---------------------------------------------------------------------
+resume_rejects_malformed_frontier_continuation(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, A, _} = graphdb_instance:create_instance(Project, "TMA", Cls,
+                                                  root()),
+    {ok, B, _} = graphdb_instance:create_instance(Project, "TMB", Cls, A),
+    {ok, C, _} = graphdb_instance:create_instance(Project, "TMC", Cls, B),
+    {ok, D, _} = graphdb_instance:create_instance(Project, "TMD", Cls, C),
+    Q = #q_find_path{from = D, to = A, max_depth = 1,
+                     arc_kinds = [composition]},
+    S0 = graphdb_query:new_session(Project),
+    {partial, _, Cont, S1} = graphdb_query:execute_query(Q, S0),
+    #cont_path{frontier = Frontier} = Cont,
+    [{HomeId, Nref, _Path} | Rest] = Frontier,
+    CorruptFrontier = [{HomeId, Nref} | Rest],
+    CorruptCont = Cont#cont_path{frontier = CorruptFrontier},
+    PidBefore = whereis(graphdb_query),
+    ?assertEqual({error, session_project_mismatch},
+                 graphdb_query:resume(CorruptCont, S1)),
     ?assertEqual(PidBefore, whereis(graphdb_query)).
 
 
