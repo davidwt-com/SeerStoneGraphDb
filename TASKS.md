@@ -552,12 +552,24 @@ shadows nref 6 and any with ≥35 shadows the whole bootstrap scaffold, so
 this is high-likelihood, not theoretical. The result is silently wrong: no
 error, only a collision warning in the log.
 
-Fix needs a design decision, not a local patch: arc-discovered nrefs *do*
-have characterization context, so they should route via
-`graphdb_ns:target_namespace/2` on the arc's `target_kind` rather than
-guessing — with the 29/30 class↔instance membership pair as an explicit
-exception, since its source and target deliberately live in different
-Homes. Deferred out of SP2 as a scoped design task.
+**Designed — see `docs/designs/query-traversal-home-routing-design.md`.**
+Arc-discovered nrefs *do* have context, so the guess is replaced by a
+deterministic lookup. Two halves: (A) a new pure
+`graphdb_ns:arc_target_namespace(Home, Kind, Char)` routes on
+`#relationship.kind`, with the 29/30 membership pair distinguished by
+characterization; (B) the BFS frontier, visited set, and target comparison
+become Home-qualified — without B, project-6 and environment-6 collapse into
+one visited entry and a bare-nref target test reports a *false* `found`.
+`resolve_home/2` and `session_read_arcs/4` are untouched; only
+`bfs_step/5` changes caller, to the existing `session_read_arcs_home/5`.
+
+> **Superseded fix direction.** This entry previously said to route via
+> `graphdb_ns:target_namespace/2` on the arc's `target_kind`. That does not
+> work: bootstrap arc labels 21–30 carry **no `target_kind` AVP**
+> (`bootstrap.terms:122-131` creates them with `[]`; `graphdb_attr:init/1`
+> retro-stamps only `attribute_type`), and arcs 23/24 are the decisive hops
+> in the repro above. Only runtime-created pairs carry `target_kind`. See
+> the design doc's correction note.
 
 **Open defect (Important, pre-existing, unrelated to SP2) —
 `rel_id_server:seed_from_mnesia/0` calls a nonexistent function.**
