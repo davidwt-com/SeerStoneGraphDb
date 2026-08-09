@@ -17,6 +17,20 @@
 %% Rev A Date: 2026-05-19 Author: David W. Thomas
 %%
 %%---------------------------------------------------------------------
+%% Rev PA2 Date: 2026-08-09 Author: David W. Thomas
+%% Counter seeding repaired -- three defects, all in the same path:
+%%   1. seed_from_mnesia/0 called mnesia:dirty_foldl/3, which does not
+%%      exist.  Now mnesia:foldl/3 inside a transaction.
+%%   2. Its blanket `catch _:_ -> 1' turned the resulting undef -- and
+%%      every other failure -- into a seed of 1, the one value that
+%%      collides with live rows and makes mnesia:write silently overwrite
+%%      them.  Now 1 is returned only for a definite "table does not
+%%      exist"; anything else logs and exits.
+%%   3. Seeding ran from init/1, where the relationships table cannot be
+%%      read yet (see counter/0), so it could never observe existing rows
+%%      no matter how (1) and (2) were fixed.  Now seeded lazily on first
+%%      id request.
+%%---------------------------------------------------------------------
 -module(rel_id_server).
 -behaviour(gen_server).
 
@@ -109,7 +123,8 @@ get_id_pair() ->
 %%-----------------------------------------------------------------------------
 %% init([]) -> {ok, State}
 %%
-%% Opens the DETS file for this rel_id_server instance.
+%% Opens the DETS file for this rel_id_server instance.  Does NOT seed the
+%% counter -- see counter/0 for why that cannot happen here.
 %%-----------------------------------------------------------------------------
 init([]) ->
 	open("rel_id_server.dets"),
@@ -173,10 +188,6 @@ code_change(_OldVsn, State, _Extra) ->
 open(File) ->
 	case dets:open_file(?MODULE, [{file, File}]) of
 		{ok, ?MODULE} ->
-			case dets:member(?MODULE, counter) of
-				false -> initialize();
-				true  -> void
-			end,
 			true;
 		{error, Reason} ->
 			logger:error("cannot open rel_id_server dets table: ~p", [Reason]),
@@ -185,32 +196,82 @@ open(File) ->
 
 
 %%-----------------------------------------------------------------------------
-%% initialize() -> ok
+%% counter() -> integer()
 %%
-%% Seeds the DETS counter from the maximum existing relationship ID in Mnesia,
-%% or 1 if Mnesia is unavailable or the relationships table is empty.
+%% Returns the current counter value, seeding it on first use.
+%%
+%% Seeding is deliberately LAZY -- it cannot be done in init/1.  Startup
+%% ordering makes the table unreadable at that point, and circularly so:
+%%
+%%   * rel_id_server must start BEFORE graphdb_mgr, because
+%%     graphdb_bootstrap consumes ids from get_id_pair/0 while loading the
+%%     scaffold; and
+%%   * the relationships table does not exist until graphdb_bootstrap
+%%     creates it, which happens inside graphdb_mgr:init/1 -- and mnesia
+%%     itself is not even running until graphdb_bootstrap:ensure_mnesia/0
+%%     starts it there.
+%%
+%% So at init/1 the answer is never knowable: an eager seed always reads
+%% "no rows" and lands on 1, which is exactly the value that collides with
+%% live rows when the DETS file was lost but Mnesia survived.  By first
+%% get_id/get_id_pair call, bootstrap has run, mnesia is up, and the table
+%% is loaded -- so the high-water mark is real.
 %%-----------------------------------------------------------------------------
-initialize() ->
-	StartId = seed_from_mnesia(),
-	dets:insert(?MODULE, {counter, StartId}),
-	ok.
+counter() ->
+	case dets:lookup(?MODULE, counter) of
+		[{counter, N}] ->
+			N;
+		[] ->
+			Seed = seed_from_mnesia(),
+			ok = dets:insert(?MODULE, {counter, Seed}),
+			Seed
+	end.
 
 
 %%-----------------------------------------------------------------------------
-%% seed_from_mnesia() -> integer()
+%% seed_from_mnesia() -> integer() | exit(rel_id_server_seed)
 %%
-%% Scans the Mnesia relationships table for the maximum existing ID.
-%% Returns max(1, Max + 1) on success, 1 if Mnesia is unavailable.
+%% Returns the id the counter should start at: one past the highest id
+%% already present in the Mnesia relationships table.
+%%
+%% Called only from counter/0, i.e. once, on the first id request after
+%% the DETS counter key is found absent.  Two states reach it:
+%%
+%%   * Genuine first boot.  graphdb_bootstrap has created the relationships
+%%     table and is loading the scaffold, so the table exists and is empty;
+%%     the fold returns 0 and the counter starts at 1.  (A caller reaching
+%%     here before the table exists reads {no_exists, ...} and also gets 1,
+%%     which is equally correct -- no table means no rows.)
+%%
+%%   * DETS file lost while Mnesia survived -- restore, data-dir move, or
+%%     partial recovery.  The table is loaded and populated, and the
+%%     counter MUST resume above its highest id.  Starting at 1 here hands
+%%     out ids that collide with live primary keys, and mnesia:write then
+%%     SILENTLY OVERWRITES existing rows.
+%%
+%% Because that second case is silent data loss, any outcome that is not a
+%% definite answer is fatal rather than defaulted.  In particular a blanket
+%% `catch _:_ -> 1' is not safe here -- 1 is precisely the corrupting
+%% value, so swallowing an error produces the worst possible guess.
 %%-----------------------------------------------------------------------------
 seed_from_mnesia() ->
-	try
-		Max = mnesia:dirty_foldl(
-			fun(Rec, Acc) -> max(element(2, Rec), Acc) end,
-			0,
-			relationships),
-		max(1, Max + 1)
-	catch
-		_:_ -> 1
+	%% element(2, Rec) is #relationship.id, the table's primary key; this
+	%% module deliberately carries no #relationship{} copy of its own.
+	Fold = fun(Rec, Acc) -> max(element(2, Rec), Acc) end,
+	Read = fun() -> mnesia:foldl(Fold, 0, relationships) end,
+	case mnesia:transaction(Read) of
+		{atomic, Max} when is_integer(Max) ->
+			max(1, Max + 1);
+		{aborted, {no_exists, relationships}} ->
+			1;
+		Other ->
+			logger:error(
+				"rel_id_server: cannot determine the highest existing "
+				"relationship id (~p) -- refusing to seed the counter, "
+				"because restarting at 1 would hand out ids that collide "
+				"with live rows and silently overwrite them",
+				[Other]),
+			exit(rel_id_server_seed)
 	end.
 
 
@@ -220,7 +281,7 @@ seed_from_mnesia() ->
 %% Reads the current counter, increments it in DETS, returns the old value.
 %%-----------------------------------------------------------------------------
 do_get_id() ->
-	[{counter, N}] = dets:lookup(?MODULE, counter),
+	N = counter(),
 	ok = dets:insert(?MODULE, {counter, N + 1}),
 	N.
 
@@ -231,6 +292,6 @@ do_get_id() ->
 %% Allocates two consecutive IDs atomically for a reciprocal arc pair.
 %%-----------------------------------------------------------------------------
 do_get_id_pair() ->
-	[{counter, N}] = dets:lookup(?MODULE, counter),
+	N = counter(),
 	ok = dets:insert(?MODULE, {counter, N + 2}),
 	{N, N + 1}.

@@ -494,6 +494,25 @@ spillover path (raise floor and continue via get_nref) is not yet wired to
 the loader. With `?NREF_START = 1 000 000` and `?LABEL_START = 10 001` the
 permanent tier has roughly 990 000 free slots — spill-over is not expected.
 
+### Environment arc-row IDs (`rel_id_server`)
+
+Relationship row IDs come from `rel_id_server`, a DETS-backed counter kept
+deliberately separate from the nref space so arc rows do not consume
+graph-visible integers. Its counter is seeded **lazily, on the first id
+request** — not in `init/1`. That is forced by startup ordering, and the
+constraint is circular: `rel_id_server` must start before `graphdb_mgr`
+(because `graphdb_bootstrap` draws ids from it while loading the scaffold),
+yet the `relationships` table does not exist — and mnesia is not running —
+until `graphdb_bootstrap:ensure_mnesia/0` runs inside `graphdb_mgr:init/1`.
+Seeding at `init/1` could therefore never observe existing rows.
+
+The seed is one past the highest existing id, read via `mnesia:foldl/3` in a
+transaction. A seed of 1 is used only for a definite "table does not exist";
+any other unreadable outcome exits `rel_id_server_seed` rather than
+defaulting, because 1 is exactly the value that collides with live primary
+keys when the DETS file was lost but Mnesia survived — and `mnesia:write`
+would then silently overwrite those rows.
+
 ### Project allocators
 
 Per-project; start at **1**; no bootstrap floor. Implemented (SP2) as an

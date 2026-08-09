@@ -570,19 +570,41 @@ still open: backfilling `target_kind` onto bootstrap arc labels 21–30, which
 would let `graphdb_instance:check_target_kind/3` drop its permissive legacy
 arm.
 
-**Open defect (Important, pre-existing, unrelated to SP2) —
-`rel_id_server:seed_from_mnesia/0` calls a nonexistent function.**
-`rel_id_server.erl:207` calls `mnesia:dirty_foldl/3`, which does not exist
-in OTP 28 (should be `mnesia:foldl/3`). Invisible to the compiler; caught
-by the `xref` gate added alongside SP2 and currently suppressed by a
-single-MFA `xref_ignores` entry in `rebar.config` — **remove that entry
-when this is fixed.** `initialize/0` calls it only when the DETS `counter`
-key is absent, so a normal restart with an intact DETS file never hits it.
-The real failure mode: if the DETS file is lost while the Mnesia
-`relationships` table survives (restore, data-dir move, partial recovery),
-the counter restarts at 1 and hands out ids colliding with existing primary
-keys, and `mnesia:write` then **silently overwrites existing relationship
-rows**.
+**Defect (Important, pre-existing, unrelated to SP2) —
+`rel_id_server` counter seeding — IMPLEMENTED (2026-08-09).** Filed as a
+one-line typo; it was three defects stacked in the same path, and the typo
+was the least of them.
+
+1. `seed_from_mnesia/0` called `mnesia:dirty_foldl/3`, which does not exist
+   in OTP 28 (the real function is `mnesia:foldl/3`, and it must run inside
+   a transaction). Invisible to the compiler.
+2. Its blanket `catch _:_ -> 1` swallowed the resulting `undef` and
+   returned **1** — precisely the corrupting value, so the failure was
+   silent by construction. Now 1 is returned only for a definite
+   `{no_exists, relationships}`; anything else logs and exits
+   `rel_id_server_seed`. A "cannot determine the high-water mark" answer
+   must never default to the value that collides.
+3. **The ordering defect, which the filed report missed and which the other
+   two fixes do not close.** Seeding ran from `init/1`, where the table is
+   structurally unreadable: `rel_id_server` must start *before*
+   `graphdb_mgr` (`graphdb_bootstrap` consumes ids from `get_id_pair/0`),
+   but the `relationships` table is not created — and mnesia is not even
+   started — until `graphdb_bootstrap:ensure_mnesia/0` runs *inside*
+   `graphdb_mgr:init/1`. An eager seed therefore always read "no rows" and
+   landed on 1 regardless. Seeding is now **lazy**, on the first
+   `get_id`/`get_id_pair` call, by which point bootstrap has run and the
+   table is loaded.
+
+Failure mode closed: DETS file lost while the Mnesia `relationships` table
+survives (restore, data-dir move, partial recovery) — the counter no longer
+restarts at 1 handing out ids that collide with live primary keys, which
+`mnesia:write` would then **silently overwrite**.
+
+The `xref_ignores` entry in `rebar.config` that suppressed this is
+**removed**; the gate now runs with an empty ignore list. Regression
+coverage in `rel_id_server_SUITE` group `seeding` (4 cases); the suite also
+now starts mnesia per case, since starting the server with no mnesia at all
+— as it used to — is not a state the system can be in.
 
 **Open design question — `TheKnowledgeNetwork.md` §3 says identity is
 uniform; SP2 makes that false at the physical layer.** The canonical spec
