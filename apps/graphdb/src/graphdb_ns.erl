@@ -19,6 +19,10 @@
 %% SP2: home-relative routing.  namespace_of/1 and target_namespace/1
 %% replaced by /2 forms taking a Home (environment | project handle).
 %% node_table/1 and rel_table/1 added.
+%% Rev PA3 Date: 2026-08-09 Author: David W. Thomas
+%% arc_target_namespace/3 added -- routes an arc-discovered nref's Home
+%% off #relationship.kind/characterization instead of target_kind, so
+%% graphdb_query's BFS can stop re-guessing Home mid-traversal.
 %%---------------------------------------------------------------------
 
 -module(graphdb_ns).

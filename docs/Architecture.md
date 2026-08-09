@@ -352,10 +352,16 @@ that `Home` — not the nref's numeric value — selects the physical table.
 | `characterization`, `reciprocal`   | Always the environment                                          |
 | `target_nref`                      | Routed by the arc label's `target_kind` AVP: `category`/`attribute`/`class` → always the environment; `instance` → `Home` |
 
-`target_kind :: category | attribute | class | instance` is stored as a
-literal AVP on every arc-label attribute node. Built-in arc labels
-(nrefs 21–30) carry it; `graphdb_attr:create_relationship_attribute_pair/4`
-requires it for runtime additions.
+`target_kind :: category | attribute | class | instance` is a literal AVP
+that `graphdb_attr:create_relationship_attribute_pair/4` requires on every
+**runtime-created** relationship-attribute pair. The ten built-in arc
+labels (nrefs 21–30) do **not** carry it — `graphdb_attr:init/1` retro-stamps
+only `attribute_type` on the bootstrap scaffold — so consumers must tolerate
+its absence rather than assume it; `target_namespace/2` currently has no
+production caller for this reason (only its own EUnit suite exercises it).
+Arc-discovered traversal (`graphdb_query`'s bounded BFS) instead routes
+on `#relationship.kind`/`characterization` via
+`graphdb_ns:arc_target_namespace/3`, which needs no `target_kind` lookup.
 
 This routing table is the code contract of the pure module `graphdb_ns`
 (`namespace_of/2`, `target_namespace/2` — both `Home`-first — plus

@@ -179,8 +179,13 @@ execute_query(Query, Session) when is_map(Session) ->
 
 %% resume(Cont, Session) -> {ok, _, _} | {partial, _, _, _} | {error, _}
 %%
-%% Same gate as execute_query/2 above -- resume/2 also dispatches Session
-%% straight into a handle_call that resolves bare nrefs via resolve_home/2.
+%% Same gate as execute_query/2 above, but load-bearing for a different
+%% reason here: resume/2 never calls resolve_home/2 (bfs_step/5 uses
+%% home_of_id/2 + session_read_arcs_home/5, and is_scaffold_node/2 takes an
+%% already-resolved Home). validate_session_home/1 must still run first,
+%% though -- it has to complete before validate_cont_homes/2 below, whose
+%% home_id(maps:get(project, Session, environment)) would function_clause
+%% on a malformed Project handle.
 resume(Cont, Session) when is_map(Session) ->
     case validate_session_home(Session) of
         ok ->
@@ -219,13 +224,26 @@ validate_session_home(Session) ->
 %% Only the target and the frontier are checked. Visited keys are never
 %% resolved -- they are compared, and a foreign id there can only ever
 %% fail to match, which is harmless.
+%%
+%% FrontierOk/1 folds a shape check into the same lists:all/2 pass: a
+%% frontier element of the wrong arity does not match {Id, _N, _P} and
+%% falls to the catch-all `false` clause, rather than being silently
+%% dropped by a list-comprehension generator (as a plain `[Id || {Id, _N,
+%% _P} <- Frontier]` would do) and passing the gate unchecked. #cont_path{}
+%% is defined in a public header and resume/2's Cont argument is
+%% unguarded, so a malformed frontier element must fail closed here --
+%% bfs_step/5's fold would otherwise function_clause deep inside this
+%% gen_server's singleton process.
 validate_cont_homes(#cont_path{target = {TargetId, _Nref},
                                frontier = Frontier}, Session) ->
     Bound = home_id(maps:get(project, Session, environment)),
-    Ids = [TargetId | [Id || {Id, _N, _P} <- Frontier]],
-    case lists:all(fun(environment) -> true;
-                      (Id)          -> Id =:= Bound
-                   end, Ids) of
+    HomeOk = fun(environment) -> true;
+                (Id)          -> Id =:= Bound
+             end,
+    FrontierOk = fun({Id, _N, _P}) -> HomeOk(Id);
+                    (_Malformed)   -> false
+                 end,
+    case HomeOk(TargetId) andalso lists:all(FrontierOk, Frontier) of
         true  -> ok;
         false -> {error, session_project_mismatch}
     end.
@@ -919,11 +937,11 @@ all_subclasses(C) ->
 bfs(_Snap, _ToKey, _Budget, _D, _Kinds, _Vis, [], Session) ->
     {{ok, no_path}, Session};
 bfs(Snap, ToKey, Budget, 0, Kinds, Vis, Frontier, Session) ->
-    %% Depth exhausted but frontier non-empty -- partial.
-    BestSoFar = case Frontier of
-        [{_HomeId, _Nref, P} | _] -> P;
-        []                        -> []
-    end,
+    %% Depth exhausted but frontier non-empty -- partial. The first bfs/8
+    %% clause above already matches an empty Frontier (any D) and returns
+    %% before this clause is reached, so Frontier is guaranteed non-empty
+    %% here; no `[] -> []` fallback arm is reachable.
+    [{_HomeId, _Nref, BestSoFar} | _] = Frontier,
     Cont = #cont_path{snapshot_at     = Snap,
                       target          = ToKey,
                       arc_kinds       = Kinds,

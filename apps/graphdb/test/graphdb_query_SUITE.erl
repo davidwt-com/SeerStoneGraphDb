@@ -119,7 +119,8 @@
     t5_cross_store_edge_discloses_home/1,
     t3_continuation_state_is_home_qualified/1,
     t6_resume_round_trip_under_project_session/1,
-    resume_rejects_foreign_project_continuation/1
+    resume_rejects_foreign_project_continuation/1,
+    resume_rejects_malformed_frontier_continuation/1
 ]).
 
 suite() ->
@@ -207,7 +208,8 @@ groups() ->
         t5_cross_store_edge_discloses_home,
         t3_continuation_state_is_home_qualified,
         t6_resume_round_trip_under_project_session,
-        resume_rejects_foreign_project_continuation
+        resume_rejects_foreign_project_continuation,
+        resume_rejects_malformed_frontier_continuation
      ]}].
 
 
@@ -1125,6 +1127,38 @@ resume_rejects_foreign_project_continuation(_Config) ->
     PidBefore = whereis(graphdb_query),
     ?assertEqual({error, session_project_mismatch},
                  graphdb_query:resume(Cont, OtherSession)),
+    ?assertEqual(PidBefore, whereis(graphdb_query)).
+
+%%---------------------------------------------------------------------
+%% A continuation whose frontier carries a malformed (wrong-arity) element
+%% must be rejected on the caller side too, not just a foreign home id.
+%% Pre-fix, `[Id || {Id, _N, _P} <- Frontier]` silently dropped the bad
+%% element instead of failing the gate; a hand-built continuation with a
+%% valid target and one malformed frontier tuple would then pass
+%% validate_cont_homes/2 and function_clause inside bfs_step/5's fold --
+%% INSIDE the graphdb_query singleton, taking it down for every session in
+%% the VM. The pid assertion is the point: it proves the singleton
+%% survived.
+%%---------------------------------------------------------------------
+resume_rejects_malformed_frontier_continuation(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, A, _} = graphdb_instance:create_instance(Project, "TMA", Cls,
+                                                  root()),
+    {ok, B, _} = graphdb_instance:create_instance(Project, "TMB", Cls, A),
+    {ok, C, _} = graphdb_instance:create_instance(Project, "TMC", Cls, B),
+    {ok, D, _} = graphdb_instance:create_instance(Project, "TMD", Cls, C),
+    Q = #q_find_path{from = D, to = A, max_depth = 1,
+                     arc_kinds = [composition]},
+    S0 = graphdb_query:new_session(Project),
+    {partial, _, Cont, S1} = graphdb_query:execute_query(Q, S0),
+    #cont_path{frontier = Frontier} = Cont,
+    [{HomeId, Nref, _Path} | Rest] = Frontier,
+    CorruptFrontier = [{HomeId, Nref} | Rest],
+    CorruptCont = Cont#cont_path{frontier = CorruptFrontier},
+    PidBefore = whereis(graphdb_query),
+    ?assertEqual({error, session_project_mismatch},
+                 graphdb_query:resume(CorruptCont, S1)),
     ?assertEqual(PidBefore, whereis(graphdb_query)).
 
 

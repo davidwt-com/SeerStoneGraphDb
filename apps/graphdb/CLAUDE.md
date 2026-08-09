@@ -439,7 +439,10 @@ Parses and executes graph queries. Public API:
 - `new_session/0`, `new_session/1`, `refresh/1` — snapshot-semantics session lifecycle. `new_session/1` binds the session to a `Project`; `new_session/0` stays environment-only.
 - `execute_query/1`, `execute_query/2` — ephemeral and session-threaded
 - `resume/2` — continue a `#cont_path{}` (returns
-  `{error, snapshot_expired}` if the session has been refreshed since)
+  `{error, snapshot_expired}` if the session has been refreshed since,
+  `{error, invalid_project}` for a malformed session `Project` handle, or
+  `{error, session_project_mismatch}` for a continuation whose target/frontier
+  carry a home id foreign to the session)
 - `find_path/3` — convenience wrapper for `#q_find_path{}`
 
 Queries are represented as records defined in
