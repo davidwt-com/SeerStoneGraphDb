@@ -183,8 +183,15 @@ execute_query(Query, Session) when is_map(Session) ->
 %% straight into a handle_call that resolves bare nrefs via resolve_home/2.
 resume(Cont, Session) when is_map(Session) ->
     case validate_session_home(Session) of
-        ok               -> gen_server:call(?MODULE, {resume, Cont, Session});
-        {error, _} = Err -> Err
+        ok ->
+            case validate_cont_homes(Cont, Session) of
+                ok ->
+                    gen_server:call(?MODULE, {resume, Cont, Session});
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
     end.
 
 %% validate_session_home(Session) -> ok | {error, invalid_project}
@@ -198,6 +205,29 @@ validate_session_home(Session) ->
     case maps:get(project, Session, environment) of
         environment -> ok;
         Project     -> graphdb_project:require_project(Project)
+    end.
+
+%% validate_cont_homes(Cont, Session) -> ok | {error, session_project_mismatch}
+%%
+%% Every home_id() a continuation can feed to home_of_id/2 must be
+%% resolvable against THIS session. Checked on the caller side, before
+%% the gen_server:call, for the same reason validate_session_home/1 is:
+%% home_of_id/2 would otherwise return the wrong project's handle (or
+%% `undefined` for an environment-bound session) deep inside the
+%% singleton's own handle_call.
+%%
+%% Only the target and the frontier are checked. Visited keys are never
+%% resolved -- they are compared, and a foreign id there can only ever
+%% fail to match, which is harmless.
+validate_cont_homes(#cont_path{target = {TargetId, _Nref},
+                               frontier = Frontier}, Session) ->
+    Bound = home_id(maps:get(project, Session, environment)),
+    Ids = [TargetId | [Id || {Id, _N, _P} <- Frontier]],
+    case lists:all(fun(environment) -> true;
+                      (Id)          -> Id =:= Bound
+                   end, Ids) of
+        true  -> ok;
+        false -> {error, session_project_mismatch}
     end.
 
 %% find_path/3 — public convenience matching the query task spec API.

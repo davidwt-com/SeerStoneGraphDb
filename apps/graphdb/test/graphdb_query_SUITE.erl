@@ -116,7 +116,10 @@
     %% SP2 follow-up — Home routing for arc-discovered nrefs
     t1_env_only_path_identical_across_sessions/1,
     t2_shadowed_target_is_not_falsely_found/1,
-    t5_cross_store_edge_discloses_home/1
+    t5_cross_store_edge_discloses_home/1,
+    t3_continuation_state_is_home_qualified/1,
+    t6_resume_round_trip_under_project_session/1,
+    resume_rejects_foreign_project_continuation/1
 ]).
 
 suite() ->
@@ -201,7 +204,10 @@ groups() ->
      {sp2_traversal_home_routing, [], [
         t1_env_only_path_identical_across_sessions,
         t2_shadowed_target_is_not_falsely_found,
-        t5_cross_store_edge_discloses_home
+        t5_cross_store_edge_discloses_home,
+        t3_continuation_state_is_home_qualified,
+        t6_resume_round_trip_under_project_session,
+        resume_rejects_foreign_project_continuation
      ]}].
 
 
@@ -1040,6 +1046,86 @@ t5_cross_store_edge_discloses_home(_Config) ->
                      arc_kinds = [instantiation]}, Session),
     ?assertMatch([#{from := X, via := ?ARC_INST_TO_CLASS, to := Cls,
                     kind := instantiation, home := environment}], Path).
+
+%%---------------------------------------------------------------------
+%% T3' -- Half B's state shape, asserted where it is observable.
+%% (The design's original T3 -- visiting project-6 must not suppress
+%% environment-6 -- is not constructible under this scope; see the
+%% plan's Task 4 scope note.)
+%%---------------------------------------------------------------------
+t3_continuation_state_is_home_qualified(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, A, _} = graphdb_instance:create_instance(Project, "T3A", Cls,
+                                                  root()),
+    {ok, B, _} = graphdb_instance:create_instance(Project, "T3B", Cls, A),
+    {ok, C, _} = graphdb_instance:create_instance(Project, "T3C", Cls, B),
+    {ok, D, _} = graphdb_instance:create_instance(Project, "T3D", Cls, C),
+    Anchor = maps:get(anchor, Project),
+    Q = #q_find_path{from = D, to = A, max_depth = 1,
+                     arc_kinds = [composition]},
+    {partial, _Best, Cont, _S1} = graphdb_query:execute_query(
+        Q, graphdb_query:new_session(Project)),
+    #cont_path{target = Target, visited = Visited, frontier = Frontier} =
+        Cont,
+    ?assertEqual({{project, Anchor}, A}, Target),
+    ?assert(lists:all(fun({_HomeId, N}) when is_integer(N) -> true;
+                         (_)                               -> false
+                      end, maps:keys(Visited))),
+    ?assert(lists:all(fun({_HomeId, N, P}) -> is_integer(N)
+                                              andalso is_list(P);
+                         (_)                -> false
+                      end, Frontier)).
+
+%%---------------------------------------------------------------------
+%% T6 -- the new frontier/visited shapes survive a round trip through
+%% #cont_path{}: partial + resume must equal an unbounded run.
+%%---------------------------------------------------------------------
+t6_resume_round_trip_under_project_session(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, A, _} = graphdb_instance:create_instance(Project, "T6A", Cls,
+                                                  root()),
+    {ok, B, _} = graphdb_instance:create_instance(Project, "T6B", Cls, A),
+    {ok, C, _} = graphdb_instance:create_instance(Project, "T6C", Cls, B),
+    {ok, D, _} = graphdb_instance:create_instance(Project, "T6D", Cls, C),
+    Bounded = #q_find_path{from = D, to = A, max_depth = 2,
+                           arc_kinds = [composition]},
+    S0 = graphdb_query:new_session(Project),
+    {partial, _Best, Cont, S1} = graphdb_query:execute_query(Bounded, S0),
+    {ok, Resumed, _S2} = graphdb_query:resume(Cont, S1),
+    {ok, Direct, _S3} = graphdb_query:execute_query(
+        #q_find_path{from = D, to = A, max_depth = 9,
+                     arc_kinds = [composition]},
+        graphdb_query:new_session(Project)),
+    ?assertEqual(Direct, Resumed).
+
+%%---------------------------------------------------------------------
+%% A continuation carrying a project id the session is not bound to must
+%% be rejected on the caller side, not carried into home_of_id/2 inside
+%% the singleton. Same reasoning as validate_session_home/1: the pid
+%% must be unchanged afterwards.
+%%---------------------------------------------------------------------
+resume_rejects_foreign_project_continuation(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, A, _} = graphdb_instance:create_instance(Project, "TFA", Cls,
+                                                  root()),
+    {ok, B, _} = graphdb_instance:create_instance(Project, "TFB", Cls, A),
+    {ok, C, _} = graphdb_instance:create_instance(Project, "TFC", Cls, B),
+    {ok, D, _} = graphdb_instance:create_instance(Project, "TFD", Cls, C),
+    Q = #q_find_path{from = D, to = A, max_depth = 1,
+                     arc_kinds = [composition]},
+    S0 = graphdb_query:new_session(Project),
+    {partial, _, Cont, S1} = graphdb_query:execute_query(Q, S0),
+    {ok, OtherP}  = graphdb_project:register_project("TF other"),
+    {ok, Other}   = graphdb_project:open(OtherP),
+    OtherSession  = S1#{project => Other,
+                        snapshot_at => maps:get(snapshot_at, S1)},
+    PidBefore = whereis(graphdb_query),
+    ?assertEqual({error, session_project_mismatch},
+                 graphdb_query:resume(Cont, OtherSession)),
+    ?assertEqual(PidBefore, whereis(graphdb_query)).
 
 
 %%---------------------------------------------------------------------
