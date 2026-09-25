@@ -120,7 +120,12 @@
     t3_continuation_state_is_home_qualified/1,
     t6_resume_round_trip_under_project_session/1,
     resume_rejects_foreign_project_continuation/1,
-    resume_rejects_malformed_frontier_continuation/1
+    resume_rejects_malformed_frontier_continuation/1,
+    %% Membership traversal -- env class -> project instances (arc 30)
+    m1_env_class_reaches_project_instance/1,
+    m2_sibling_instances_meet_through_their_class/1,
+    m3_shadowing_instance_rows_do_not_leak/1,
+    m4_env_session_finds_no_instances/1
 ]).
 
 suite() ->
@@ -131,7 +136,7 @@ all() ->
      {group, q2_describe_attribute}, {group, q3_describe_class},
      {group, q4_describe_instance}, {group, q5_list_instances_of},
      {group, q6_find_path}, {group, sp2_project_session},
-     {group, sp2_traversal_home_routing}].
+     {group, sp2_traversal_home_routing}, {group, membership_traversal}].
 
 groups() ->
     [{skeleton, [], [
@@ -210,6 +215,12 @@ groups() ->
         t6_resume_round_trip_under_project_session,
         resume_rejects_foreign_project_continuation,
         resume_rejects_malformed_frontier_continuation
+     ]},
+     {membership_traversal, [], [
+        m1_env_class_reaches_project_instance,
+        m2_sibling_instances_meet_through_their_class,
+        m3_shadowing_instance_rows_do_not_leak,
+        m4_env_session_finds_no_instances
      ]}].
 
 
@@ -1160,6 +1171,89 @@ resume_rejects_malformed_frontier_continuation(_Config) ->
     ?assertEqual({error, session_project_mismatch},
                  graphdb_query:resume(CorruptCont, S1)),
     ?assertEqual(PidBefore, whereis(graphdb_query)).
+
+%%=====================================================================
+%% Membership traversal -- an environment class reaches its project
+%% instances across arc 30 (?ARC_CLASS_TO_INST), whose rows live in the
+%% PROJECT's relationship table despite the environment source.
+%%=====================================================================
+
+%%---------------------------------------------------------------------
+%% M1 -- environment class -> project instance.  The hop crosses stores,
+%% so the edge discloses the project's home_id().
+%%---------------------------------------------------------------------
+m1_env_class_reaches_project_instance(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, X, _} = graphdb_instance:create_instance(Project, "M1X", Cls,
+                                                  root()),
+    Session = graphdb_query:new_session(Project),
+    {ok, Path, _} = graphdb_query:execute_query(
+        #q_find_path{from = Cls, to = X, max_depth = 2,
+                     arc_kinds = [instantiation]}, Session),
+    Anchor = maps:get(anchor, Project),
+    ?assertMatch([#{from := Cls, via := ?ARC_CLASS_TO_INST, to := X,
+                    kind := instantiation, home := {project, Anchor}}],
+                 Path).
+
+%%---------------------------------------------------------------------
+%% M2 -- round trip through the environment: instance -29-> class
+%% -30-> sibling instance.  Each crossing discloses the store it enters.
+%%---------------------------------------------------------------------
+m2_sibling_instances_meet_through_their_class(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, X, _} = graphdb_instance:create_instance(Project, "M2X", Cls,
+                                                  root()),
+    {ok, Y, _} = graphdb_instance:create_instance(Project, "M2Y", Cls,
+                                                  root()),
+    Session = graphdb_query:new_session(Project),
+    {ok, Path, _} = graphdb_query:execute_query(
+        #q_find_path{from = X, to = Y, max_depth = 3,
+                     arc_kinds = [instantiation]}, Session),
+    Anchor = maps:get(anchor, Project),
+    ?assertMatch([#{from := X, via := ?ARC_INST_TO_CLASS, to := Cls,
+                    home := environment},
+                  #{from := Cls, via := ?ARC_CLASS_TO_INST, to := Y,
+                    home := {project, Anchor}}], Path).
+
+%%---------------------------------------------------------------------
+%% M3 -- the characterization filter is load-bearing.  Project instance
+%% 6 is an instance of Cls, so the project's relationship table holds a
+%% row with source_nref = 6 (its own arc 29 to Cls).  Expanding the
+%% ENVIRONMENT's node 6 (Names) must not pick that row up: it belongs to
+%% the instance, not to the attribute.  Unfiltered, BFS would report
+%% A1 -23-> 6 -29-> Cls, a path that does not exist.
+%%---------------------------------------------------------------------
+m3_shadowing_instance_rows_do_not_leak(_Config) ->
+    {ok, A1} = graphdb_attr:create_name_attribute("M3Alpha"),
+    Cls = widget_class(),
+    {ok, P} = graphdb_project:register_project("M3 shadowing"),
+    {ok, Project} = graphdb_project:open(P),
+    Root = root_instance(Project),
+    _ = [root_instance(Project) || _ <- lists:seq(1, 4)],
+    {ok, Six, _} = graphdb_instance:create_instance(Project, "M3Six", Cls,
+                                                    Root),
+    ?assertEqual(?NREF_NAMES, Six),
+    Session = graphdb_query:new_session(Project),
+    Reply = graphdb_query:execute_query(
+        #q_find_path{from = A1, to = Cls, max_depth = 2,
+                     arc_kinds = [taxonomy, instantiation]}, Session),
+    ?assertNotMatch({ok, [_ | _], _}, Reply).
+
+%%---------------------------------------------------------------------
+%% M4 -- with no project bound there is nowhere for a class's instances
+%% to live, so the environment-only walk is unchanged.
+%%---------------------------------------------------------------------
+m4_env_session_finds_no_instances(_Config) ->
+    Project = proj(),
+    Cls = widget_class(),
+    {ok, X, _} = graphdb_instance:create_instance(Project, "M4X", Cls,
+                                                  root()),
+    ?assertMatch({ok, no_path, _}, graphdb_query:execute_query(
+        #q_find_path{from = Cls, to = X, max_depth = 2,
+                     arc_kinds = [instantiation]},
+        graphdb_query:new_session())).
 
 
 %%---------------------------------------------------------------------

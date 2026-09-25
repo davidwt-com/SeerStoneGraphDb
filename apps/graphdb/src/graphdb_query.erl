@@ -36,6 +36,11 @@
 %% #q_instances_of{} implemented.
 %% Rev A.7 Date: May 2026 Author: David W. Thomas
 %% #q_find_path{} + resume/2 + snapshot_expired.
+%% Rev A.8 Date: 2026-09-24 Author: David W. Thomas
+%% Membership traversal: BFS expanding an environment class under a
+%% project-bound session also reads that project's class->instance rows
+%% (arc 30), so a class reaches its project instances.  #q_instances_of{}
+%% shares the same read (session_read_outgoing/4).
 %%---------------------------------------------------------------------
 -module(graphdb_query).
 -behaviour(gen_server).
@@ -181,7 +186,7 @@ execute_query(Query, Session) when is_map(Session) ->
 %%
 %% Same gate as execute_query/2 above, but load-bearing for a different
 %% reason here: resume/2 never calls resolve_home/2 (bfs_step/5 uses
-%% home_of_id/2 + session_read_arcs_home/5, and is_scaffold_node/2 takes an
+%% home_of_id/2 + session_read_outgoing/4, and is_scaffold_node/2 takes an
 %% already-resolved Home). validate_session_home/1 must still run first,
 %% though -- it has to complete before validate_cont_homes/2 below, whose
 %% home_id(maps:get(project, Session, environment)) would function_clause
@@ -338,31 +343,20 @@ dispatch(#q_instances_of{class = C, recursive = Recursive}, Session) ->
         true  -> [C | all_subclasses(C)];
         false -> [C]
     end,
-    %% Instances only ever live in projects: the class->instance
-    %% membership row (characterization = ?ARC_CLASS_TO_INST) is written
-    %% into the project's own relationship table
-    %% (graphdb_instance:instance_records/5), never into the
-    %% environment's, regardless of what resolve_home/2 would pick for
-    %% the bare class nref (a class node never exists in a project's
-    %% node table, so resolve_home/2 always answers `environment` for
-    %% it -- the wrong table for this particular arc shape). When the
-    %% session has a Project bound, route every class in Classes
-    %% through that project explicitly instead of resolve_home/2. With
-    %% no Project bound, preserve prior behaviour exactly (environment
-    %% read, which legitimately yields [] since no environment-resident
-    %% class has project-resident instances).
-    ProjectHome = maps:get(project, Session, undefined),
+    %% Classes are environment nodes, but their class->instance rows
+    %% (characterization = ?ARC_CLASS_TO_INST) live in the bound
+    %% project's own relationship table -- the same read BFS makes when
+    %% it expands a class; see session_read_outgoing/4. With no project
+    %% bound this yields [], since no environment class has
+    %% environment-resident instances.
     {Instances, Session1} = lists:foldl(
         fun(Cl, {Acc, S}) ->
-            {Arcs, S1} = if
-                ProjectHome =:= undefined ->
-                    session_read_arcs(S, Cl, outgoing, [instantiation]);
-                true ->
-                    session_read_arcs_home(S, ProjectHome, Cl, outgoing,
-                                           [instantiation])
-            end,
-            Members = [A#relationship.target_nref || A <- Arcs,
-                A#relationship.characterization =:= ?ARC_CLASS_TO_INST],
+            {Groups, S1} = session_read_outgoing(S, environment, Cl,
+                                                 [instantiation]),
+            Members = [A#relationship.target_nref
+                       || {_ReadHome, Arcs} <- Groups, A <- Arcs,
+                          A#relationship.characterization =:=
+                              ?ARC_CLASS_TO_INST],
             {Members ++ Acc, S1}
         end, {[], Session}, Classes),
     {{ok, lists:usort(Instances)}, Session1};
@@ -508,9 +502,10 @@ session_read_arcs(#{cache := Cache} = Session, Nref, Dir, Kinds) ->
 %%
 %% Same read-through cache as session_read_arcs/4, but Home is supplied
 %% by the caller instead of being resolved via resolve_home/2 -- for
-%% arc shapes (e.g. the project-side class->instance membership arc
-%% read by #q_instances_of{}) where resolve_home/2's bare-nref
-%% resolution would pick the wrong table. Cache key is {arcs, Home,
+%% reads where the Home is already known (BFS frontier nodes, and the
+%% project-side class->instance membership rows read by
+%% session_read_outgoing/4), so resolve_home/2's bare-nref guess could
+%% only pick the wrong table. Cache key is {arcs, Home,
 %% Nref, Direction, KindFilter}: a 5-tuple, deliberately a different
 %% shape from session_read_arcs/4's 4-tuple {arcs, Nref, Direction,
 %% KindFilter} key, so the two read paths can never collide in the
@@ -527,6 +522,62 @@ session_read_arcs_home(#{cache := Cache} = Session, Home, Nref, Dir, Kinds) ->
         Cached ->
             {Cached, Session}
     end.
+
+%%---------------------------------------------------------------------
+%% session_read_outgoing(Session, Home, Nref, KindFilter)
+%%     -> {[{ReadHome, [#relationship{}]}], Session1}
+%%
+%% Outgoing arcs of a node whose Home is already known, grouped by the
+%% store each row was READ from. The grouping must survive to the
+%% caller: graphdb_ns:arc_target_namespace/3 derives an arc-discovered
+%% nref's Home from the store its row came out of, not from the node's.
+%%
+%% One arc shape is stored away from its source: the class->instance
+%% membership row (characterization ?ARC_CLASS_TO_INST) has an
+%% environment class as source_nref but is written into the PROJECT's
+%% relationship table (graphdb_instance:instance_records/5). So for an
+%% environment-homed node under a project-bound session, the project's
+%% table is read as well -- filtered to that one characterization.
+%%
+%% The filter is load-bearing. The project table is indexed by
+%% source_nref, and a project instance numbered the same as the
+%% environment node (project allocators start at 1) has outgoing rows
+%% of its own there -- composition, arc 29 -- which belong to the
+%% instance, not to the environment node being expanded.
+%%---------------------------------------------------------------------
+session_read_outgoing(Session, Home, Nref, Kinds) ->
+    {Arcs, S1} = session_read_arcs_home(Session, Home, Nref, outgoing,
+                                        Kinds),
+    case membership_home(Session, Home, Kinds) of
+        none ->
+            {[{Home, Arcs}], S1};
+        Project ->
+            {Rows, S2} = session_read_arcs_home(S1, Project, Nref,
+                                                outgoing, [instantiation]),
+            Members = [A || A <- Rows,
+                A#relationship.characterization =:= ?ARC_CLASS_TO_INST],
+            {[{Home, Arcs}, {Project, Members}], S2}
+    end.
+
+%% membership_home(Session, Home, KindFilter) -> Project | none
+%%
+%% The project whose table holds Home's class->instance rows, if any:
+%% only an environment-homed node has them elsewhere, only a bound
+%% project can hold them, and only a filter admitting `instantiation`
+%% wants them. A session binds at most one project, so a class reaches
+%% that project's instances and no other's.
+membership_home(Session, environment, Kinds) ->
+    case maps:get(project, Session, undefined) of
+        undefined   -> none;
+        environment -> none;
+        Project     ->
+            case Kinds =:= all orelse lists:member(instantiation, Kinds) of
+                true  -> Project;
+                false -> none
+            end
+    end;
+membership_home(_Session, _ProjectHome, _Kinds) ->
+    none.
 
 read_arcs(Home, Nref, outgoing, Kinds) ->
     Raw = mnesia:dirty_index_read(graphdb_ns:rel_table(Home), Nref,
@@ -967,27 +1018,41 @@ bfs_step(ToKey, Kinds, Frontier, Vis, Session) ->
                 {found, _} ->
                     {Acc, V, Found, S};
                 not_found ->
-                    %% session_read_arcs_home/5, NOT session_read_arcs/4:
-                    %% the Home is known, so there is nothing to guess.
+                    %% Home-supplied read, NOT session_read_arcs/4: the
+                    %% Home is known, so there is nothing to guess.
                     Home = home_of_id(S, HomeId),
-                    {Arcs, S1} = session_read_arcs_home(S, Home, Nref,
-                                                        outgoing, Kinds),
-                    expand_arcs(ToKey, HomeId, Home, Nref, PathToHere,
-                                Arcs, V, Acc, Found, S1)
+                    {Groups, S1} = session_read_outgoing(S, Home, Nref,
+                                                         Kinds),
+                    expand_groups(ToKey, HomeId, Nref, PathToHere, Groups,
+                                  V, Acc, Found, S1)
             end
         end, {[], Vis, not_found, Session}, Frontier).
 
-expand_arcs(_ToKey, _FromId, _FromHome, _From, _PathHere, [], V, Acc,
+%% expand_groups/9 -- expand each {ReadHome, Arcs} group from
+%% session_read_outgoing/4 against the store it was read from, stopping
+%% at the first group that finds the target.
+expand_groups(_ToKey, _FromId, _From, _PathHere, _Groups, V, Acc,
+              {found, _} = Found, S) ->
+    {Acc, V, Found, S};
+expand_groups(_ToKey, _FromId, _From, _PathHere, [], V, Acc, Found, S) ->
+    {Acc, V, Found, S};
+expand_groups(ToKey, FromId, From, PathHere, [{ReadHome, Arcs} | Rest],
+              V, Acc, Found, S) ->
+    {Acc1, V1, Found1, S1} = expand_arcs(ToKey, FromId, ReadHome, From,
+                                         PathHere, Arcs, V, Acc, Found, S),
+    expand_groups(ToKey, FromId, From, PathHere, Rest, V1, Acc1, Found1, S1).
+
+expand_arcs(_ToKey, _FromId, _ReadHome, _From, _PathHere, [], V, Acc,
             Found, S) ->
     {Acc, V, Found, S};
-expand_arcs(ToKey, FromId, FromHome, From, PathHere,
+expand_arcs(ToKey, FromId, ReadHome, From, PathHere,
             [#relationship{kind             = K,
                            characterization = C,
                            target_nref      = T} | Rest],
             V, Acc, Found, S) ->
     %% Half A: the target's Home is DERIVED from the arc we arrived on,
     %% never guessed from the bare nref.
-    TargetHome = graphdb_ns:arc_target_namespace(FromHome, K, C),
+    TargetHome = graphdb_ns:arc_target_namespace(ReadHome, K, C),
     TargetId   = home_id(TargetHome),
     Edge = make_edge(From, C, T, K, FromId, TargetId),
     NewPath = PathHere ++ [Edge],
@@ -1000,12 +1065,12 @@ expand_arcs(ToKey, FromId, FromHome, From, PathHere,
         _ ->
             case maps:is_key(Key, V) orelse is_scaffold_node(TargetHome, T) of
                 true ->
-                    expand_arcs(ToKey, FromId, FromHome, From, PathHere,
+                    expand_arcs(ToKey, FromId, ReadHome, From, PathHere,
                                 Rest, V, Acc, Found, S);
                 false ->
                     V1 = V#{Key => true},
                     Acc1 = Acc ++ [{TargetId, T, NewPath}],
-                    expand_arcs(ToKey, FromId, FromHome, From, PathHere,
+                    expand_arcs(ToKey, FromId, ReadHome, From, PathHere,
                                 Rest, V1, Acc1, Found, S)
             end
     end.
