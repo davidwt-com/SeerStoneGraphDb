@@ -97,6 +97,8 @@ Both are addressed here as Half B.
   its project instances across arc 30 (`?ARC_CLASS_TO_INST`), whose rows live
   in the *project's* table despite an environment source.
   `#q_instances_of{}` keeps its `session_read_arcs_home/5` special case.
+  *(Since implemented: `graphdb_query:session_read_outgoing/4`, shared by
+  BFS and `#q_instances_of{}` — see `TASKS.md`.)*
 - **`target_kind` backfill** onto arc labels 21–30, which would let
   `graphdb_instance:check_target_kind/3` drop its permissive legacy arm.
 - **`#q_get_arcs{}` / `#q_describe{}`** keep entry-point guessing, by design.
@@ -238,8 +240,8 @@ internal shape change, not an API break.
 
 ## Result shape
 
-An edge gains a `home` key **iff** the target's Home differs from the Home the
-arc row was read from:
+An edge gains a `home` key **iff** the target's Home differs from the Home of
+the node the edge leaves:
 
 ```erlang
 Edge = case TargetId =:= FromId of
@@ -260,6 +262,8 @@ Under this scope the only crossing reachable is project→environment via arc 29
 (a project instance's outgoing membership row targets an environment class), so
 `environment` is the only value emitted today. The `{project, _}` form is
 reserved for when membership traversal lands.
+*(Membership traversal has since landed: an environment class → project
+instance hop over arc 30 emits `{project, Anchor}`.)*
 
 > This shape varies by content, which is harder to pattern-match than a key
 > that is always present. The rule above is stated precisely so the variation

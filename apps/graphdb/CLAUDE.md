@@ -459,7 +459,10 @@ deterministically instead, via `graphdb_ns:arc_target_namespace/3`
 (keyed on `#relationship.kind`, with the 29/30 membership pair split on
 characterization) — no guessing. `#q_find_path{}` state (frontier,
 visited set, target) is Home-qualified via `home_id()`, and a path edge
-discloses `home` when a hop crosses stores.
+discloses `home` when a hop crosses stores. Under a project-bound session an
+environment class also reaches that project's instances across arc 30 — the
+class→instance rows live in the project's table — via
+`session_read_outgoing/4`, which `#q_instances_of{}` shares.
 
 See `docs/designs/f3-graphdb-query-design.md` for the architectural contract.
 

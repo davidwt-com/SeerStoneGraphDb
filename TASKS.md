@@ -562,11 +562,17 @@ foreign project id. `resolve_home/2` and `session_read_arcs/4` are unchanged
 — only `bfs_step/5` changed caller, to `session_read_arcs_home/5`. Design:
 `docs/designs/query-traversal-home-routing-design.md`.
 
-Still open, deliberately out of that scope: BFS at an environment-homed node
-reads only the environment relationship table, so an environment class cannot
-reach its project instances across arc 30 (`?ARC_CLASS_TO_INST`).
-`#q_instances_of{}` keeps its `session_read_arcs_home/5` special case. Also
-still open: backfilling `target_kind` onto bootstrap arc labels 21–30, which
+**Membership traversal — implemented.** BFS expanding an environment-homed
+node under a project-bound session now also reads the bound project's
+relationship table for that node's class→instance rows (arc 30,
+`?ARC_CLASS_TO_INST`), which live there despite their environment source, so
+an environment class reaches its project instances; the edge discloses
+`home => {project, Anchor}`. The project read is filtered to characterization
+30, because a project instance numbered the same as the environment node has
+outgoing rows of its own in that table. `#q_instances_of{}` shares the same
+read (`session_read_outgoing/4`) instead of its former special case.
+
+Still open: backfilling `target_kind` onto bootstrap arc labels 21–30, which
 would let `graphdb_instance:check_target_kind/3` drop its permissive legacy
 arm.
 
