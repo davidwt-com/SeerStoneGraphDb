@@ -572,9 +572,12 @@ an environment class reaches its project instances; the edge discloses
 outgoing rows of its own in that table. `#q_instances_of{}` shares the same
 read (`session_read_outgoing/4`) instead of its former special case.
 
-Still open: backfilling `target_kind` onto bootstrap arc labels 21–30, which
-would let `graphdb_instance:check_target_kind/3` drop its permissive legacy
-arm.
+**`target_kind` backfill — superseded.** Bootstrap arc labels 21–30 join
+nodes of more than one kind, so a single `target_kind` would be false.
+Replaced by the seed cache / attribute placement / relationship label pairs
+work, which removes `target_kind` altogether — design (draft, under review):
+`docs/designs/seed-cache-attribute-placement-label-pairs-design.md`. A first
+strict-check implementation is preserved as tag `strict-labels-snapshot-1`.
 
 **Defect (Important, pre-existing, unrelated to SP2) —
 `rel_id_server` counter seeding — IMPLEMENTED (2026-08-09).** Filed as a

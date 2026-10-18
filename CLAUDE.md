@@ -166,6 +166,22 @@ A project is an anchor node under `Projects` (nref 5). `graphdb_project:register
 
 Because each project's allocator restarts at 1, project nrefs collide numerically with environment bootstrap nrefs 1–35 — a bare nref is only unique within a `Home`. SP1 (reference & namespace model) and SP2 (physical project store) are both implemented; SP3 (distribution/residency + proxy dereference) and SP4 (migration) remain. See `docs/designs/project-env-reference-namespace-model-design.md`, `docs/designs/sp2-physical-project-store-design.md`, and `TASKS.md` → *Multi-project sessions*.
 
+### Seeds & Persistence — In Flux (no compatibility yet)
+
+The seed ontology (`bootstrap.terms` nodes, worker `init/1` seeds, their
+AVPs and placement) and the persistence layout (Mnesia tables, project
+stores, DETS allocators) are still being redesigned. Until this section is
+removed:
+
+- **No backward compatibility.** A change may require wiping `data/` and
+  re-bootstrapping. Do not write migrations or compatibility shims for
+  existing data.
+- **Seed changes are allowed** when a design calls for them. Keep
+  `docs/diagrams/ontology-tree.md` and the nref quick-reference current.
+- **When this stabilises,** remove this section and the README note. From
+  then on, seed changes go through a governed upgrade process that also
+  refreshes the seed caches.
+
 ### Bootstrap Nref Quick-Reference (BFS, nrefs 1–35)
 
 ```
