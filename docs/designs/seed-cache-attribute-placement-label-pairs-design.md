@@ -5,8 +5,9 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 # Seed Cache, Attribute Placement, and Relationship Label Pairs — Design
 
-**Status:** draft under review (2026-10-18; review round 1 answers folded
-in). Supersedes the strict `target_kind` check preserved as tag
+**Status:** approved (2026-11-11; review round 2 accepted the remaining
+open questions as proposed). Supersedes the strict `target_kind` check
+preserved as tag
 `strict-labels-snapshot-1`; that snapshot's code does **not** drive this
 design or its plan.
 
@@ -84,16 +85,17 @@ cached without anyone remembering to register it.
 
 A new module, `graphdb_seeds` (plain module, no process):
 
-| Function         | Purpose                                                                   |
-| ---------------- | ------------------------------------------------------------------------- |
-| `load/0`         | Read every node below `?NREF_START`, derive per-seed facts, store, verify |
-| `node/1`         | `{ok, #node{}}` for a seed (by nref or label atom), `not_seed` otherwise  |
-| `nref/1`         | Label atom → nref (for example `retired`, `arc_inst_parent`)              |
-| `is_seed/1`      | Boolean                                                                   |
-| `anchor/1`       | Nearest seed at or above a node (walks runtime parents via Mnesia)        |
-| `placement/1`    | Placement rule for an anchor seed (Piece B)                               |
-| `source_kinds/1` | Allowed source kinds for a label (Piece C)                                |
-| `erase/0`        | Drop the cache (tests, governed upgrades)                                 |
+| Function         | Purpose                                                                   | Piece |
+| ---------------- | ------------------------------------------------------------------------- | ----- |
+| `load/0`         | Read every node below `?NREF_START`, derive per-seed facts, store, verify | A     |
+| `node/1`         | `{ok, #node{}}` for a seed (by nref or label atom), `not_seed` otherwise  | A     |
+| `nref/1`         | Label atom → nref (for example `retired`, `arc_inst_parent`)              | A     |
+| `is_seed/1`      | Boolean; `false` for every nref until `load/0` has run                    | A     |
+| `all/0`          | Every cached seed record (empty before `load/0`)                          | A     |
+| `erase/0`        | Drop the cache (tests, governed upgrades)                                 | A     |
+| `anchor/1`       | Nearest seed at or above a node (walks runtime parents via Mnesia)        | B     |
+| `placement/1`    | Placement rule for an anchor seed                                         | B     |
+| `source_kinds/1` | Allowed source kinds for a label                                          | C     |
 
 Storage is `persistent_term`, one key holding a map. Reads are lock-free and
 make no gen_server call, so they are safe inside an Mnesia transaction —
@@ -106,8 +108,18 @@ atom: the keys `graphdb_nrefs` already defines for the bootstrap macros
 today (`retired`, `instantiable`, `applies_to`, …). This lets
 `graphdb_seeds:nref/1` replace the 13 `graphdb_attr:seeded_nrefs/0`-style
 gen_server lookups — calls the project notes flag as a deadlock hazard if
-one ever lands inside a transaction. Which of those to convert in Piece A
-is part of open question 2.
+one ever lands inside a transaction. Lookups are converted only where this
+work touches them (open question 2).
+
+`load/0` builds the label index from `graphdb_nrefs:scaffold_spec/0`, the
+`seeded_nrefs/0` maps of `graphdb_attr`, `graphdb_language` and
+`graphdb_rules`, and `graphdb_instance:remote_reference_class/0`. It reads
+these once, at boot, outside any transaction. Non-integer map values (such
+as `env_language_code => en`) are not labels. A worker that is not running
+contributes no labels — its seeds are still cached by nref, since the seed
+set itself comes from Mnesia. A label whose nref is not in the seed set
+fails the load with `{label_not_seed, Label, Nref}`: it means a seeding
+worker started after the flip.
 
 ### When it loads
 
@@ -128,8 +140,21 @@ guard). **Not guarded today** and to be closed with
 
 - `graphdb_class:add_superclass/2`, `add_qualifying_characteristic/2,3`,
   `bind_qc_value/3` on a seed class.
-- `graphdb_attr:retro_stamp_attribute_types/0` called in the runtime phase.
+- `graphdb_attr:retro_stamp_attribute_types/0` and the Template marker
+  stamp, when they would write a seed. Both are find-first, so after a
+  normal boot they write nothing and still return `ok`. This matters
+  because `graphdb_language` and `graphdb_rules` call
+  `retro_stamp_attribute_types/0` from `init/1`, which runs again when the
+  supervisor restarts a worker after the flip. Refusing the call outright
+  would turn every such restart into a crash loop.
 - `graphdb_mgr:rebuild_caches/0` — skips seeds (their caches are fixed).
+  The bootstrap loader calls it before the flip, when it must rebuild them.
+
+All three key off `graphdb_seeds:is_seed/1`, which is `false` until
+`load/0` has run. Bootstrap and worker `init/1` seeding are therefore
+unaffected. The guards apply to the environment only: project nrefs start
+at 1 and overlap seed nrefs numerically, so `rebuild_caches(Project)` skips
+nothing.
 
 ### Reads
 
@@ -164,7 +189,7 @@ created under `retired`, `Template`, an arc label, and so on). The table is
 a whitelist: a new seed group is closed until the table names it.
 
 The type columns (a name attribute cannot go under Instance Literals, and so
-on) are a proposal — see open question 3.
+on) were confirmed in review round 2 (question 3).
 
 Blocked: `{error, {parent_not_allowed, AttrType, ParentNref}}`. Warned:
 `logger:warning` naming the label, its parent and the family, then the
@@ -320,33 +345,31 @@ Other known test impact:
 ## Delivery
 
 Three PRs, in order — A, B, C — each through the usual post-merge reset.
+Piece A also carries the test-harness change, so B and C start from
+suites that already boot like production.
 The snapshot's code has been set aside (it is preserved in tag
 `strict-labels-snapshot-1`); the review branch carries only the
 "in flux" notes, the `TASKS.md` pointer and this spec. Piece C writes the
 structural guard afresh as part of the new gate.
 
-## Open questions for review
+## Review questions (all resolved)
 
-1. **Seed boundary.** Is "every node below `?NREF_START` at the flip" right?
-   It includes the rule meta-classes, their default templates, the Remote
-   Reference class, `lang_human` and English.
-2. **Read sweep.** Convert only the reads this work touches (proposed), or
-   sweep every read of a seed node from persistence in Piece A? The same
-   question applies to replacing the `seeded_nrefs/0` gen_server lookups
-   with `graphdb_seeds:nref/1`.
-3. **Type ↔ group.** The whitelist is accepted. Confirm the type columns
-   within it too (names only under 11/12, literals only under Instance
-   Literals, relationships only under 14–16)?
-4. ~~**`target_kind`.**~~ **Resolved:** removed entirely.
+Questions 1–3 and 5–7 were accepted as proposed in review round 2
+(2026-11-11).
+
+1. **Seed boundary.** Every node below `?NREF_START` at the flip, including
+   the rule meta-classes, their default templates, the Remote Reference
+   class, `lang_human` and English.
+2. **Read sweep.** Convert only the reads this work touches; a full sweep
+   of seed reads and `seeded_nrefs/0` lookups is a follow-up.
+3. **Type ↔ group.** The type columns stand: names only under 11/12,
+   literals only under Instance Literals, relationships only under 14–16.
+4. **`target_kind`.** Removed entirely (round 1).
 5. **Target expectation.** A label's target expectation is its
-   reciprocal's `source_kind` — my reading of "if we are not specifying the
-   other attribute of the characterization, then we cannot provide the
-   target expectations". Is that what you meant?
-6. **AVP names and shape.** `source_kind` as a list, and
-   `reciprocal_attribute` — acceptable names?
-7. **Freezing seed classes.** Guarding them means no QCs, superclasses or
-   bound values can be added at runtime to the Remote Reference class, the
-   rule meta-classes or `lang_human`. Nothing in `src` or `test` does this
-   today, so the guard breaks no existing behaviour. Is it intended?
-8. ~~**Branch handling.**~~ **Resolved:** snapshot code set aside; it does
-   not drive the design or the plan.
+   reciprocal's `source_kind`.
+6. **AVP names and shape.** `source_kind` (a list) and
+   `reciprocal_attribute`.
+7. **Freezing seed classes.** Intended: no QCs, superclasses or bound values
+   are added at runtime to any seed class.
+8. **Branch handling.** Snapshot code set aside; it does not drive the
+   design or the plan (round 1).
