@@ -389,6 +389,9 @@ init_per_testcase(_TC, Config) ->
 	Config1.
 
 setup_isolated_env(Config) ->
+	%% Self-heal: a cache leaked by an init that failed after flip()
+	%% must not reach this case.
+	ok = graphdb_test_boot:reset(),
 	OrigCwd = proplists:get_value(orig_cwd, Config),
 	Unique = integer_to_list(erlang:unique_integer([positive, monotonic])),
 	TmpDir = filename:join([OrigCwd, "_build", "test", "ct_scratch",
@@ -415,8 +418,12 @@ setup_isolated_env(Config) ->
 %% temp dir.
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
-	verify_cache_invariant(TC),
-	graphdb_test_boot:assert_seeds_unchanged(TC),
+	%% Checks need Mnesia: compute the verdict first, run the whole
+	%% teardown, then return it (a returned {fail, _} fails the case).
+	Verdict = graphdb_test_boot:checks(TC, [
+		fun() -> verify_cache_invariant(TC) end,
+		fun() -> graphdb_test_boot:assert_seeds_unchanged(TC) end
+	]),
 	%% Stop workers if running (write_delegation tests start these)
 	catch gen_server:stop(graphdb_rules),
 	catch gen_server:stop(graphdb_instance),
@@ -449,7 +456,7 @@ end_per_testcase(TC, Config) ->
 	application:unset_env(seerstone_graph_db, bootstrap_file),
 	application:unset_env(mnesia, dir),
 
-	ok.
+	Verdict.
 
 %% Asserts the "arcs authoritative; lists cached" invariant after each
 %% testcase.  A failed verify is a fatal CT failure -- it indicates a
@@ -462,7 +469,7 @@ verify_cache_invariant(TC) ->
 				{error, Mismatches} ->
 					ct:pal("Cache invariant failed in ~p:~n~p",
 						[TC, Mismatches]),
-					ct:fail({cache_invariant_failed, TC, Mismatches})
+					{fail, {cache_invariant_failed, TC, Mismatches}}
 			end;
 		_ -> ok
 	end.
@@ -863,9 +870,15 @@ rebuild_caches_restores_after_poison(_Config) ->
 rebuild_caches_skips_seeds_after_load(_Config) ->
 	[Seed] = mnesia:dirty_read(nodes, ?NREF_NAMES),
 	ok = mnesia:dirty_write(nodes, Seed#node{parents = []}),
-	ok = graphdb_mgr:rebuild_caches(),
-	?assertMatch([#node{parents = []}], mnesia:dirty_read(nodes, ?NREF_NAMES)),
-	ok = mnesia:dirty_write(nodes, Seed).
+	%% Restore the seed even when an assertion fails, so the corrupted
+	%% row never outlives the case.
+	try
+		ok = graphdb_mgr:rebuild_caches(),
+		?assertMatch([#node{parents = []}],
+			mnesia:dirty_read(nodes, ?NREF_NAMES))
+	after
+		ok = mnesia:dirty_write(nodes, Seed)
+	end.
 
 rebuild_caches_project_ignores_seed_set(_Config) ->
 	%% A project nref can equal a seed nref; the project row is still rebuilt.

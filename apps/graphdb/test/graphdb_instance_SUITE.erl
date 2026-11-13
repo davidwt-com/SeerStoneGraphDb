@@ -491,6 +491,9 @@ setup_firing_fixtures(TC, Config) ->
 	end.
 
 setup_isolated_env(Config) ->
+	%% Self-heal: a cache leaked by an init that failed after flip()
+	%% must not reach this case.
+	ok = graphdb_test_boot:reset(),
 	OrigCwd = proplists:get_value(orig_cwd, Config),
 	Unique = integer_to_list(erlang:unique_integer([positive, monotonic])),
 	TmpDir = filename:join([OrigCwd, "_build", "test", "ct_scratch",
@@ -509,9 +512,13 @@ setup_isolated_env(Config) ->
 %% end_per_testcase/2
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
-	verify_cache_invariant(TC),
-	verify_project_cache_invariant(TC),
-	graphdb_test_boot:assert_seeds_unchanged(TC),
+	%% Checks need Mnesia: compute the verdict first, run the whole
+	%% teardown, then return it (a returned {fail, _} fails the case).
+	Verdict = graphdb_test_boot:checks(TC, [
+		fun() -> verify_cache_invariant(TC) end,
+		fun() -> verify_project_cache_invariant(TC) end,
+		fun() -> graphdb_test_boot:assert_seeds_unchanged(TC) end
+	]),
 	catch gen_server:stop(graphdb_rules),
 	catch gen_server:stop(graphdb_instance),
 	catch gen_server:stop(graphdb_class),
@@ -534,7 +541,7 @@ end_per_testcase(TC, Config) ->
 
 	application:unset_env(seerstone_graph_db, bootstrap_file),
 	application:unset_env(mnesia, dir),
-	ok.
+	Verdict.
 
 %% Asserts the "arcs authoritative; lists cached" invariant after each
 %% testcase.  A failed verify is a fatal CT failure -- it indicates a
@@ -547,7 +554,7 @@ verify_cache_invariant(TC) ->
 				{error, Mismatches} ->
 					ct:pal("Cache invariant failed in ~p:~n~p",
 						[TC, Mismatches]),
-					ct:fail({cache_invariant_failed, TC, Mismatches})
+					{fail, {cache_invariant_failed, TC, Mismatches}}
 			end;
 		_ -> ok
 	end.
@@ -569,8 +576,8 @@ verify_project_cache_invariant(TC) ->
 						{error, Mismatches} ->
 							ct:pal("Project cache invariant failed in ~p:~n~p",
 								[TC, Mismatches]),
-							ct:fail({project_cache_invariant_failed, TC,
-								Mismatches})
+							{fail, {project_cache_invariant_failed, TC,
+								Mismatches}}
 					end;
 				_ -> ok
 			end

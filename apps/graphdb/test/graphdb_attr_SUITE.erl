@@ -201,6 +201,9 @@ init_per_testcase(_TC, Config) ->
 	Config1.
 
 setup_isolated_env(Config) ->
+	%% Self-heal: a cache leaked by an init that failed after flip()
+	%% must not reach this case.
+	ok = graphdb_test_boot:reset(),
 	OrigCwd = proplists:get_value(orig_cwd, Config),
 	Unique = integer_to_list(erlang:unique_integer([positive, monotonic])),
 	TmpDir = filename:join([OrigCwd, "_build", "test", "ct_scratch",
@@ -219,8 +222,12 @@ setup_isolated_env(Config) ->
 %% end_per_testcase/2
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
-	verify_cache_invariant(TC),
-	graphdb_test_boot:assert_seeds_unchanged(TC),
+	%% Checks need Mnesia: compute the verdict first, run the whole
+	%% teardown, then return it (a returned {fail, _} fails the case).
+	Verdict = graphdb_test_boot:checks(TC, [
+		fun() -> verify_cache_invariant(TC) end,
+		fun() -> graphdb_test_boot:assert_seeds_unchanged(TC) end
+	]),
 	catch gen_server:stop(graphdb_attr),
 	catch gen_server:stop(graphdb_mgr),
 	catch gen_server:stop(graphdb_nref),
@@ -240,7 +247,7 @@ end_per_testcase(TC, Config) ->
 
 	application:unset_env(seerstone_graph_db, bootstrap_file),
 	application:unset_env(mnesia, dir),
-	ok.
+	Verdict.
 
 %% Asserts the "arcs authoritative; lists cached" invariant after each
 %% testcase.  A failed verify is a fatal CT failure -- it indicates a
@@ -253,7 +260,7 @@ verify_cache_invariant(TC) ->
 				{error, Mismatches} ->
 					ct:pal("Cache invariant failed in ~p:~n~p",
 						[TC, Mismatches]),
-					ct:fail({cache_invariant_failed, TC, Mismatches})
+					{fail, {cache_invariant_failed, TC, Mismatches}}
 			end;
 		_ -> ok
 	end.
@@ -1032,10 +1039,15 @@ retro_stamp_refuses_to_write_a_seed(_Config) ->
 	Stripped = Row#node{attribute_value_pairs =
 		[P || #{attribute := K} = P <- Row#node.attribute_value_pairs, K =/= At]},
 	ok = mnesia:dirty_write(nodes, Stripped),
-	?assertEqual({error, {permanent_node_immutable, ?NREF_INST_NAME_ATTRS}},
-		graphdb_attr:retro_stamp_attribute_types()),
-	?assert(is_pid(whereis(graphdb_attr))),
-	ok = mnesia:dirty_write(nodes, Row).
+	%% Restore the seed even when an assertion fails, so the corrupted
+	%% row never outlives the case.
+	try
+		?assertEqual({error, {permanent_node_immutable, ?NREF_INST_NAME_ATTRS}},
+			graphdb_attr:retro_stamp_attribute_types()),
+		?assert(is_pid(whereis(graphdb_attr)))
+	after
+		ok = mnesia:dirty_write(nodes, Row)
+	end.
 
 attr_restart_after_load_succeeds(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),

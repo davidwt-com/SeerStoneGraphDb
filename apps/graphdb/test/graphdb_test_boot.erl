@@ -9,7 +9,12 @@
 %%				production: workers start in the permanent nref phase
 %%				(seeding in their init/1), then the runtime phase is
 %%				set and the seed cache is loaded.  Also provides the
-%%				teardown reset and the seeds-unchanged assertion.
+%%				teardown reset, the seeds-unchanged check and checks/2,
+%%				which turns teardown checks into an end_per_testcase
+%%				verdict.  Common Test ignores a raise from
+%%				end_per_testcase but fails the case when it returns
+%%				{fail, Reason}, so the checks return a verdict and
+%%				never raise.
 %%---------------------------------------------------------------------
 -module(graphdb_test_boot).
 
@@ -18,7 +23,8 @@
 -export([
 	flip/0,
 	reset/0,
-	assert_seeds_unchanged/1
+	assert_seeds_unchanged/1,
+	checks/2
 ]).
 
 -record(node, {nref, kind, parents = [], classes = [],
@@ -35,6 +41,8 @@ reset() ->
 	catch persistent_term:erase({graphdb_nref, phase}),
 	ok.
 
+%% assert_seeds_unchanged(TC) -> ok | {fail, {seeds_changed, TC, Nrefs}}
+%%
 %% Every cached seed must equal its stored row; a runtime path that
 %% rewrites a seed makes the cache stale.
 assert_seeds_unchanged(TC) ->
@@ -48,7 +56,31 @@ assert_seeds_unchanged(TC) ->
 				[] -> ok;
 				_ ->
 					ct:pal("Seeds changed in ~p:~n~p", [TC, Bad]),
-					ct:fail({seeds_changed, TC, [E || {E, _, _} <- Bad]})
+					{fail, {seeds_changed, TC, [E || {E, _, _} <- Bad]}}
 			end;
 		_ -> ok
+	end.
+
+%% checks(TC, [fun(() -> ok | {fail, Reason})]) -> ok | {fail, Reason}
+%%
+%% Runs every check (each needs Mnesia, so call this before teardown
+%% stops anything) and returns the first failure, or ok.  A check that
+%% raises becomes {fail, {check_crashed, TC, Class, Reason}}, so the
+%% rest of teardown still runs.  end_per_testcase returns the verdict
+%% after its teardown.
+checks(TC, Checks) ->
+	Verdicts = [check(TC, C) || C <- Checks],
+	case [V || {fail, _} = V <- Verdicts] of
+		[]          -> ok;
+		[First | _] -> First
+	end.
+
+check(TC, Check) ->
+	try Check() of
+		ok               -> ok;
+		{fail, _} = Fail -> Fail
+	catch
+		Class:Reason ->
+			ct:pal("Teardown check crashed in ~p: ~p:~p", [TC, Class, Reason]),
+			{fail, {check_crashed, TC, Class, Reason}}
 	end.
