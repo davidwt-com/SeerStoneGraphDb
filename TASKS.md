@@ -575,7 +575,7 @@ read (`session_read_outgoing/4`) instead of its former special case.
 **`target_kind` backfill — superseded.** Bootstrap arc labels 21–30 join
 nodes of more than one kind, so a single `target_kind` would be false.
 Replaced by the seed cache / attribute placement / relationship label pairs
-work, which removes `target_kind` altogether — design (draft, under review):
+work, which removes `target_kind` altogether — design (approved 2026-11-11):
 `docs/designs/seed-cache-attribute-placement-label-pairs-design.md`. A first
 strict-check implementation is preserved as tag `strict-labels-snapshot-1`.
 
@@ -589,7 +589,8 @@ load: `graphdb_class` refuses `add_superclass/2`,
 Template marker stamp refuse an actual seed write; `graphdb_mgr:rebuild_caches/0`
 skips seed rows. Every CT suite that starts graphdb workers now flips and
 loads like production and asserts at teardown that no seed row changed;
-`graphdb_seeds_SUITE` adds the first test that boots the real application.
+`graphdb_seeds_SUITE` adds the first test that boots the real application;
+that case works around a pre-existing empty-data-dir boot defect (below).
 Design: the spec above ("Piece A", "Freezing seeds", "Test harness").
 Pieces B (attribute placement) and C (relationship label pairs) remain.
 
