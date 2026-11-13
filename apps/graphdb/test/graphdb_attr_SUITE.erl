@@ -90,6 +90,9 @@
 	list_relationship_types_includes_buckets/1,
 	%% Attribute type
 	seeded_nrefs_includes_attribute_type/1,
+	retro_stamp_after_load_is_noop/1,
+	retro_stamp_refuses_to_write_a_seed/1,
+	attr_restart_after_load_succeeds/1,
 	create_name_stamps_attribute_type/1,
 	create_literal_stamps_attribute_type/1,
 	create_relationship_stamps_attribute_type/1,
@@ -159,7 +162,10 @@ groups() ->
 			attribute_type_of_not_found,
 			attribute_type_of_non_attribute,
 			bootstrap_attributes_retro_stamped,
-			retro_stamp_idempotent_on_restart
+			retro_stamp_idempotent_on_restart,
+			retro_stamp_after_load_is_noop,
+			retro_stamp_refuses_to_write_a_seed,
+			attr_restart_after_load_succeeds
 		]}
 	].
 
@@ -195,6 +201,9 @@ init_per_testcase(_TC, Config) ->
 	Config1.
 
 setup_isolated_env(Config) ->
+	%% Self-heal: a cache leaked by an init that failed after flip()
+	%% must not reach this case.
+	ok = graphdb_test_boot:reset(),
 	OrigCwd = proplists:get_value(orig_cwd, Config),
 	Unique = integer_to_list(erlang:unique_integer([positive, monotonic])),
 	TmpDir = filename:join([OrigCwd, "_build", "test", "ct_scratch",
@@ -213,11 +222,16 @@ setup_isolated_env(Config) ->
 %% end_per_testcase/2
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
-	verify_cache_invariant(TC),
+	%% Checks need Mnesia: compute the verdict first, run the whole
+	%% teardown, then return it (a returned {fail, _} fails the case).
+	Verdict = graphdb_test_boot:checks(TC, [
+		fun() -> verify_cache_invariant(TC) end,
+		fun() -> graphdb_test_boot:assert_seeds_unchanged(TC) end
+	]),
 	catch gen_server:stop(graphdb_attr),
 	catch gen_server:stop(graphdb_mgr),
 	catch gen_server:stop(graphdb_nref),
-	catch persistent_term:erase({graphdb_nref, phase}),
+	graphdb_test_boot:reset(),
 	catch gen_server:stop(rel_id_server),
 	catch application:stop(nref),
 	catch mnesia:stop(),
@@ -233,7 +247,7 @@ end_per_testcase(TC, Config) ->
 
 	application:unset_env(seerstone_graph_db, bootstrap_file),
 	application:unset_env(mnesia, dir),
-	ok.
+	Verdict.
 
 %% Asserts the "arcs authoritative; lists cached" invariant after each
 %% testcase.  A failed verify is a fatal CT failure -- it indicates a
@@ -246,7 +260,7 @@ verify_cache_invariant(TC) ->
 				{error, Mismatches} ->
 					ct:pal("Cache invariant failed in ~p:~n~p",
 						[TC, Mismatches]),
-					ct:fail({cache_invariant_failed, TC, Mismatches})
+					{fail, {cache_invariant_failed, TC, Mismatches}}
 			end;
 		_ -> ok
 	end.
@@ -263,6 +277,7 @@ verify_cache_invariant(TC) ->
 %%-----------------------------------------------------------------------------
 seeds_created_on_first_start(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{attribute_literals_group := AttrLitNref,
 	       literal_type             := Lt,
 	       target_kind              := Tk,
@@ -287,6 +302,7 @@ seeds_created_on_first_start(_Config) ->
 %%-----------------------------------------------------------------------------
 seeds_idempotent_on_restart(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, Seeds1} = graphdb_attr:seeded_nrefs(),
 	NodesBefore = mnesia:table_info(nodes, size),
 
@@ -304,6 +320,7 @@ seeds_idempotent_on_restart(_Config) ->
 %%-----------------------------------------------------------------------------
 seeded_nrefs_are_above_floor(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{literal_type := Lt, target_kind := Tk, relationship_avp := Ra,
 			attribute_type := At}} = graphdb_attr:seeded_nrefs(),
 	?assert(Lt > ?NREF_ENGLISH andalso Lt < ?NREF_START),
@@ -318,6 +335,7 @@ seeded_nrefs_are_above_floor(_Config) ->
 %%-----------------------------------------------------------------------------
 template_avp_marker_stamped(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{relationship_avp := RaNref}} = graphdb_attr:seeded_nrefs(),
 	{atomic, [Node]} = mnesia:transaction(fun() ->
 		mnesia:read(nodes, ?ARC_TEMPLATE)
@@ -331,6 +349,7 @@ template_avp_marker_stamped(_Config) ->
 %%-----------------------------------------------------------------------------
 template_avp_marker_idempotent(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{atomic, [Before]} = mnesia:transaction(fun() ->
 		mnesia:read(nodes, ?ARC_TEMPLATE)
 	end),
@@ -350,6 +369,7 @@ template_avp_marker_idempotent(_Config) ->
 %%-----------------------------------------------------------------------------
 seeds_attribute_literals_subgroup(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{attribute_literals_group := AttrLitNref}} =
 		graphdb_attr:seeded_nrefs(),
 	?assert(is_integer(AttrLitNref)),
@@ -365,6 +385,7 @@ seeds_attribute_literals_subgroup(_Config) ->
 %%-----------------------------------------------------------------------------
 attr_literal_seeds_parented_under_subgroup(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{attribute_literals_group := AttrLitNref,
 	       literal_type             := Lt,
 	       target_kind              := Tk,
@@ -385,6 +406,7 @@ attr_literal_seeds_parented_under_subgroup(_Config) ->
 %%-----------------------------------------------------------------------------
 seeds_instantiable_marker(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{instantiable := InstNref,
 		   attribute_literals_group := AttrLitNref,
 		   attribute_type := AtNref}} =
@@ -401,6 +423,7 @@ seeds_instantiable_marker(_Config) ->
 
 seeds_retired_marker(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{retired := RetNref,
 		   attribute_literals_group := AttrLitNref,
 		   attribute_type := AtNref}} =
@@ -425,6 +448,7 @@ seeds_retired_marker(_Config) ->
 %%-----------------------------------------------------------------------------
 create_name_attribute_basic(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, Nref} = graphdb_attr:create_name_attribute("TestName"),
 	{ok, Node} = graphdb_attr:get_attribute(Nref),
 	?assertEqual(attribute, Node#node.kind),
@@ -438,6 +462,7 @@ create_name_attribute_basic(_Config) ->
 %%-----------------------------------------------------------------------------
 create_literal_attribute_stores_type(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{literal_type := Lt}} = graphdb_attr:seeded_nrefs(),
 	{ok, Nref} = graphdb_attr:create_literal_attribute("Weight", kilogram),
 	{ok, Node} = graphdb_attr:get_attribute(Nref),
@@ -453,6 +478,7 @@ create_literal_attribute_stores_type(_Config) ->
 %%-----------------------------------------------------------------------------
 create_relationship_attribute_pair(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{target_kind := Tk}} = graphdb_attr:seeded_nrefs(),
 	{ok, {FwdNref, RevNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Makes", "MadeBy", class),
@@ -479,6 +505,7 @@ create_relationship_attribute_pair(_Config) ->
 %%-----------------------------------------------------------------------------
 create_relationship_attribute_pair_atomic(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	NodesBefore = mnesia:table_info(nodes, size),
 	RelsBefore  = mnesia:table_info(relationships, size),
 	{ok, {FwdNref, RevNref}} =
@@ -510,6 +537,7 @@ create_relationship_attribute_pair_atomic(_Config) ->
 %%-----------------------------------------------------------------------------
 create_relationship_attribute_rejects_bad_kind(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	?assertEqual({error, {invalid_target_kind, bogus}},
 		graphdb_attr:create_relationship_attribute_pair("X", "Y", bogus)).
 
@@ -520,6 +548,7 @@ create_relationship_attribute_rejects_bad_kind(_Config) ->
 %%-----------------------------------------------------------------------------
 create_relationship_attribute_pair_under_parent(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	NodesBefore = mnesia:table_info(nodes, size),
 	{ok, {FwdNref, RevNref}} =
 		graphdb_attr:create_relationship_attribute_pair("AppliesTo", "AppliedBy",
@@ -545,6 +574,7 @@ create_relationship_attribute_pair_under_parent(_Config) ->
 %%-----------------------------------------------------------------------------
 create_relationship_attribute_pair_bad_parent(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	NodesBefore = mnesia:table_info(nodes, size),
 	RelsBefore  = mnesia:table_info(relationships, size),
 	?assertMatch({error, {parent_not_found, 99999999}},
@@ -561,6 +591,7 @@ create_relationship_attribute_pair_bad_parent(_Config) ->
 %%-----------------------------------------------------------------------------
 create_relationship_type_basic(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, Nref} = graphdb_attr:create_relationship_type("Ownership"),
 	{ok, Node} = graphdb_attr:get_attribute(Nref),
 	?assertEqual([8], Node#node.parents),
@@ -574,6 +605,7 @@ create_relationship_type_basic(_Config) ->
 %%-----------------------------------------------------------------------------
 new_attribute_writes_taxonomy_arcs(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	RelsBefore = mnesia:table_info(relationships, size),
 	{ok, Nref} = graphdb_attr:create_name_attribute("ArcTest"),
 	RelsAfter = mnesia:table_info(relationships, size),
@@ -606,6 +638,7 @@ new_attribute_writes_taxonomy_arcs(_Config) ->
 %%-----------------------------------------------------------------------------
 create_value_attribute_under_parent(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
 	{ok, Nref} =
 		graphdb_attr:create_value_attribute("CatName", name, [],
@@ -624,6 +657,7 @@ create_value_attribute_under_parent(_Config) ->
 %%-----------------------------------------------------------------------------
 create_value_attribute_bad_args(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	NodesBefore = mnesia:table_info(nodes, size),
 	?assertMatch({error, {bad_type_args, name, [junk]}},
 		graphdb_attr:create_value_attribute("X", name, [junk], ?NREF_NAMES)),
@@ -639,6 +673,7 @@ create_value_attribute_bad_args(_Config) ->
 %%-----------------------------------------------------------------------------
 named_wrappers_take_explicit_parent(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, NameNref} =
 		graphdb_attr:create_name_attribute("ClsName", ?NREF_CLS_NAME_ATTRS),
 	{ok, NameNode} = graphdb_attr:get_attribute(NameNref),
@@ -653,6 +688,7 @@ named_wrappers_take_explicit_parent(_Config) ->
 %%-----------------------------------------------------------------------------
 default_wrappers_preserve_parents(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, N6} = graphdb_attr:create_name_attribute("Plain"),
 	{ok, N7} = graphdb_attr:create_literal_attribute("Mass", kilogram),
 	{ok, N8} = graphdb_attr:create_relationship_type("Assoc"),
@@ -670,6 +706,7 @@ default_wrappers_preserve_parents(_Config) ->
 %%-----------------------------------------------------------------------------
 create_literal_attribute_under_custom_parent(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	%% Create a sub-group under Literals (7), then a literal attr under it.
 	{ok, SubgroupNref} = graphdb_attr:create_literal_attribute(
 		"test_subgroup", group, ?NREF_LITERALS),
@@ -688,6 +725,7 @@ create_literal_attribute_under_custom_parent(_Config) ->
 %%-----------------------------------------------------------------------------
 get_attribute_returns_node(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	%% Nref 6 (Names) is a bootstrap attribute
 	{ok, Node} = graphdb_attr:get_attribute(6),
 	?assertEqual(6, Node#node.nref),
@@ -698,6 +736,7 @@ get_attribute_returns_node(_Config) ->
 %%-----------------------------------------------------------------------------
 get_attribute_not_found(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	?assertEqual({error, not_found}, graphdb_attr:get_attribute(99999)).
 
 %%-----------------------------------------------------------------------------
@@ -705,6 +744,7 @@ get_attribute_not_found(_Config) ->
 %%-----------------------------------------------------------------------------
 get_attribute_rejects_non_attribute(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	%% Nref 1 (Root) is a category, not attribute
 	?assertEqual({error, not_an_attribute}, graphdb_attr:get_attribute(1)).
 
@@ -715,6 +755,7 @@ get_attribute_rejects_non_attribute(_Config) ->
 %%-----------------------------------------------------------------------------
 list_attributes_includes_bootstrap_and_runtime(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, Before} = graphdb_attr:list_attributes(),
 	%% Bootstrap has 27 attribute nodes (nrefs 6-31 = 26, plus lang_code);
 	%% seeding adds: Attribute Literals sub-group (1) + 8 literal attrs
@@ -733,6 +774,7 @@ list_attributes_includes_bootstrap_and_runtime(_Config) ->
 %%-----------------------------------------------------------------------------
 list_relationship_types_includes_buckets(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, Before} = graphdb_attr:list_relationship_types(),
 	Nrefs = lists:sort([N#node.nref || N <- Before]),
 	?assertEqual([13, 14, 15, 16], Nrefs),
@@ -753,6 +795,7 @@ list_relationship_types_includes_buckets(_Config) ->
 %%-----------------------------------------------------------------------------
 seeded_nrefs_includes_attribute_type(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, Map} = graphdb_attr:seeded_nrefs(),
 	?assert(maps:is_key(attribute_type, Map)),
 	#{attribute_type := At} = Map,
@@ -769,6 +812,7 @@ seeded_nrefs_includes_attribute_type(_Config) ->
 %%-----------------------------------------------------------------------------
 create_name_stamps_attribute_type(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
 	{ok, Nref} = graphdb_attr:create_name_attribute("Whatever"),
 	{ok, Node} = graphdb_attr:get_attribute(Nref),
@@ -781,6 +825,7 @@ create_name_stamps_attribute_type(_Config) ->
 %%-----------------------------------------------------------------------------
 create_literal_stamps_attribute_type(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{attribute_type := At, literal_type := Lt}} =
 		graphdb_attr:seeded_nrefs(),
 	{ok, Nref} = graphdb_attr:create_literal_attribute("Distance", meters),
@@ -795,6 +840,7 @@ create_literal_stamps_attribute_type(_Config) ->
 %%-----------------------------------------------------------------------------
 create_relationship_stamps_attribute_type(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
 	{ok, {FwdNref, RevNref}} =
 		graphdb_attr:create_relationship_attribute_pair("Drives", "DrivenBy",
@@ -812,6 +858,7 @@ create_relationship_stamps_attribute_type(_Config) ->
 %%-----------------------------------------------------------------------------
 create_relationship_type_stamps_attribute_type(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
 	{ok, Nref} = graphdb_attr:create_relationship_type("Logistics"),
 	{ok, Node} = graphdb_attr:get_attribute(Nref),
@@ -824,6 +871,7 @@ create_relationship_type_stamps_attribute_type(_Config) ->
 %%-----------------------------------------------------------------------------
 attribute_type_of_returns_kind(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, NameNref} = graphdb_attr:create_name_attribute("AnyName"),
 	{ok, LitNref}  = graphdb_attr:create_literal_attribute("Mass", grams),
 	{ok, {FwdNref, _}} =
@@ -849,6 +897,7 @@ attribute_type_of_returns_kind(_Config) ->
 %%-----------------------------------------------------------------------------
 attribute_type_of_not_found(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	?assertEqual({error, not_found},
 		graphdb_attr:attribute_type_of(99999)).
 
@@ -857,6 +906,7 @@ attribute_type_of_not_found(_Config) ->
 %%-----------------------------------------------------------------------------
 attribute_type_of_non_attribute(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	%% Nref 1 (Root) is a category.
 	?assertEqual({error, not_an_attribute},
 		graphdb_attr:attribute_type_of(1)).
@@ -867,6 +917,7 @@ attribute_type_of_non_attribute(_Config) ->
 %%-----------------------------------------------------------------------------
 bootstrap_attributes_retro_stamped(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	%% Names subtree -- 6, 9-12, 17-20 should be `name`.
 	NamesGroup = [?NREF_NAMES, ?NREF_CAT_NAME_ATTRS, ?NREF_ATTR_NAME_ATTRS,
 	              ?NREF_CLS_NAME_ATTRS, ?NREF_INST_NAME_ATTRS,
@@ -898,6 +949,7 @@ bootstrap_attributes_retro_stamped(_Config) ->
 %%-----------------------------------------------------------------------------
 retro_stamp_idempotent_on_restart(_Config) ->
 	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{atomic, [Before6]}  = mnesia:transaction(fun() -> mnesia:read(nodes, 6) end),
 	{atomic, [Before24]} = mnesia:transaction(fun() -> mnesia:read(nodes, ?ARC_ATTR_CHILD) end),
 
@@ -969,3 +1021,36 @@ do_delete_dir(Dir) ->
 		false ->
 			ok
 	end.
+
+
+%%-----------------------------------------------------------------------------
+%% Seed freeze (seed-cache Piece A)
+%%-----------------------------------------------------------------------------
+retro_stamp_after_load_is_noop(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
+	?assertEqual(ok, graphdb_attr:retro_stamp_attribute_types()).
+
+retro_stamp_refuses_to_write_a_seed(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
+	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
+	[Row] = mnesia:dirty_read(nodes, ?NREF_INST_NAME_ATTRS),
+	Stripped = Row#node{attribute_value_pairs =
+		[P || #{attribute := K} = P <- Row#node.attribute_value_pairs, K =/= At]},
+	ok = mnesia:dirty_write(nodes, Stripped),
+	%% Restore the seed even when an assertion fails, so the corrupted
+	%% row never outlives the case.
+	try
+		?assertEqual({error, {permanent_node_immutable, ?NREF_INST_NAME_ATTRS}},
+			graphdb_attr:retro_stamp_attribute_types()),
+		?assert(is_pid(whereis(graphdb_attr)))
+	after
+		ok = mnesia:dirty_write(nodes, Row)
+	end.
+
+attr_restart_after_load_succeeds(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
+	ok = gen_server:stop(graphdb_attr),
+	?assertMatch({ok, _}, graphdb_attr:start_link()).

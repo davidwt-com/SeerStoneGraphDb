@@ -179,7 +179,11 @@ init_per_testcase(_TC, Config) ->
 %% Stops nref, stops Mnesia, restores cwd, and deletes the temp dir.
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
-	verify_cache_invariant(TC),
+	%% Checks need Mnesia: compute the verdict first, run the whole
+	%% teardown, then return it (a returned {fail, _} fails the case).
+	Verdict = graphdb_test_boot:checks(TC, [
+		fun() -> verify_cache_invariant(TC) end
+	]),
 
 	%% Stop applications (ignore errors — they may not be running)
 	catch gen_server:stop(rel_id_server),
@@ -207,7 +211,7 @@ end_per_testcase(TC, Config) ->
 	application:unset_env(seerstone_graph_db, bootstrap_file),
 	application:unset_env(mnesia, dir),
 
-	ok.
+	Verdict.
 
 %% Asserts the "arcs authoritative; lists cached" invariant after each
 %% testcase.  A failed verify is a fatal CT failure -- it indicates a
@@ -220,7 +224,7 @@ verify_cache_invariant(TC) ->
 				{error, Mismatches} ->
 					ct:pal("Cache invariant failed in ~p:~n~p",
 						[TC, Mismatches]),
-					ct:fail({cache_invariant_failed, TC, Mismatches})
+					{fail, {cache_invariant_failed, TC, Mismatches}}
 			end;
 		_ -> ok
 	end.

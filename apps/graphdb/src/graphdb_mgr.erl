@@ -33,6 +33,10 @@
 %% tier-1 primitive).  delete_node remains not_implemented (no worker deletion
 %% API exists yet).
 %%---------------------------------------------------------------------
+%% Rev C Date: November 2026 Author: (completion of Dallas Noyes's design)
+%% Seed freeze: rebuild_caches/0 leaves seed rows untouched once
+%% graphdb_seeds is loaded.
+%%---------------------------------------------------------------------
 -module(graphdb_mgr).
 -behaviour(gen_server).
 
@@ -667,7 +671,7 @@ rebuild_caches_(Home) ->
 	Txn = fun() ->
 		NodesTab = graphdb_ns:node_table(Home),
 		RelTab   = graphdb_ns:rel_table(Home),
-		Nrefs = mnesia:all_keys(NodesTab),
+		Nrefs = [N || N <- mnesia:all_keys(NodesTab), not skip_seed(Home, N)],
 		lists:foreach(fun(N) -> rebuild_one(NodesTab, RelTab, N) end, Nrefs),
 		ok
 	end,
@@ -675,6 +679,12 @@ rebuild_caches_(Home) ->
 		{ok, ok}         -> ok;
 		{error, _} = Err -> Err
 	end.
+
+%% skip_seed(Home, Nref) -> boolean()
+%% Seeds are frozen once the cache is loaded; only the environment table
+%% holds them.  A project nref may equal a seed nref, so projects never skip.
+skip_seed(environment, Nref) -> graphdb_seeds:is_seed(Nref);
+skip_seed(_Project, _Nref)   -> false.
 
 
 %%=============================================================================

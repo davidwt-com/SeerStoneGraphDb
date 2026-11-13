@@ -77,7 +77,11 @@ init_per_testcase(_TC, Config) ->
 	[{tmp_dir, TmpDir} | Config].
 
 end_per_testcase(TC, Config) ->
-	verify_cache_invariant(TC),
+	%% Checks need Mnesia: compute the verdict first, run the whole
+	%% teardown, then return it (a returned {fail, _} fails the case).
+	Verdict = graphdb_test_boot:checks(TC, [
+		fun() -> verify_cache_invariant(TC) end
+	]),
 	catch gen_server:stop(graphdb_mgr),
 	catch gen_server:stop(rel_id_server),
 	catch application:stop(nref),
@@ -91,7 +95,7 @@ end_per_testcase(TC, Config) ->
 	delete_dir_recursive(TmpDir),
 	application:unset_env(seerstone_graph_db, bootstrap_file),
 	application:unset_env(mnesia, dir),
-	ok.
+	Verdict.
 
 
 %%=====================================================================
@@ -125,7 +129,7 @@ verify_cache_invariant(TC) ->
 				ok -> ok;
 				{error, Mismatches} ->
 					ct:pal("Cache invariant failed in ~p:~n~p", [TC, Mismatches]),
-					ct:fail({cache_invariant_failed, TC, Mismatches})
+					{fail, {cache_invariant_failed, TC, Mismatches}}
 			end;
 		_ -> ok
 	end.

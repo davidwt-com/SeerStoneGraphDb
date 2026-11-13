@@ -572,9 +572,40 @@ an environment class reaches its project instances; the edge discloses
 outgoing rows of its own in that table. `#q_instances_of{}` shares the same
 read (`session_read_outgoing/4`) instead of its former special case.
 
-Still open: backfilling `target_kind` onto bootstrap arc labels 21–30, which
-would let `graphdb_instance:check_target_kind/3` drop its permissive legacy
-arm.
+**`target_kind` backfill — superseded.** Bootstrap arc labels 21–30 join
+nodes of more than one kind, so a single `target_kind` would be false.
+Replaced by the seed cache / attribute placement / relationship label pairs
+work, which removes `target_kind` altogether — design (approved 2026-11-11):
+`docs/designs/seed-cache-attribute-placement-label-pairs-design.md`. A first
+strict-check implementation is preserved as tag `strict-labels-snapshot-1`.
+
+**Piece A — seed cache — IMPLEMENTED.** `graphdb_seeds` holds every
+environment node below `?NREF_START` in one `persistent_term` map (plus a
+label to nref index), loaded by `graphdb:start/2` right after the runtime
+flip; reads are safe inside Mnesia transactions. Seeds are frozen after the
+load: `graphdb_class` refuses `add_superclass/2`,
+`add_qualifying_characteristic/2,3` and `bind_qc_value/3` on a seed class
+(`{error, permanent_node_immutable}`); `graphdb_attr`'s retro-stamp and
+Template marker stamp refuse an actual seed write; `graphdb_mgr:rebuild_caches/0`
+skips seed rows. Every CT suite that starts graphdb workers now flips and
+loads like production and asserts at teardown that no seed row changed;
+`graphdb_seeds_SUITE` adds the first tests that boot the real application,
+which exposed the empty-data-dir boot defect below (now fixed).
+Design: the spec above ("Piece A", "Freezing seeds", "Test harness").
+Pieces B (attribute placement) and C (relationship label pairs) remain.
+
+**Defect (Important, pre-existing, found during Piece A) — booting the real
+`graphdb` application on an empty data directory — IMPLEMENTED
+(2026-11-13).** The boot returned
+`{create_table_failed,nodes,{bad_type,nodes,disc_copies,nonode@nohost}}`.
+Mnesia is a `graphdb` application dependency, so it starts with a RAM schema
+before `graphdb`, and `graphdb_bootstrap:ensure_mnesia/0` skipped
+`create_schema` when Mnesia was already running; the `disc_copies` table then
+could not be created. CT never hit it because the suites start workers by
+hand. `ensure_mnesia/0` now converts a running RAM schema to disc
+(`mnesia:change_table_copy_type(schema, node(), disc_copies)`); the
+`graphdb_seeds_SUITE` app-boot cases boot on empty directories with no
+workaround.
 
 **Defect (Important, pre-existing, unrelated to SP2) —
 `rel_id_server` counter seeding — IMPLEMENTED (2026-08-09).** Filed as a

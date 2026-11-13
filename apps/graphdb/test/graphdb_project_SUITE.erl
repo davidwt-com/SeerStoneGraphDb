@@ -148,9 +148,9 @@ init_per_testcase(_TC, Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, _} = graphdb_instance:start_link(),
 	{ok, _} = graphdb_rules:start_link(),
-	%% Mirror production graphdb:start/2: flip to runtime tier after all
-	%% workers have seeded so that register_project allocates runtime nrefs.
-	ok = graphdb_nref:set_runtime_phase(),
+	%% Mirror production graphdb:start/2: flip to runtime tier and load the
+	%% seed cache after all workers have seeded.
+	ok = graphdb_test_boot:flip(),
 	Config1.
 
 
@@ -158,14 +158,19 @@ init_per_testcase(_TC, Config) ->
 %% end_per_testcase/2
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
-	verify_cache_invariant(TC),
+	%% Checks need Mnesia: compute the verdict first, run the whole
+	%% teardown, then return it (a returned {fail, _} fails the case).
+	Verdict = graphdb_test_boot:checks(TC, [
+		fun() -> verify_cache_invariant(TC) end,
+		fun() -> graphdb_test_boot:assert_seeds_unchanged(TC) end
+	]),
 	catch gen_server:stop(graphdb_rules),
 	catch gen_server:stop(graphdb_instance),
 	catch gen_server:stop(graphdb_class),
 	catch gen_server:stop(graphdb_attr),
 	catch gen_server:stop(graphdb_mgr),
 	catch gen_server:stop(graphdb_nref),
-	catch persistent_term:erase({graphdb_nref, phase}),
+	graphdb_test_boot:reset(),
 	catch gen_server:stop(rel_id_server),
 	catch application:stop(nref),
 	catch mnesia:stop(),
@@ -181,7 +186,7 @@ end_per_testcase(TC, Config) ->
 
 	application:unset_env(seerstone_graph_db, bootstrap_file),
 	application:unset_env(mnesia, dir),
-	ok.
+	Verdict.
 
 
 %%=============================================================================
@@ -370,6 +375,9 @@ ensure_loaded(App) ->
 %% setup_isolated_env(Config) -> Config1
 %%-----------------------------------------------------------------------------
 setup_isolated_env(Config) ->
+	%% Self-heal: a cache leaked by an init that failed after flip()
+	%% must not reach this case.
+	ok = graphdb_test_boot:reset(),
 	OrigCwd = proplists:get_value(orig_cwd, Config),
 	Unique = integer_to_list(erlang:unique_integer([positive, monotonic])),
 	TmpDir = filename:join([OrigCwd, "_build", "test", "ct_scratch",
@@ -420,7 +428,7 @@ verify_cache_invariant(TC) ->
 				{error, Mismatches} ->
 					ct:pal("Cache invariant failed in ~p:~n~p",
 						[TC, Mismatches]),
-					ct:fail({cache_invariant_failed, TC, Mismatches})
+					{fail, {cache_invariant_failed, TC, Mismatches}}
 			end;
 		_ -> ok
 	end.

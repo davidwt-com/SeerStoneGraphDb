@@ -57,6 +57,13 @@
 %% Test cases
 %%---------------------------------------------------------------------
 -export([
+	%% Seed freeze
+	add_superclass_refuses_seed_class/1,
+	add_superclass_under_seed_parent_allowed/1,
+	add_qc_refuses_seed_class/1,
+	bind_qc_value_refuses_seed_class/1,
+	seed_class_writable_before_load/1,
+	seed_guard_passes_non_nref_class_arg/1,
 	%% Creation
 	create_class_top_level/1,
 	create_class_subclass/1,
@@ -150,7 +157,8 @@ suite() ->
 all() ->
 	[{group, creation}, {group, templates},
 	 {group, qualifying}, {group, lookups}, {group, hierarchy},
-	 {group, multi_inheritance}, {group, inheritance}].
+	 {group, multi_inheritance}, {group, inheritance},
+	 {group, seed_freeze}].
 
 groups() ->
 	[
@@ -240,6 +248,14 @@ groups() ->
 			inherited_qcs_local_only,
 			inherited_qcs_from_ancestors,
 			inherited_qcs_deduplicates
+		]},
+		{seed_freeze, [], [
+			add_superclass_refuses_seed_class,
+			add_superclass_under_seed_parent_allowed,
+			add_qc_refuses_seed_class,
+			bind_qc_value_refuses_seed_class,
+			seed_class_writable_before_load,
+			seed_guard_passes_non_nref_class_arg
 		]}
 	].
 
@@ -274,9 +290,14 @@ init_per_testcase(_TC, Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
 	%% Start graphdb_attr (seeds literal_type, target_kind, relationship_avp)
 	{ok, _} = graphdb_attr:start_link(),
+	%% All seeding workers are up: boot like production from here on
+	ok = graphdb_test_boot:flip(),
 	Config1.
 
 setup_isolated_env(Config) ->
+	%% Self-heal: a cache leaked by an init that failed after flip()
+	%% must not reach this case.
+	ok = graphdb_test_boot:reset(),
 	OrigCwd = proplists:get_value(orig_cwd, Config),
 	Unique = integer_to_list(erlang:unique_integer([positive, monotonic])),
 	TmpDir = filename:join([OrigCwd, "_build", "test", "ct_scratch",
@@ -295,12 +316,17 @@ setup_isolated_env(Config) ->
 %% end_per_testcase/2
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
-	verify_cache_invariant(TC),
+	%% Checks need Mnesia: compute the verdict first, run the whole
+	%% teardown, then return it (a returned {fail, _} fails the case).
+	Verdict = graphdb_test_boot:checks(TC, [
+		fun() -> verify_cache_invariant(TC) end,
+		fun() -> graphdb_test_boot:assert_seeds_unchanged(TC) end
+	]),
 	catch gen_server:stop(graphdb_class),
 	catch gen_server:stop(graphdb_attr),
 	catch gen_server:stop(graphdb_mgr),
 	catch gen_server:stop(graphdb_nref),
-	catch persistent_term:erase({graphdb_nref, phase}),
+	graphdb_test_boot:reset(),
 	catch gen_server:stop(rel_id_server),
 	catch application:stop(nref),
 	catch mnesia:stop(),
@@ -316,7 +342,7 @@ end_per_testcase(TC, Config) ->
 
 	application:unset_env(seerstone_graph_db, bootstrap_file),
 	application:unset_env(mnesia, dir),
-	ok.
+	Verdict.
 
 %% Asserts the "arcs authoritative; lists cached" invariant after each
 %% testcase.  A failed verify is a fatal CT failure -- it indicates a
@@ -329,7 +355,7 @@ verify_cache_invariant(TC) ->
 				{error, Mismatches} ->
 					ct:pal("Cache invariant failed in ~p:~n~p",
 						[TC, Mismatches]),
-					ct:fail({cache_invariant_failed, TC, Mismatches})
+					{fail, {cache_invariant_failed, TC, Mismatches}}
 			end;
 		_ -> ok
 	end.
@@ -1381,3 +1407,60 @@ do_delete_dir(Dir) ->
 		false ->
 			ok
 	end.
+
+
+%%=============================================================================
+%% Seed freeze (seed-cache Piece A)
+%%=============================================================================
+
+seed_class() ->
+	hd([N || #node{kind = class, nref = N} <- graphdb_seeds:all()]).
+
+add_superclass_refuses_seed_class(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, P} = graphdb_class:create_class("P", ?NREF_CLASSES),
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_class:add_superclass(seed_class(), P)).
+
+add_superclass_under_seed_parent_allowed(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, C} = graphdb_class:create_class("C", ?NREF_CLASSES),
+	?assertEqual(ok, graphdb_class:add_superclass(C, seed_class())).
+
+add_qc_refuses_seed_class(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_attr:create_literal_attribute("qa", string),
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_class:add_qualifying_characteristic(seed_class(), A)),
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_class:add_qualifying_characteristic(seed_class(), A,
+			#{instance_only => true})).
+
+bind_qc_value_refuses_seed_class(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_attr:create_literal_attribute("qb", string),
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_class:bind_qc_value(seed_class(), A, "v")).
+
+seed_class_writable_before_load(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	%% Init-time seeding runs before load/0 and must not be gated.
+	S = seed_class(),
+	ok = graphdb_seeds:erase(),
+	{ok, A} = graphdb_attr:create_literal_attribute("qc_pre", string),
+	?assertEqual(ok, graphdb_class:add_qualifying_characteristic(S, A)).
+
+seed_guard_passes_non_nref_class_arg(_Config) ->
+	%% The seed guard must not crash the server on a class argument that is
+	%% neither an nref nor a label; the mutator's own error comes back.
+	{ok, _} = graphdb_class:start_link(),
+	{ok, P} = graphdb_class:create_class("P", ?NREF_CLASSES),
+	{ok, A} = graphdb_attr:create_literal_attribute("qx", string),
+	?assertEqual({error, not_found}, graphdb_class:add_superclass("x", P)),
+	?assertEqual({error, not_found},
+		graphdb_class:add_qualifying_characteristic("x", A)),
+	?assertEqual({error, not_found},
+		graphdb_class:add_qualifying_characteristic("x", A,
+			#{instance_only => true})),
+	?assertEqual({error, not_found}, graphdb_class:bind_qc_value("x", A, "v")),
+	?assert(is_pid(whereis(graphdb_class))).

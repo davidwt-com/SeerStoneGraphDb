@@ -157,7 +157,7 @@ Two database roles:
 The environment is shared across all projects. Only bootstrap nrefs (1–35) and a small number of explicitly seeded runtime nrefs (e.g., `target_kind`) are referenced by nref constant in code — all other runtime-added nodes are treated generically.
 
 nref spaces:
-- **Environment**: scaffold nrefs 1–35; permanent tier `[?LABEL_START, ?NREF_START)` = `[10001, 1000000)` holds English (10000), loader-assigned atom-labeled bootstrap nodes, and worker `init/1` seeds (graphdb_attr, graphdb_language sub-groups); runtime allocations ≥ `?NREF_START` (1000000). Boundaries are macros in `apps/graphdb/include/graphdb_nrefs.hrl` — **not** directives in `bootstrap.terms`. All graphdb node-nref allocation goes through `graphdb_nref` (first child of `graphdb_sup`): permanent phase during init, runtime phase after the `graphdb:start/2` flip.
+- **Environment**: scaffold nrefs 1–35; permanent tier `[?LABEL_START, ?NREF_START)` = `[10001, 1000000)` holds English (10000), loader-assigned atom-labeled bootstrap nodes, and worker `init/1` seeds (graphdb_attr, graphdb_language sub-groups); runtime allocations ≥ `?NREF_START` (1000000). Boundaries are macros in `apps/graphdb/include/graphdb_nrefs.hrl` — **not** directives in `bootstrap.terms`. All graphdb node-nref allocation goes through `graphdb_nref` (first child of `graphdb_sup`): permanent phase during init, runtime phase after the `graphdb:start/2` flip. After the flip `graphdb:start/2` loads the seed cache (`graphdb_seeds`, `persistent_term`) holding every environment node below `?NREF_START`; seed node records are then guarded against runtime writes: the `graphdb_class` mutators refuse a seed class, `graphdb_attr`'s retro-stamp and Template marker stamp refuse a seed write, and `graphdb_mgr:rebuild_caches/0` skips seed rows.
 - **Project**: allocator starts at **1** — no pre-assigned nrefs, no bootstrap file, no floor needed
 
 Cross-database nref resolution is **home-relative**: `characterization` and `reciprocal` (arc labels), class nodes, and attribute nodes always resolve to the environment; `source_nref` and `target_nref` route through the operation's `Home :: environment | Project`. This routing is encoded by the pure `graphdb_ns` module (`namespace_of/2`, `target_namespace/2`, `node_table/1`, `rel_table/1`).
@@ -165,6 +165,22 @@ Cross-database nref resolution is **home-relative**: `characterization` and `rec
 A project is an anchor node under `Projects` (nref 5). `graphdb_project:register_project/1` creates that anchor **and** the project's own three Mnesia tables (`nodes_<Anchor>`, `relationships_<Anchor>`, `counters_<Anchor>`); `open/1` resolves a project nref into a `Project` handle `#{anchor, nodes, rels, counters}`, validated by `require_project/1`. Project nref and rel-id allocation is project-local, starting at 1. Project write operations and instance reads take a `Project` handle as their first argument and reject a missing/invalid one with `{error, invalid_project}`.
 
 Because each project's allocator restarts at 1, project nrefs collide numerically with environment bootstrap nrefs 1–35 — a bare nref is only unique within a `Home`. SP1 (reference & namespace model) and SP2 (physical project store) are both implemented; SP3 (distribution/residency + proxy dereference) and SP4 (migration) remain. See `docs/designs/project-env-reference-namespace-model-design.md`, `docs/designs/sp2-physical-project-store-design.md`, and `TASKS.md` → *Multi-project sessions*.
+
+### Seeds & Persistence — In Flux (no compatibility yet)
+
+The seed ontology (`bootstrap.terms` nodes, worker `init/1` seeds, their
+AVPs and placement) and the persistence layout (Mnesia tables, project
+stores, DETS allocators) are still being redesigned. Until this section is
+removed:
+
+- **No backward compatibility.** A change may require wiping `data/` and
+  re-bootstrapping. Do not write migrations or compatibility shims for
+  existing data.
+- **Seed changes are allowed** when a design calls for them. Keep
+  `docs/diagrams/ontology-tree.md` and the nref quick-reference current.
+- **When this stabilises,** remove this section and the README note. From
+  then on, seed changes go through a governed upgrade process that also
+  refreshes the seed caches.
 
 ### Bootstrap Nref Quick-Reference (BFS, nrefs 1–35)
 

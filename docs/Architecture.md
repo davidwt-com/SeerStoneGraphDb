@@ -485,7 +485,26 @@ delegates to `nref_server:get_nref/0`. The phase is held in
 the bootstrap loader and every worker `init/1` allocate in the permanent
 tier; after all child `init/1`s complete it calls
 `graphdb_nref:set_runtime_phase/0`, which also raises the `nref_server`
-floor to `?NREF_START`.
+floor to `?NREF_START`, then `graphdb_seeds:load/0`.
+
+### Seed cache (`graphdb_seeds`)
+
+`graphdb_seeds` is a plain module (not a process) that holds every
+environment node below `?NREF_START` in one `persistent_term` map, plus a
+label to nref index. Its API is `load/0`, `node/1` (nref or label atom),
+`nref/1`, `is_seed/1` (false until loaded), `all/0` and `erase/0`. Reads
+touch only `persistent_term`, so they are safe inside Mnesia transactions;
+`load/0` makes gen_server calls (workers' `seeded_nrefs/0`) and must never
+run inside one. Labels come from `graphdb_nrefs:scaffold_spec/0`, the
+`seeded_nrefs/0` maps of `graphdb_attr`, `graphdb_language` and
+`graphdb_rules`, and `graphdb_instance:remote_reference_class/0`.
+
+Once loaded, seeds are **frozen** (environment only): `graphdb_class`
+refuses `add_superclass/2`, `add_qualifying_characteristic/2,3` and
+`bind_qc_value/3` on a seed class with `{error, permanent_node_immutable}`;
+`graphdb_attr`'s retro-stamp and Template marker stamp refuse an actual seed
+write; `graphdb_mgr:rebuild_caches/0` skips seed rows. Bootstrap and worker
+`init/1` seeding run before the load and are ungated.
 
 `graphdb_bootstrap` assigns atom-labeled node nrefs from a **local counter**
 starting at `?LABEL_START`. If the counter would reach `?NREF_START` the

@@ -41,6 +41,11 @@
 %% get_attribute/1, list_attributes/0, list_relationship_types/0.
 %% Seeds literal_type, target_kind, and relationship_avp at init.
 %%---------------------------------------------------------------------
+%% Rev B Date: November 2026 Author: (completion of Dallas Noyes's design)
+%% Seed freeze: retro-stamp and the Template marker abort with
+%% {permanent_node_immutable, Nref} rather than rewrite a cached seed;
+%% retro_stamp_attribute_types/0 returns that error without crashing.
+%%---------------------------------------------------------------------
 -module(graphdb_attr).
 -behaviour(gen_server).
 
@@ -435,8 +440,10 @@ handle_call(seeded_nrefs, _From, State) ->
 
 handle_call(retro_stamp_attribute_types, _From,
 		#state{attribute_type_nref = AtAttr} = State) ->
-	ok = retro_stamp_bootstrap_attribute_types(AtAttr),
-	{reply, ok, State};
+	Reply = try retro_stamp_bootstrap_attribute_types(AtAttr)
+	catch throw:{error, _} = Err -> Err
+	end,
+	{reply, Reply, State};
 
 handle_call(Request, From, State) ->
 	?UEM(handle_call, {Request, From, State}),
@@ -820,8 +827,18 @@ stamp_attribute_type_if_missing(#node{nref = Nref,
 					Updated = Node#node{
 						attribute_value_pairs = AVPs ++ [NewAVP]
 					},
+					seed_guard(Nref),
 					ok = mnesia:write(nodes, Updated, write)
 			end
+	end.
+
+%% seed_guard(Nref) -> ok
+%% Aborts the enclosing transaction when Nref is a cached seed.  Reads only
+%% persistent_term, so it is safe inside a transaction.
+seed_guard(Nref) ->
+	case graphdb_seeds:is_seed(Nref) of
+		true  -> mnesia:abort({permanent_node_immutable, Nref});
+		false -> ok
 	end.
 
 has_attribute_type_avp(AVPs, AtAttrNref) ->
@@ -878,6 +895,7 @@ ensure_template_avp_marker(RelAvpAttrNref) ->
 						Updated = Node#node{
 							attribute_value_pairs = AVPs ++ [NewAVP]
 						},
+						seed_guard(?ARC_TEMPLATE),
 						ok = mnesia:write(nodes, Updated, write)
 				end;
 			[] ->

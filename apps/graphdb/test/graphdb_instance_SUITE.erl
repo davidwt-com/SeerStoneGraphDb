@@ -439,10 +439,9 @@ init_per_testcase(TC, Config) ->
 	{ok, _} = graphdb_class:start_link(),
 	{ok, _} = graphdb_instance:start_link(),
 	{ok, _} = graphdb_rules:start_link(),
-	%% Retire-guard tests need runtime nrefs so retire_node/1 accepts them.
-	%% Mirror production graphdb:start/2: flip to runtime tier after all workers
-	%% have seeded so that user-level create_* calls allocate runtime nrefs.
-	maybe_set_runtime_phase(TC),
+	%% Mirror production graphdb:start/2: flip to the runtime phase and load
+	%% the seed cache once every seeding worker has started.
+	ok = graphdb_test_boot:flip(),
 	%% SP2: pre-warm the project (register + open it) and its shared
 	%% compositional root as part of setup, so their table-creation/seed
 	%% writes are already in the baseline before any test body captures a
@@ -451,20 +450,6 @@ init_per_testcase(TC, Config) ->
 	_ = proj(),
 	_ = root(),
 	setup_firing_fixtures(TC, Config1).
-
-%% Test cases that call graphdb_mgr:retire_node/1 require runtime nrefs.
-%% Flip to the runtime tier (nref >= ?NREF_START) after seeding is complete.
-%% NOTE: add any future retire-guard test case to this guard list — without
-%% it the test runs in permanent phase and retire_node/1 rejects its
-%% runtime-tier target with {error, permanent_node_immutable}.
-maybe_set_runtime_phase(TC) when
-		TC =:= create_instance_refuses_retired_class;
-		TC =:= create_instance_refuses_retired_parent;
-		TC =:= add_class_membership_refuses_retired_class;
-		TC =:= add_relationship_refuses_retired_endpoint ->
-	ok = graphdb_nref:set_runtime_phase();
-maybe_set_runtime_phase(_TC) ->
-	ok.
 
 %% For firing-group test cases, create the shared class fixtures and add
 %% them to Config.  Other test cases pass through unchanged.
@@ -506,6 +491,9 @@ setup_firing_fixtures(TC, Config) ->
 	end.
 
 setup_isolated_env(Config) ->
+	%% Self-heal: a cache leaked by an init that failed after flip()
+	%% must not reach this case.
+	ok = graphdb_test_boot:reset(),
 	OrigCwd = proplists:get_value(orig_cwd, Config),
 	Unique = integer_to_list(erlang:unique_integer([positive, monotonic])),
 	TmpDir = filename:join([OrigCwd, "_build", "test", "ct_scratch",
@@ -524,15 +512,20 @@ setup_isolated_env(Config) ->
 %% end_per_testcase/2
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
-	verify_cache_invariant(TC),
-	verify_project_cache_invariant(TC),
+	%% Checks need Mnesia: compute the verdict first, run the whole
+	%% teardown, then return it (a returned {fail, _} fails the case).
+	Verdict = graphdb_test_boot:checks(TC, [
+		fun() -> verify_cache_invariant(TC) end,
+		fun() -> verify_project_cache_invariant(TC) end,
+		fun() -> graphdb_test_boot:assert_seeds_unchanged(TC) end
+	]),
 	catch gen_server:stop(graphdb_rules),
 	catch gen_server:stop(graphdb_instance),
 	catch gen_server:stop(graphdb_class),
 	catch gen_server:stop(graphdb_attr),
 	catch gen_server:stop(graphdb_mgr),
 	catch gen_server:stop(graphdb_nref),
-	catch persistent_term:erase({graphdb_nref, phase}),
+	graphdb_test_boot:reset(),
 	catch gen_server:stop(rel_id_server),
 	catch application:stop(nref),
 	catch mnesia:stop(),
@@ -548,7 +541,7 @@ end_per_testcase(TC, Config) ->
 
 	application:unset_env(seerstone_graph_db, bootstrap_file),
 	application:unset_env(mnesia, dir),
-	ok.
+	Verdict.
 
 %% Asserts the "arcs authoritative; lists cached" invariant after each
 %% testcase.  A failed verify is a fatal CT failure -- it indicates a
@@ -561,7 +554,7 @@ verify_cache_invariant(TC) ->
 				{error, Mismatches} ->
 					ct:pal("Cache invariant failed in ~p:~n~p",
 						[TC, Mismatches]),
-					ct:fail({cache_invariant_failed, TC, Mismatches})
+					{fail, {cache_invariant_failed, TC, Mismatches}}
 			end;
 		_ -> ok
 	end.
@@ -583,8 +576,8 @@ verify_project_cache_invariant(TC) ->
 						{error, Mismatches} ->
 							ct:pal("Project cache invariant failed in ~p:~n~p",
 								[TC, Mismatches]),
-							ct:fail({project_cache_invariant_failed, TC,
-								Mismatches})
+							{fail, {project_cache_invariant_failed, TC,
+								Mismatches}}
 					end;
 				_ -> ok
 			end

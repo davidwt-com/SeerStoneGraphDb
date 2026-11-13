@@ -17,6 +17,16 @@
 %% Initial implementation and testing of module completed.
 %% 
 %%--------------------------------------------------------------------- 
+%% Rev PA2 Date: November 13, 2026 Author: David W. Thomas
+%% start/2 loads the seed cache (graphdb_seeds:load/0) after the runtime flip.
+%%
+%%---------------------------------------------------------------------
+%% Rev PA3 Date: November 13, 2026 Author: David W. Thomas
+%% start/2 erases any seed cache left by an earlier start in this VM
+%% before the permanent phase, so a restart on another data directory
+%% does not treat the old seeds as frozen.
+%%
+%%---------------------------------------------------------------------
 %% Rev A Date: *** 2008 Author: Dallas Noyes (dallas.noyes@gmail.com)
 %%  
 %%--------------------------------------------------------------------- 
@@ -138,6 +148,9 @@
 %%--------------------------------------------------------------------- 
 
 start(Type, StartArgs) ->
+	%% A seed cache from an earlier start in this VM describes another
+	%% data directory; drop it before anything consults it.
+	ok = graphdb_seeds:erase(),
 	%% Mark the permanent phase before any child init runs, so the bootstrap
 	%% loader and every seeding worker allocate in the permanent tier.
 	ok = graphdb_nref:set_permanent_phase(),
@@ -146,6 +159,9 @@ start(Type, StartArgs) ->
 			%% All child init/1s have completed; flip to the runtime tier
 			%% (also raises nref_server's floor to ?NREF_START).
 			ok = graphdb_nref:set_runtime_phase(),
+			%% Every permanent-tier seed now exists and none can be added
+			%% later; cache them. A failed load crashes the start.
+			ok = graphdb_seeds:load(),
 			{ok, Pid};
 		ignore ->
 			{error, ignore};
