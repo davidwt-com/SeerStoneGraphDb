@@ -174,12 +174,13 @@ init_per_testcase(_TC, Config) ->
 
 end_per_testcase(TC, Config) ->
     verify_cache_invariant(TC),
+    graphdb_test_boot:assert_seeds_unchanged(TC),
     catch gen_server:stop(graphdb_language),
     catch gen_server:stop(graphdb_class),
     catch gen_server:stop(graphdb_attr),
     catch gen_server:stop(graphdb_mgr),
     catch gen_server:stop(graphdb_nref),
-    catch persistent_term:erase({graphdb_nref, phase}),
+    graphdb_test_boot:reset(),
     catch gen_server:stop(rel_id_server),
     catch application:stop(nref),
     catch mnesia:stop(),
@@ -236,6 +237,7 @@ delete_dir_recursive(Dir) ->
 
 seeded_nrefs_present(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, #{lang_code               := LC,
            lang_human              := LH,
            language_literals_group := LL,
@@ -250,6 +252,7 @@ seeded_nrefs_present(_Config) ->
 
 seeded_nrefs_above_floor(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, #{lang_code               := LC,
            lang_human              := LH,
            language_literals_group := LL,
@@ -268,11 +271,13 @@ seeded_nrefs_above_floor(_Config) ->
 
 language_en_table_created(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     Tables = mnesia:system_info(tables),
     ?assert(lists:member(language_en, Tables)).
 
 seeds_language_literals_subgroup(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, #{language_literals_group := LangLitNref}} =
         graphdb_language:seeded_nrefs(),
     ?assert(is_integer(LangLitNref)),
@@ -283,6 +288,7 @@ seeds_language_literals_subgroup(_Config) ->
 
 language_literal_seeds_parented_under_subgroup(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, #{language_literals_group := LangLitNref,
            base_language           := BL,
            project_language        := PL}} =
@@ -294,6 +300,7 @@ language_literal_seeds_parented_under_subgroup(_Config) ->
 
 language_seeds_carry_attribute_type_literal(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, #{language_literals_group := LangLitNref,
            base_language           := BL,
            project_language        := PL}} =
@@ -312,6 +319,7 @@ language_seeds_carry_attribute_type_literal(_Config) ->
 
 register_language_creates_concept_node(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, DeNref} = graphdb_language:register_language(de, "German"),
     %% Concept node exists in nodes table
     [#node{kind = instance, attribute_value_pairs = AVPs}] =
@@ -325,12 +333,14 @@ register_language_creates_concept_node(_Config) ->
 
 register_language_idempotent(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, _Nref1} = graphdb_language:register_language(de, "German"),
     %% Second call returns already_registered
     {error, already_registered} = graphdb_language:register_language(de, "German").
 
 register_dialect_creates_concept_node(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     %% English is already bootstrapped at nref 10000; look it up rather than registering
     {ok, EnNref}  = graphdb_language:lookup_language_nref(en),
     {ok, GbNref}  = graphdb_language:register_dialect(en_gb, "British English", en),
@@ -346,6 +356,7 @@ register_dialect_creates_concept_node(_Config) ->
 
 register_dialect_base_not_found(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {error, base_not_found} =
         graphdb_language:register_dialect(en_gb, "British English", nonexistent_lang).
 
@@ -356,6 +367,7 @@ register_dialect_base_not_found(_Config) ->
 
 set_labels_writes_avp(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, _} = graphdb_language:register_language(de, "German"),
     {ok, #{lang_code := LCAttr}} = graphdb_language:seeded_nrefs(),
     %% Write a German label for English nref 10000
@@ -369,6 +381,7 @@ set_labels_writes_avp(_Config) ->
 
 set_labels_merges_avps(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, _} = graphdb_language:register_language(de, "German"),
     {ok, #{lang_code := LCAttr, base_language := BLAttr}} =
         graphdb_language:seeded_nrefs(),
@@ -383,6 +396,7 @@ set_labels_merges_avps(_Config) ->
 
 set_labels_unregistered_code_error(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {error, unregistered_language} =
         graphdb_language:set_labels(?NREF_ENGLISH, xx, []).
 
@@ -396,6 +410,7 @@ avp(A, V) -> #{attribute => A, value => V}.
 
 resolve_label_from_environment_fallback(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     %% Chain [en] → en sentinel → read terminal node directly
     %% English nref ?NREF_ENGLISH, instance name AVP attr = 20, value = "English"
     {ok, "English"} =
@@ -403,6 +418,7 @@ resolve_label_from_environment_fallback(_Config) ->
 
 resolve_label_from_overlay(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, _} = graphdb_language:register_language(de, "German"),
     {ok, #{lang_code := LCAttr}} = graphdb_language:seeded_nrefs(),
     ok = graphdb_language:set_labels(?NREF_ENGLISH, de, [avp(LCAttr, "Englisch")]),
@@ -411,6 +427,7 @@ resolve_label_from_overlay(_Config) ->
 
 resolve_label_chain_priority(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, _} = graphdb_language:register_language(de, "German"),
     {ok, _} = graphdb_language:register_language(fr, "French"),
     {ok, #{lang_code := LCAttr}} = graphdb_language:seeded_nrefs(),
@@ -422,6 +439,7 @@ resolve_label_chain_priority(_Config) ->
 
 resolve_label_en_sentinel(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     %% Write a wrong value into language_en — sentinel must bypass it
     WrongRec = #language_node{nref = ?NREF_ENGLISH, avps = [avp(?NAME_ATTR_INSTANCE,"WRONG")]},
     ok = mnesia:dirty_write(language_en, WrongRec),
@@ -431,6 +449,7 @@ resolve_label_en_sentinel(_Config) ->
 
 resolve_label_dialect_hit(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     %% en is already bootstrapped at nref 10000; no need to register it
     {ok, _} = graphdb_language:register_dialect(en_gb, "British English", en),
     ok = graphdb_language:set_labels(?NREF_ENGLISH, en_gb, [avp(?NAME_ATTR_INSTANCE,"English (UK)")]),
@@ -440,6 +459,7 @@ resolve_label_dialect_hit(_Config) ->
 resolve_label_dialect_fallback(_Config) ->
     %% [en_gb, en, fr]: en_gb miss → en sentinel → environment (fr skipped)
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     %% en is already bootstrapped at nref 10000; no need to register it
     {ok, _} = graphdb_language:register_dialect(en_gb, "British English", en),
     {ok, _} = graphdb_language:register_language(fr, "French"),
@@ -450,6 +470,7 @@ resolve_label_dialect_fallback(_Config) ->
 
 resolve_label_not_found(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     %% AttrNref 99999 does not exist on nref 10000
     not_found =
         graphdb_language:resolve_label(?NREF_ENGLISH, 99999, [en], environment).
@@ -461,12 +482,14 @@ resolve_label_not_found(_Config) ->
 
 make_chain_drops_unknown_codes(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, _} = graphdb_language:register_language(de, "German"),
     %% xx is not registered — dropped silently
     [de] = graphdb_language:make_chain([de, xx]).
 
 make_chain_dialect_insertion(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     {ok, _} = graphdb_language:register_language(fr, "French"),
     {ok, _} = graphdb_language:register_dialect(en_gb, "British English", en),
     %% en_gb is registered; its base en is already in lang_code_map (bootstrap)
@@ -481,6 +504,9 @@ make_chain_dialect_insertion(_Config) ->
 
 project_language_avp_roundtrip(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    %% permanent phase on purpose: the case deliberately rewrites seed
+    %% row 10000 (English) to stamp a project_language AVP, which would
+    %% trip assert_seeds_unchanged against a loaded seed cache.
     {ok, _} = graphdb_language:register_language(de, "German"),
     {ok, DeNref} = graphdb_language:lookup_language_nref(de),
     {ok, #{project_language := PLAttr}} = graphdb_language:seeded_nrefs(),
@@ -499,6 +525,7 @@ project_language_avp_roundtrip(_Config) ->
 
 project_language_not_found(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     %% Nref 10000 has no project_language AVP yet
     not_found = graphdb_language:project_language(?NREF_ENGLISH).
 
@@ -509,6 +536,7 @@ project_language_not_found(_Config) ->
 
 translation_hook_called_after_registration(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     Self = self(),
     Hook = fun(Nref, AVPs) -> Self ! {hook_fired, Nref, AVPs} end,
     ok = graphdb_language:register_translation_hook(Hook),
@@ -521,12 +549,14 @@ translation_hook_called_after_registration(_Config) ->
 
 translation_hook_crash_does_not_fail_caller(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     CrashHook = fun(_Nref, _AVPs) -> error(deliberate_crash) end,
     ok = graphdb_language:register_translation_hook(CrashHook),
     ok = graphdb_language:fire_translation_hooks(99, []).
 
 translation_hook_unregister(_Config) ->
     {ok, _} = graphdb_language:start_link(),
+    ok = graphdb_test_boot:flip(),
     Self = self(),
     Hook = fun(Nref, _AVPs) -> Self ! {hook_fired, Nref} end,
     ok = graphdb_language:register_translation_hook(Hook),

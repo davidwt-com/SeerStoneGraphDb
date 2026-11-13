@@ -274,6 +274,8 @@ init_per_testcase(_TC, Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
 	%% Start graphdb_attr (seeds literal_type, target_kind, relationship_avp)
 	{ok, _} = graphdb_attr:start_link(),
+	%% All seeding workers are up: boot like production from here on
+	ok = graphdb_test_boot:flip(),
 	Config1.
 
 setup_isolated_env(Config) ->
@@ -296,11 +298,12 @@ setup_isolated_env(Config) ->
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
 	verify_cache_invariant(TC),
+	graphdb_test_boot:assert_seeds_unchanged(TC),
 	catch gen_server:stop(graphdb_class),
 	catch gen_server:stop(graphdb_attr),
 	catch gen_server:stop(graphdb_mgr),
 	catch gen_server:stop(graphdb_nref),
-	catch persistent_term:erase({graphdb_nref, phase}),
+	graphdb_test_boot:reset(),
 	catch gen_server:stop(rel_id_server),
 	catch application:stop(nref),
 	catch mnesia:stop(),
