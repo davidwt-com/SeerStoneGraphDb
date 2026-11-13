@@ -59,7 +59,10 @@ no labels; a label outside the seed set fails the load with
 `{label_not_seed, Label, Nref}`). `is_seed/1` is false until the cache is
 loaded, so bootstrap and worker `init/1` seeding are never gated. Cache reads
 touch only `persistent_term` and are safe inside Mnesia transactions; `load/0`
-makes gen_server calls and must never run inside one.
+makes gen_server calls and must never run inside one. A term that is neither
+an nref nor a label reads as not a seed (`not_seed` / `false`), never a
+crash. `graphdb:start/2` erases any cache left by an earlier start in the same
+VM before the permanent phase, so a restart reloads it from the new data.
 
 ## Supervisor (`graphdb_sup`)
 
@@ -314,7 +317,7 @@ Manages the "is a" hierarchy of class nodes in the ontology.
 
 - `create_class/2,3` (name, parent_class_nref [, avps]) — the `/3` form prepends an initial AVP list to the class node; a class created with the `instantiable => false` marker AVP is **abstract** and is born without a default template (L9)
 - `add_qualifying_characteristic/2,3` (class_nref, attribute_nref [, opts]) — the `/3` form takes an options map; `#{instance_only => true}` marks the QC instance-only (binding a class-level value for it is rejected at `bind_qc_value/3`, `create_class/3`, and `update_node_avps/2`)
-- **Seed freeze** — `add_superclass/2`, `add_qualifying_characteristic/2,3` and `bind_qc_value/3` return `{error, permanent_node_immutable}` when the class argument is a seed (via `graphdb_seeds:is_seed/1`) of kind `class`; environment only
+- **Seed freeze** — `add_superclass/2`, `add_qualifying_characteristic/2,3` and `bind_qc_value/3` return `{error, permanent_node_immutable}` when the class argument is a cached seed of kind `class` (via `graphdb_seeds:node/1`); environment only
 - `is_instantiable/1` (class_nref) — `false` iff the class carries the `instantiable => false` marker
 - `get_class/1`, `subclasses/1`, `ancestors/1`, `inherited_qcs/1`
 - `get_template_in_txn/1`, `class_in_ancestry_in_txn/2`,

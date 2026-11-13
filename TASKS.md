@@ -589,22 +589,23 @@ load: `graphdb_class` refuses `add_superclass/2`,
 Template marker stamp refuse an actual seed write; `graphdb_mgr:rebuild_caches/0`
 skips seed rows. Every CT suite that starts graphdb workers now flips and
 loads like production and asserts at teardown that no seed row changed;
-`graphdb_seeds_SUITE` adds the first test that boots the real application;
-that case works around a pre-existing empty-data-dir boot defect (below).
+`graphdb_seeds_SUITE` adds the first tests that boot the real application,
+which exposed the empty-data-dir boot defect below (now fixed).
 Design: the spec above ("Piece A", "Freezing seeds", "Test harness").
 Pieces B (attribute placement) and C (relationship label pairs) remain.
 
-**Defect (Important, pre-existing, found during Piece A, not fixed) —
-booting the real `graphdb` application on an empty data directory fails.**
-The boot returns `{create_table_failed,nodes,{bad_type,nodes,disc_copies,nonode@nohost}}`.
-Mnesia is a `graphdb` application dependency, so it starts schemaless before
-`graphdb`, and `graphdb_bootstrap:ensure_mnesia/0` skips `create_schema`
-when Mnesia is already running; the `disc_copies` table then cannot be
-created. CT never hit it because the suites start workers by hand;
-`graphdb_seeds_SUITE`'s app-boot case pre-creates the schema as a
-workaround. Fix: have `ensure_mnesia/0` create the schema when Mnesia is
-running without one (stop, `create_schema`, restart), or create the schema
-before the application starts; then drop the workaround.
+**Defect (Important, pre-existing, found during Piece A) — booting the real
+`graphdb` application on an empty data directory — IMPLEMENTED
+(2026-11-13).** The boot returned
+`{create_table_failed,nodes,{bad_type,nodes,disc_copies,nonode@nohost}}`.
+Mnesia is a `graphdb` application dependency, so it starts with a RAM schema
+before `graphdb`, and `graphdb_bootstrap:ensure_mnesia/0` skipped
+`create_schema` when Mnesia was already running; the `disc_copies` table then
+could not be created. CT never hit it because the suites start workers by
+hand. `ensure_mnesia/0` now converts a running RAM schema to disc
+(`mnesia:change_table_copy_type(schema, node(), disc_copies)`); the
+`graphdb_seeds_SUITE` app-boot cases boot on empty directories with no
+workaround.
 
 **Defect (Important, pre-existing, unrelated to SP2) —
 `rel_id_server` counter seeding — IMPLEMENTED (2026-08-09).** Filed as a
