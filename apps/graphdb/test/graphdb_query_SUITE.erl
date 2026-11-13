@@ -256,6 +256,7 @@ init_per_testcase(_TC, Config) ->
     {ok, _} = graphdb_rules:start_link(),
     {ok, _} = graphdb_language:start_link(),
     {ok, _} = graphdb_query:start_link(),
+    ok = graphdb_test_boot:flip(),
     Config1.
 
 setup_isolated_env(Config) ->
@@ -272,6 +273,7 @@ setup_isolated_env(Config) ->
 
 end_per_testcase(TC, Config) ->
     verify_cache_invariant(TC),
+    graphdb_test_boot:assert_seeds_unchanged(TC),
     catch gen_server:stop(graphdb_query),
     catch gen_server:stop(graphdb_language),
     catch gen_server:stop(graphdb_rules),
@@ -280,7 +282,7 @@ end_per_testcase(TC, Config) ->
     catch gen_server:stop(graphdb_attr),
     catch gen_server:stop(graphdb_mgr),
     catch gen_server:stop(graphdb_nref),
-    catch persistent_term:erase({graphdb_nref, phase}),
+    graphdb_test_boot:reset(),
     catch gen_server:stop(rel_id_server),
     catch application:stop(nref),
     catch mnesia:stop(),

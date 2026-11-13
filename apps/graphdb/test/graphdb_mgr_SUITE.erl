@@ -370,7 +370,7 @@ init_per_testcase(TC, Config) when
 	{ok, _} = graphdb_rules:start_link(),
 	%% Mirror production graphdb:start/2: flip to runtime tier after all
 	%% workers have seeded so that user-level create_* calls allocate runtime nrefs.
-	ok = graphdb_nref:set_runtime_phase(),
+	ok = graphdb_test_boot:flip(),
 	Config1;
 init_per_testcase(_TC, Config) ->
 	Config1 = setup_isolated_env(Config),
@@ -410,6 +410,7 @@ setup_isolated_env(Config) ->
 %%-----------------------------------------------------------------------------
 end_per_testcase(TC, Config) ->
 	verify_cache_invariant(TC),
+	graphdb_test_boot:assert_seeds_unchanged(TC),
 	%% Stop workers if running (write_delegation tests start these)
 	catch gen_server:stop(graphdb_rules),
 	catch gen_server:stop(graphdb_instance),
@@ -418,7 +419,7 @@ end_per_testcase(TC, Config) ->
 	%% Stop graphdb_mgr if running
 	catch gen_server:stop(graphdb_mgr),
 	catch gen_server:stop(graphdb_nref),
-	catch persistent_term:erase({graphdb_nref, phase}),
+	graphdb_test_boot:reset(),
 	catch gen_server:stop(rel_id_server),
 
 	%% Stop applications (ignore errors -- they may not be running)
@@ -470,6 +471,7 @@ verify_cache_invariant(TC) ->
 %%-----------------------------------------------------------------------------
 init_runs_bootstrap(_Config) ->
 	{ok, _Pid} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	%% Tables should exist
 	?assert(lists:member(nodes, mnesia:system_info(tables))),
 	?assert(lists:member(relationships, mnesia:system_info(tables))),
@@ -483,6 +485,7 @@ init_runs_bootstrap(_Config) ->
 %%-----------------------------------------------------------------------------
 init_idempotent_restart(_Config) ->
 	{ok, _Pid1} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	NodesBefore = mnesia:table_info(nodes, size),
 	RelsBefore = mnesia:table_info(relationships, size),
 
@@ -514,6 +517,7 @@ init_fails_on_bad_config(_Config) ->
 %%-----------------------------------------------------------------------------
 get_node_root(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, Root} = graphdb_mgr:get_node(1),
 	?assertEqual(1, Root#node.nref),
 	?assertEqual(category, Root#node.kind),
@@ -526,6 +530,7 @@ get_node_root(_Config) ->
 %%-----------------------------------------------------------------------------
 get_node_attribute(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, Node} = graphdb_mgr:get_node(?NAME_ATTR_ATTRIBUTE),
 	?assertEqual(?NAME_ATTR_ATTRIBUTE, Node#node.nref),
 	?assertEqual(attribute, Node#node.kind),
@@ -538,6 +543,7 @@ get_node_attribute(_Config) ->
 %%-----------------------------------------------------------------------------
 get_node_not_found(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	?assertEqual({error, not_found}, graphdb_mgr:get_node(99999)).
 
 %%-----------------------------------------------------------------------------
@@ -546,6 +552,7 @@ get_node_not_found(_Config) ->
 %%-----------------------------------------------------------------------------
 get_relationships_outgoing(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, Rels} = graphdb_mgr:get_relationships(1),
 	Targets = lists:sort([R#relationship.target_nref || R <- Rels]),
 	?assertEqual([2, 3, 4, 5], Targets),
@@ -562,6 +569,7 @@ get_relationships_outgoing(_Config) ->
 %%-----------------------------------------------------------------------------
 get_relationships_incoming(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, Rels} = graphdb_mgr:get_relationships(2, incoming),
 	Sources = lists:sort([R#relationship.source_nref || R <- Rels]),
 	?assertEqual([1, 6, 7, 8], Sources).
@@ -571,6 +579,7 @@ get_relationships_incoming(_Config) ->
 %%-----------------------------------------------------------------------------
 get_relationships_both(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, OutRels} = graphdb_mgr:get_relationships(2, outgoing),
 	{ok, InRels} = graphdb_mgr:get_relationships(2, incoming),
 	{ok, BothRels} = graphdb_mgr:get_relationships(2, both),
@@ -581,6 +590,7 @@ get_relationships_both(_Config) ->
 %%-----------------------------------------------------------------------------
 get_relationships_empty(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	{ok, Rels} = graphdb_mgr:get_relationships(99999, outgoing),
 	?assertEqual([], Rels).
 
@@ -594,6 +604,7 @@ get_relationships_empty(_Config) ->
 %%-----------------------------------------------------------------------------
 category_guard_delete(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	?assertEqual({error, category_nodes_are_immutable},
 		graphdb_mgr:delete_node(1)),
 	?assertEqual({error, category_nodes_are_immutable},
@@ -604,6 +615,7 @@ category_guard_delete(_Config) ->
 %%-----------------------------------------------------------------------------
 category_guard_update(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	?assertEqual({error, category_nodes_are_immutable},
 		graphdb_mgr:update_node_avps(1, [#{attribute => 99, value => "test"}])).
 
@@ -612,6 +624,7 @@ category_guard_update(_Config) ->
 %%-----------------------------------------------------------------------------
 category_guard_allows_noncategory_delete(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	%% Nref 6 (Names) is an attribute node -- should pass guard
 	?assertEqual({error, not_implemented},
 		graphdb_mgr:delete_node(6)).
@@ -624,6 +637,7 @@ category_guard_allows_noncategory_delete(_Config) ->
 %%-----------------------------------------------------------------------------
 category_guard_allows_noncategory_update(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	%% Nref 6 (Names) is an attribute node -- clears the category guard
 	?assertEqual({error, permanent_node_immutable},
 		graphdb_mgr:update_node_avps(6, [#{attribute => 99, value => "test"}])).
@@ -633,6 +647,7 @@ category_guard_allows_noncategory_update(_Config) ->
 %%-----------------------------------------------------------------------------
 category_guard_delete_nonexistent(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	?assertEqual({error, not_found},
 		graphdb_mgr:delete_node(99999)).
 
@@ -767,6 +782,7 @@ add_relationship_delegates(_Config) ->
 %%-----------------------------------------------------------------------------
 verify_caches_clean_after_bootstrap(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	?assertEqual(ok, graphdb_mgr:verify_caches()).
 
 %%-----------------------------------------------------------------------------
@@ -775,6 +791,9 @@ verify_caches_clean_after_bootstrap(_Config) ->
 %% the arcs), and the actual cached value.
 %%-----------------------------------------------------------------------------
 verify_caches_detects_poisoned_parents(_Config) ->
+	%% permanent phase on purpose: poisons seed nodes and relies on
+	%% rebuild_caches/0 to repair them, which is allowed only before the
+	%% seed cache is loaded.
 	{ok, _} = graphdb_mgr:start_link(),
 	%% Nref 6 (Names) is an attribute child of nref 2 (Attributes); the
 	%% bootstrap arc 2 -> 6 makes parents=[2] the truth.
@@ -794,6 +813,9 @@ verify_caches_detects_poisoned_parents(_Config) ->
 %% classes list is a mismatch.
 %%-----------------------------------------------------------------------------
 verify_caches_detects_poisoned_classes(_Config) ->
+	%% permanent phase on purpose: poisons seed nodes and relies on
+	%% rebuild_caches/0 to repair them, which is allowed only before the
+	%% seed cache is loaded.
 	{ok, _} = graphdb_mgr:start_link(),
 	{atomic, ok} = mnesia:transaction(fun() ->
 		[Node] = mnesia:read(nodes, 7),
@@ -811,6 +833,9 @@ verify_caches_detects_poisoned_classes(_Config) ->
 %% poisoned.
 %%-----------------------------------------------------------------------------
 rebuild_caches_restores_after_poison(_Config) ->
+	%% permanent phase on purpose: poisons seed nodes and relies on
+	%% rebuild_caches/0 to repair them, which is allowed only before the
+	%% seed cache is loaded.
 	{ok, _} = graphdb_mgr:start_link(),
 	{atomic, ok} = mnesia:transaction(fun() ->
 		[N6]  = mnesia:read(nodes, 6),
@@ -900,6 +925,7 @@ do_delete_dir(Dir) ->
 %%-----------------------------------------------------------------------------
 transaction_commit_returns_ok(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	Nref1 = ?NREF_START + 500001,
 	Nref2 = ?NREF_START + 500002,
 	Fun = fun() ->
@@ -923,6 +949,7 @@ transaction_commit_returns_ok(_Config) ->
 %%-----------------------------------------------------------------------------
 transaction_abort_rolls_back(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	NrefA = ?NREF_START + 500010,
 	Fun = fun() ->
 		ok = mnesia:write(nodes,
@@ -940,6 +967,7 @@ transaction_abort_rolls_back(_Config) ->
 %%-----------------------------------------------------------------------------
 transaction_composition_rolls_back(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	NrefP = ?NREF_START + 500020,
 	First = fun() ->
 		ok = mnesia:write(nodes,
@@ -960,6 +988,7 @@ transaction_composition_rolls_back(_Config) ->
 %%-----------------------------------------------------------------------------
 transaction_crash_passes_through(_Config) ->
 	{ok, _} = graphdb_mgr:start_link(),
+	ok = graphdb_test_boot:flip(),
 	NrefC = ?NREF_START + 500030,
 	Fun = fun() ->
 		ok = mnesia:write(nodes,
