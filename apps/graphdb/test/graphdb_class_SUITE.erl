@@ -922,10 +922,9 @@ add_qc_idempotent(_Config) ->
 %%-----------------------------------------------------------------------------
 add_qc_rejects_non_class(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
-	%% A runtime attribute node (a seed would be refused as immutable first)
-	{ok, NotClass} = graphdb_attr:create_literal_attribute("not_a_class", string),
+	%% Nref 6 is an attribute node
 	?assertMatch({error, {not_a_class, _}},
-		graphdb_class:add_qualifying_characteristic(NotClass, ?NAME_ATTR_ATTRIBUTE)).
+		graphdb_class:add_qualifying_characteristic(?NREF_NAMES, ?NAME_ATTR_ATTRIBUTE)).
 
 %%-----------------------------------------------------------------------------
 %% add_qualifying_characteristic rejects non-attribute nrefs.

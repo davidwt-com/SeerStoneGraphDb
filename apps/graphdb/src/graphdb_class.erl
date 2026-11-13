@@ -368,6 +368,15 @@ init([]) ->
 	{ok, #state{instantiable_nref = InstAttr}}.
 
 
+%% is_seed_class(Nref) -> boolean()
+%% True when Nref is a cached seed whose kind is class.  Reads only
+%% persistent_term (graphdb_seeds), so no Mnesia access.
+is_seed_class(Nref) ->
+	case graphdb_seeds:node(Nref) of
+		{ok, #node{kind = class}} -> true;
+		_                         -> false
+	end.
+
 %%-----------------------------------------------------------------------------
 %% handle_call/3 -- Creators
 %%-----------------------------------------------------------------------------
@@ -381,7 +390,7 @@ handle_call({create_class, Name, ParentClassNref, AVPs}, _From,
 %% seeding is not gated.  A seed as the *new parent* of a runtime class is
 %% allowed -- only the runtime class's record changes.
 handle_call({add_superclass, ClassNref, AdditionalParentNref}, _From, State) ->
-	Reply = case graphdb_seeds:is_seed(ClassNref) of
+	Reply = case is_seed_class(ClassNref) of
 		true  -> {error, permanent_node_immutable};
 		false -> do_add_superclass(ClassNref, AdditionalParentNref)
 	end,
@@ -389,7 +398,7 @@ handle_call({add_superclass, ClassNref, AdditionalParentNref}, _From, State) ->
 
 handle_call({add_qualifying_characteristic, ClassNref, AttrNref}, _From,
 		State) ->
-	Reply = case graphdb_seeds:is_seed(ClassNref) of
+	Reply = case is_seed_class(ClassNref) of
 		true  -> {error, permanent_node_immutable};
 		false -> do_add_qc(ClassNref, AttrNref)
 	end,
@@ -397,14 +406,14 @@ handle_call({add_qualifying_characteristic, ClassNref, AttrNref}, _From,
 
 handle_call({add_qualifying_characteristic, ClassNref, AttrNref, Opts}, _From,
 		State) ->
-	Reply = case graphdb_seeds:is_seed(ClassNref) of
+	Reply = case is_seed_class(ClassNref) of
 		true  -> {error, permanent_node_immutable};
 		false -> do_add_qc(ClassNref, AttrNref, Opts)
 	end,
 	{reply, Reply, State};
 
 handle_call({bind_qc_value, ClassNref, AttrNref, Value}, _From, State) ->
-	Reply = case graphdb_seeds:is_seed(ClassNref) of
+	Reply = case is_seed_class(ClassNref) of
 		true  -> {error, permanent_node_immutable};
 		false -> do_bind_qc_value(ClassNref, AttrNref, Value)
 	end,
