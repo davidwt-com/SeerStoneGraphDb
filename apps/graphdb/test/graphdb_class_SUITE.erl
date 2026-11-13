@@ -57,6 +57,12 @@
 %% Test cases
 %%---------------------------------------------------------------------
 -export([
+	%% Seed freeze
+	add_superclass_refuses_seed_class/1,
+	add_superclass_under_seed_parent_allowed/1,
+	add_qc_refuses_seed_class/1,
+	bind_qc_value_refuses_seed_class/1,
+	seed_class_writable_before_load/1,
 	%% Creation
 	create_class_top_level/1,
 	create_class_subclass/1,
@@ -150,7 +156,8 @@ suite() ->
 all() ->
 	[{group, creation}, {group, templates},
 	 {group, qualifying}, {group, lookups}, {group, hierarchy},
-	 {group, multi_inheritance}, {group, inheritance}].
+	 {group, multi_inheritance}, {group, inheritance},
+	 {group, seed_freeze}].
 
 groups() ->
 	[
@@ -240,6 +247,13 @@ groups() ->
 			inherited_qcs_local_only,
 			inherited_qcs_from_ancestors,
 			inherited_qcs_deduplicates
+		]},
+		{seed_freeze, [], [
+			add_superclass_refuses_seed_class,
+			add_superclass_under_seed_parent_allowed,
+			add_qc_refuses_seed_class,
+			bind_qc_value_refuses_seed_class,
+			seed_class_writable_before_load
 		]}
 	].
 
@@ -908,9 +922,10 @@ add_qc_idempotent(_Config) ->
 %%-----------------------------------------------------------------------------
 add_qc_rejects_non_class(_Config) ->
 	{ok, _} = graphdb_class:start_link(),
-	%% Nref 6 is an attribute node
+	%% A runtime attribute node (a seed would be refused as immutable first)
+	{ok, NotClass} = graphdb_attr:create_literal_attribute("not_a_class", string),
 	?assertMatch({error, {not_a_class, _}},
-		graphdb_class:add_qualifying_characteristic(?NREF_NAMES, ?NAME_ATTR_ATTRIBUTE)).
+		graphdb_class:add_qualifying_characteristic(NotClass, ?NAME_ATTR_ATTRIBUTE)).
 
 %%-----------------------------------------------------------------------------
 %% add_qualifying_characteristic rejects non-attribute nrefs.
@@ -1384,3 +1399,45 @@ do_delete_dir(Dir) ->
 		false ->
 			ok
 	end.
+
+
+%%=============================================================================
+%% Seed freeze (seed-cache Piece A)
+%%=============================================================================
+
+seed_class() ->
+	hd([N || #node{kind = class, nref = N} <- graphdb_seeds:all()]).
+
+add_superclass_refuses_seed_class(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, P} = graphdb_class:create_class("P", ?NREF_CLASSES),
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_class:add_superclass(seed_class(), P)).
+
+add_superclass_under_seed_parent_allowed(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, C} = graphdb_class:create_class("C", ?NREF_CLASSES),
+	?assertEqual(ok, graphdb_class:add_superclass(C, seed_class())).
+
+add_qc_refuses_seed_class(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_attr:create_literal_attribute("qa", string),
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_class:add_qualifying_characteristic(seed_class(), A)),
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_class:add_qualifying_characteristic(seed_class(), A,
+			#{instance_only => true})).
+
+bind_qc_value_refuses_seed_class(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	{ok, A} = graphdb_attr:create_literal_attribute("qb", string),
+	?assertEqual({error, permanent_node_immutable},
+		graphdb_class:bind_qc_value(seed_class(), A, "v")).
+
+seed_class_writable_before_load(_Config) ->
+	{ok, _} = graphdb_class:start_link(),
+	%% Init-time seeding runs before load/0 and must not be gated.
+	S = seed_class(),
+	ok = graphdb_seeds:erase(),
+	{ok, A} = graphdb_attr:create_literal_attribute("qc_pre", string),
+	?assertEqual(ok, graphdb_class:add_qualifying_characteristic(S, A)).

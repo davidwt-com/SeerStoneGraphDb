@@ -90,6 +90,9 @@
 	list_relationship_types_includes_buckets/1,
 	%% Attribute type
 	seeded_nrefs_includes_attribute_type/1,
+	retro_stamp_after_load_is_noop/1,
+	retro_stamp_refuses_to_write_a_seed/1,
+	attr_restart_after_load_succeeds/1,
 	create_name_stamps_attribute_type/1,
 	create_literal_stamps_attribute_type/1,
 	create_relationship_stamps_attribute_type/1,
@@ -159,7 +162,10 @@ groups() ->
 			attribute_type_of_not_found,
 			attribute_type_of_non_attribute,
 			bootstrap_attributes_retro_stamped,
-			retro_stamp_idempotent_on_restart
+			retro_stamp_idempotent_on_restart,
+			retro_stamp_after_load_is_noop,
+			retro_stamp_refuses_to_write_a_seed,
+			attr_restart_after_load_succeeds
 		]}
 	].
 
@@ -1008,3 +1014,31 @@ do_delete_dir(Dir) ->
 		false ->
 			ok
 	end.
+
+
+%%-----------------------------------------------------------------------------
+%% Seed freeze (seed-cache Piece A)
+%%-----------------------------------------------------------------------------
+retro_stamp_after_load_is_noop(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
+	?assertEqual(ok, graphdb_attr:retro_stamp_attribute_types()).
+
+retro_stamp_refuses_to_write_a_seed(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
+	{ok, #{attribute_type := At}} = graphdb_attr:seeded_nrefs(),
+	[Row] = mnesia:dirty_read(nodes, ?NREF_INST_NAME_ATTRS),
+	Stripped = Row#node{attribute_value_pairs =
+		[P || #{attribute := K} = P <- Row#node.attribute_value_pairs, K =/= At]},
+	ok = mnesia:dirty_write(nodes, Stripped),
+	?assertEqual({error, {permanent_node_immutable, ?NREF_INST_NAME_ATTRS}},
+		graphdb_attr:retro_stamp_attribute_types()),
+	?assert(is_pid(whereis(graphdb_attr))),
+	ok = mnesia:dirty_write(nodes, Row).
+
+attr_restart_after_load_succeeds(_Config) ->
+	{ok, _} = graphdb_attr:start_link(),
+	ok = graphdb_test_boot:flip(),
+	ok = gen_server:stop(graphdb_attr),
+	?assertMatch({ok, _}, graphdb_attr:start_link()).

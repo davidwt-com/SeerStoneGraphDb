@@ -121,6 +121,7 @@
 	seeds_applies_to_pair/1,
 	seeded_nrefs_returns_all_thirteen/1,
 	name_pattern_is_seeded/1,
+	rules_restart_after_load_succeeds/1,
 	seeds_reciprocal_literal/1,
 	%% composition
 	creates_composition_rule_minimal/1,
@@ -199,6 +200,7 @@ groups() ->
 	[
 		{seeding, [], [
 			seeds_rule_meta_ontology_idempotent,
+			rules_restart_after_load_succeeds,
 			seeds_rule_literals_subgroup,
 			seeds_literal_attributes_under_rule_literals,
 			seeds_applies_to_pair,
@@ -455,6 +457,10 @@ seeds_rule_meta_ontology_idempotent(_Config) ->
 	{ok, _} = graphdb_rules:start_link(),
 	{ok, S2} = graphdb_rules:seeded_nrefs(),
 	?assertEqual(S1, S2).
+
+rules_restart_after_load_succeeds(_Config) ->
+	ok = gen_server:stop(graphdb_rules),
+	?assertMatch({ok, _}, graphdb_rules:start_link()).
 
 seeds_rule_literals_subgroup(_Config) ->
 	{ok, S} = graphdb_rules:seeded_nrefs(),

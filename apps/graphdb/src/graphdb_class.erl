@@ -31,6 +31,11 @@
 %% subclasses/1, ancestors/1, inherited_qcs/1.
 %% Unified QC AVP shape — value=>undefined for declarations.
 %%---------------------------------------------------------------------
+%% Rev B Date: November 2026 Author: (completion of Dallas Noyes's design)
+%% Seed freeze: add_superclass/2, add_qualifying_characteristic/2,3 and
+%% bind_qc_value/3 refuse a seed class with {error, permanent_node_immutable}
+%% once graphdb_seeds is loaded.
+%%---------------------------------------------------------------------
 -module(graphdb_class).
 -behaviour(gen_server).
 
@@ -370,19 +375,40 @@ handle_call({create_class, Name, ParentClassNref, AVPs}, _From,
 		#state{instantiable_nref = InstAttr} = State) ->
 	{reply, do_create_class(Name, ParentClassNref, AVPs, InstAttr), State};
 
+%% Seed freeze: once graphdb_seeds is loaded, a seed class's record is
+%% immutable.  The guard lives here (not in the do_* functions) so internal
+%% callers are unaffected; before load/0 is_seed/1 is false, so init-time
+%% seeding is not gated.  A seed as the *new parent* of a runtime class is
+%% allowed -- only the runtime class's record changes.
 handle_call({add_superclass, ClassNref, AdditionalParentNref}, _From, State) ->
-	{reply, do_add_superclass(ClassNref, AdditionalParentNref), State};
+	Reply = case graphdb_seeds:is_seed(ClassNref) of
+		true  -> {error, permanent_node_immutable};
+		false -> do_add_superclass(ClassNref, AdditionalParentNref)
+	end,
+	{reply, Reply, State};
 
 handle_call({add_qualifying_characteristic, ClassNref, AttrNref}, _From,
 		State) ->
-	{reply, do_add_qc(ClassNref, AttrNref), State};
+	Reply = case graphdb_seeds:is_seed(ClassNref) of
+		true  -> {error, permanent_node_immutable};
+		false -> do_add_qc(ClassNref, AttrNref)
+	end,
+	{reply, Reply, State};
 
 handle_call({add_qualifying_characteristic, ClassNref, AttrNref, Opts}, _From,
 		State) ->
-	{reply, do_add_qc(ClassNref, AttrNref, Opts), State};
+	Reply = case graphdb_seeds:is_seed(ClassNref) of
+		true  -> {error, permanent_node_immutable};
+		false -> do_add_qc(ClassNref, AttrNref, Opts)
+	end,
+	{reply, Reply, State};
 
 handle_call({bind_qc_value, ClassNref, AttrNref, Value}, _From, State) ->
-	{reply, do_bind_qc_value(ClassNref, AttrNref, Value), State};
+	Reply = case graphdb_seeds:is_seed(ClassNref) of
+		true  -> {error, permanent_node_immutable};
+		false -> do_bind_qc_value(ClassNref, AttrNref, Value)
+	end,
+	{reply, Reply, State};
 
 handle_call({add_template, ClassNref, Name}, _From, State) ->
 	{reply, do_add_template(ClassNref, Name), State};

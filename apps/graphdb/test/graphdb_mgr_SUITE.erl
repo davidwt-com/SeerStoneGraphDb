@@ -91,6 +91,8 @@
 	verify_caches_detects_poisoned_parents/1,
 	verify_caches_detects_poisoned_classes/1,
 	rebuild_caches_restores_after_poison/1,
+	rebuild_caches_skips_seeds_after_load/1,
+	rebuild_caches_project_ignores_seed_set/1,
 	%% Transaction seam
 	transaction_commit_returns_ok/1,
 	transaction_abort_rolls_back/1,
@@ -200,7 +202,9 @@ groups() ->
 			verify_caches_clean_after_bootstrap,
 			verify_caches_detects_poisoned_parents,
 			verify_caches_detects_poisoned_classes,
-			rebuild_caches_restores_after_poison
+			rebuild_caches_restores_after_poison,
+			rebuild_caches_skips_seeds_after_load,
+			rebuild_caches_project_ignores_seed_set
 		]},
 		{transaction_seam, [], [
 			transaction_commit_returns_ok,
@@ -309,6 +313,8 @@ init_per_testcase(TC, Config) when
 		TC =:= create_relationship_type_delegates;
 		TC =:= create_relationship_attribute_missing_avps;
 		TC =:= create_attribute_unknown_parent;
+		TC =:= rebuild_caches_skips_seeds_after_load;
+		TC =:= rebuild_caches_project_ignores_seed_set;
 		TC =:= create_class_delegates;
 		TC =:= create_instance_delegates;
 		TC =:= add_relationship_delegates;
@@ -853,6 +859,25 @@ rebuild_caches_restores_after_poison(_Config) ->
 		mnesia:read(nodes, ?NAME_ATTR_ATTRIBUTE)
 	end),
 	?assertEqual([10], Restored18#node.parents).
+
+rebuild_caches_skips_seeds_after_load(_Config) ->
+	[Seed] = mnesia:dirty_read(nodes, ?NREF_NAMES),
+	ok = mnesia:dirty_write(nodes, Seed#node{parents = []}),
+	ok = graphdb_mgr:rebuild_caches(),
+	?assertMatch([#node{parents = []}], mnesia:dirty_read(nodes, ?NREF_NAMES)),
+	ok = mnesia:dirty_write(nodes, Seed).
+
+rebuild_caches_project_ignores_seed_set(_Config) ->
+	%% A project nref can equal a seed nref; the project row is still rebuilt.
+	Project = proj(),
+	{ok, C} = graphdb_class:create_class("RebuildProj", ?NREF_CLASSES),
+	{ok, I, _} = graphdb_instance:create_instance(Project, "RP", C, root()),
+	?assert(graphdb_seeds:is_seed(I)),
+	NodesTab = maps:get(nodes, Project),
+	[Row] = mnesia:dirty_read(NodesTab, I),
+	ok = mnesia:dirty_write(NodesTab, Row#node{classes = []}),
+	ok = graphdb_mgr:rebuild_caches(Project),
+	?assertEqual([Row], mnesia:dirty_read(NodesTab, I)).
 
 
 %%=============================================================================
