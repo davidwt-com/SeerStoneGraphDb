@@ -579,6 +579,32 @@ work, which removes `target_kind` altogether — design (draft, under review):
 `docs/designs/seed-cache-attribute-placement-label-pairs-design.md`. A first
 strict-check implementation is preserved as tag `strict-labels-snapshot-1`.
 
+**Piece A — seed cache — IMPLEMENTED.** `graphdb_seeds` holds every
+environment node below `?NREF_START` in one `persistent_term` map (plus a
+label to nref index), loaded by `graphdb:start/2` right after the runtime
+flip; reads are safe inside Mnesia transactions. Seeds are frozen after the
+load: `graphdb_class` refuses `add_superclass/2`,
+`add_qualifying_characteristic/2,3` and `bind_qc_value/3` on a seed class
+(`{error, permanent_node_immutable}`); `graphdb_attr`'s retro-stamp and
+Template marker stamp refuse an actual seed write; `graphdb_mgr:rebuild_caches/0`
+skips seed rows. Every CT suite that starts graphdb workers now flips and
+loads like production and asserts at teardown that no seed row changed;
+`graphdb_seeds_SUITE` adds the first test that boots the real application.
+Design: the spec above ("Piece A", "Freezing seeds", "Test harness").
+Pieces B (attribute placement) and C (relationship label pairs) remain.
+
+**Defect (Important, pre-existing, found during Piece A, not fixed) —
+booting the real `graphdb` application on an empty data directory fails.**
+The boot returns `{create_table_failed,nodes,{bad_type,nodes,disc_copies,nonode@nohost}}`.
+Mnesia is a `graphdb` application dependency, so it starts schemaless before
+`graphdb`, and `graphdb_bootstrap:ensure_mnesia/0` skips `create_schema`
+when Mnesia is already running; the `disc_copies` table then cannot be
+created. CT never hit it because the suites start workers by hand;
+`graphdb_seeds_SUITE`'s app-boot case pre-creates the schema as a
+workaround. Fix: have `ensure_mnesia/0` create the schema when Mnesia is
+running without one (stop, `create_schema`, restart), or create the schema
+before the application starts; then drop the workaround.
+
 **Defect (Important, pre-existing, unrelated to SP2) —
 `rel_id_server` counter seeding — IMPLEMENTED (2026-08-09).** Filed as a
 one-line typo; it was three defects stacked in the same path, and the typo

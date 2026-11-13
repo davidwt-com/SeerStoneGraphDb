@@ -11,21 +11,22 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 ## Files
 
-| File                    | Description                                                                                                                                                                                    |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `graphdb.erl`           | OTP `application` behaviour callback module; performs permanent→runtime phase flip                                                                                                             |
-| `graphdb_sup.erl`       | OTP `supervisor` behaviour callback module                                                                                                                                                     |
-| `graphdb_nref.erl`      | Switchable node-nref allocation facade gen_server (first child; permanent during init)                                                                                                         |
-| `graphdb_bootstrap.erl` | Bootstrap file loader + Mnesia schema creator (implemented)                                                                                                                                    |
-| `graphdb_ns.erl`        | Pure namespace-resolution module (SP1+SP2) — `namespace_of/2`, `target_namespace/2` (home-relative), `node_table/1`, `rel_table/1`, `arc_target_namespace/3` (arc-discovered nref routing by `#relationship.kind`); the code expression of the field-role namespace map          |
-| `graphdb_project.erl`   | Project registry + physical store (SP1+SP2) — `register_project/1` (also creates the project's three tables), `is_project/1`, `open/1`, `require_project/1`, `next_nref/1`, `next_rel_id_pair/1`; canonical project-scoped relationship API surface |
-| `graphdb_mgr.erl`       | Primary coordinator gen_server (implemented — bootstrap init, read API, category guard)                                                                                                        |
-| `graphdb_rules.erl`     | Graph rules gen_server (implemented — F4 Phase A+B1+B2+B3+B4+B5: rule meta-ontology, create/retrieve, taxonomy walk, composition firing, propose mode, connection firing, conflict precedence) |
-| `graphdb_attr.erl`      | Attribute library gen_server (implemented)                                                                                                                                                     |
-| `graphdb_class.erl`     | Taxonomic hierarchy gen_server (implemented)                                                                                                                                                   |
-| `graphdb_instance.erl`  | Instance/compositional hierarchy gen_server (implemented)                                                                                                                                      |
-| `graphdb_language.erl`  | M6 multilingual overlay layer (implemented)                                                                                                                                                    |
-| `graphdb_query.erl`     | F3 query language gen_server (implemented)                                                                                                                                                     |
+| File                    | Description                                                                                                                                                                                                                                                             |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `graphdb.erl`           | OTP `application` behaviour callback module; performs permanent→runtime phase flip                                                                                                                                                                                      |
+| `graphdb_sup.erl`       | OTP `supervisor` behaviour callback module                                                                                                                                                                                                                              |
+| `graphdb_seeds.erl`     | Seed cache (plain module) — `load/0`, `node/1`, `nref/1`, `is_seed/1`, `all/0`, `erase/0`; every environment node below `?NREF_START` in one `persistent_term` map plus a label index; reads are transaction-safe                                                       |
+| `graphdb_nref.erl`      | Switchable node-nref allocation facade gen_server (first child; permanent during init)                                                                                                                                                                                  |
+| `graphdb_bootstrap.erl` | Bootstrap file loader + Mnesia schema creator (implemented)                                                                                                                                                                                                             |
+| `graphdb_ns.erl`        | Pure namespace-resolution module (SP1+SP2) — `namespace_of/2`, `target_namespace/2` (home-relative), `node_table/1`, `rel_table/1`, `arc_target_namespace/3` (arc-discovered nref routing by `#relationship.kind`); the code expression of the field-role namespace map |
+| `graphdb_project.erl`   | Project registry + physical store (SP1+SP2) — `register_project/1` (also creates the project's three tables), `is_project/1`, `open/1`, `require_project/1`, `next_nref/1`, `next_rel_id_pair/1`; canonical project-scoped relationship API surface                     |
+| `graphdb_mgr.erl`       | Primary coordinator gen_server (implemented — bootstrap init, read API, category guard)                                                                                                                                                                                 |
+| `graphdb_rules.erl`     | Graph rules gen_server (implemented — F4 Phase A+B1+B2+B3+B4+B5: rule meta-ontology, create/retrieve, taxonomy walk, composition firing, propose mode, connection firing, conflict precedence)                                                                          |
+| `graphdb_attr.erl`      | Attribute library gen_server (implemented)                                                                                                                                                                                                                              |
+| `graphdb_class.erl`     | Taxonomic hierarchy gen_server (implemented)                                                                                                                                                                                                                            |
+| `graphdb_instance.erl`  | Instance/compositional hierarchy gen_server (implemented)                                                                                                                                                                                                               |
+| `graphdb_language.erl`  | M6 multilingual overlay layer (implemented)                                                                                                                                                                                                                             |
+| `graphdb_query.erl`     | F3 query language gen_server (implemented)                                                                                                                                                                                                                              |
 
 `apps/graphdb/priv/bootstrap.terms` — Erlang Terms file fully written; contains 38 nodes
 (nrefs 1–35 scaffold, nref 10000 English, 2 atom-labeled nodes) and hierarchy relationship pairs. Loaded at first ontology startup. Tier boundaries are macros in `graphdb_nrefs.hrl` — no `{nref_start}` or `{label_start}` directives.
@@ -42,11 +43,23 @@ application_master
     -> graphdb_sup:start_link/0             %% starts all children (init/1s allocate in permanent tier)
       -> graphdb_sup:init/1
     -> graphdb_nref:set_runtime_phase()     %% flip to runtime; raises nref_server floor to ?NREF_START
+    -> graphdb_seeds:load()                 %% load the seed cache (freezes seeds)
 ```
 
 `graphdb:start/2` brackets the supervised startup with the permanent→runtime
 phase flip so the bootstrap loader and every worker `init/1` allocate in the
 permanent tier `[?LABEL_START, ?NREF_START)`.
+
+`graphdb_seeds:load/0` then reads every environment node below `?NREF_START`
+into one `persistent_term` map with a label to nref index. Labels come from
+`graphdb_nrefs:scaffold_spec/0`, the `seeded_nrefs/0` maps of `graphdb_attr`,
+`graphdb_language` and `graphdb_rules`, and
+`graphdb_instance:remote_reference_class/0` (a non-running worker contributes
+no labels; a label outside the seed set fails the load with
+`{label_not_seed, Label, Nref}`). `is_seed/1` is false until the cache is
+loaded, so bootstrap and worker `init/1` seeding are never gated. Cache reads
+touch only `persistent_term` and are safe inside Mnesia transactions; `load/0`
+makes gen_server calls and must never run inside one.
 
 ## Supervisor (`graphdb_sup`)
 
@@ -293,7 +306,7 @@ the ontology `nodes` Mnesia table with `kind = attribute`.
 - `create_relationship_attribute_pair/3,4` (name, reciprocal_name, target_kind [, parent_nref]) — reciprocal arc-label pair; `target_kind :: category | attribute | class | instance`; defaults parent to nref 8
 - All creators validate `parent_nref` (must be an existing `kind=attribute` node)
 - `get_attribute/1`, `list_attributes/0`, `list_relationship_types/0`
-- At bootstrap: seeds the `Attribute Literals` sub-group under the `Literals` subtree (nref 7), then seeds `literal_type`, `target_kind`, `relationship_avp`, `attribute_type`, `instantiable`, and the SP1 proxy literals `remote_project` / `remote_nref` as children of that sub-group. Also stamps the `relationship_avp` marker AVP on the bootstrap Template node and retro-stamps `attribute_type` AVPs across the Attributes subtree. The `instantiable` marker (L9) is stamped on a class node as `instantiable => false` to make it abstract (non-instantiable).
+- At bootstrap: seeds the `Attribute Literals` sub-group under the `Literals` subtree (nref 7), then seeds `literal_type`, `target_kind`, `relationship_avp`, `attribute_type`, `instantiable`, and the SP1 proxy literals `remote_project` / `remote_nref` as children of that sub-group. Also stamps the `relationship_avp` marker AVP on the bootstrap Template node and retro-stamps `attribute_type` AVPs across the Attributes subtree. The `instantiable` marker (L9) is stamped on a class node as `instantiable => false` to make it abstract (non-instantiable). **Seed freeze:** `retro_stamp_attribute_types/0` and the Template marker stamp refuse only an actual seed write (`{error, {permanent_node_immutable, Nref}}` from `retro_stamp_attribute_types/0`); after a normal boot they write nothing, so a worker restart after the flip still succeeds.
 
 ### `graphdb_class` — Taxonomic Hierarchy
 
@@ -301,6 +314,7 @@ Manages the "is a" hierarchy of class nodes in the ontology.
 
 - `create_class/2,3` (name, parent_class_nref [, avps]) — the `/3` form prepends an initial AVP list to the class node; a class created with the `instantiable => false` marker AVP is **abstract** and is born without a default template (L9)
 - `add_qualifying_characteristic/2,3` (class_nref, attribute_nref [, opts]) — the `/3` form takes an options map; `#{instance_only => true}` marks the QC instance-only (binding a class-level value for it is rejected at `bind_qc_value/3`, `create_class/3`, and `update_node_avps/2`)
+- **Seed freeze** — `add_superclass/2`, `add_qualifying_characteristic/2,3` and `bind_qc_value/3` return `{error, permanent_node_immutable}` when the class argument is a seed (via `graphdb_seeds:is_seed/1`) of kind `class`; environment only
 - `is_instantiable/1` (class_nref) — `false` iff the class carries the `instantiable => false` marker
 - `get_class/1`, `subclasses/1`, `ancestors/1`, `inherited_qcs/1`
 - `get_template_in_txn/1`, `class_in_ancestry_in_txn/2`,
@@ -470,6 +484,7 @@ See `docs/designs/f3-graphdb-query-design.md` for the architectural contract.
 
 Single public entry point; delegates to the specialized workers.
 
+- `rebuild_caches/0` skips seed rows once the seed cache is loaded; the project form `rebuild_caches/1` skips nothing.
 - `create_instance/4` and `add_relationship/5` take a `Project` handle as the
   first arg and delegate straight to `graphdb_instance` (which itself
   validates the handle via `graphdb_project:require_project/1`).
