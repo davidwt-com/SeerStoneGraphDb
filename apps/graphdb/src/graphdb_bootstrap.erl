@@ -20,6 +20,12 @@
 %% Full implementation: Mnesia schema/table creation, bootstrap file
 %% loader, node and relationship writers.
 %%---------------------------------------------------------------------
+%% Rev B Date: November 2026 Author: (completion of Dallas Noyes's design)
+%% ensure_mnesia/0: when Mnesia is already running on a RAM schema (the
+%% application controller starts it before graphdb on an empty data
+%% directory), convert the schema to disc so disc_copies tables can be
+%% created.  Fixes the fresh-directory application boot.
+%%---------------------------------------------------------------------
 -module(graphdb_bootstrap).
 
 
@@ -154,12 +160,15 @@ load() ->
 %%-----------------------------------------------------------------------------
 %% ensure_mnesia() -> ok
 %%
-%% Ensures a Mnesia schema exists on this node and Mnesia is running.
-%% mnesia:create_schema/1 must be called before mnesia:start/0.
+%% Ensures a disc-resident Mnesia schema exists on this node and Mnesia
+%% is running.  mnesia:create_schema/1 must be called before
+%% mnesia:start/0.  Mnesia is a graphdb application dependency, so on an
+%% empty data directory the application controller has already started
+%% it with a RAM schema; that schema is converted to disc in place.
 %%-----------------------------------------------------------------------------
 ensure_mnesia() ->
 	case mnesia:system_info(is_running) of
-		yes -> ok;
+		yes -> ok = ensure_disc_schema();
 		_ ->
 			case mnesia:create_schema([node()]) of
 				ok -> ok;
@@ -171,6 +180,22 @@ ensure_mnesia() ->
 			end
 	end,
 	ok.
+
+%%-----------------------------------------------------------------------------
+%% ensure_disc_schema() -> ok
+%%
+%% Converts a running RAM schema to disc_copies; a disc schema is left
+%% alone.  Any other result is a startup failure.
+%%-----------------------------------------------------------------------------
+ensure_disc_schema() ->
+	case mnesia:system_info(use_dir) of
+		true -> ok;
+		false ->
+			case mnesia:change_table_copy_type(schema, node(), disc_copies) of
+				{atomic, ok}                                        -> ok;
+				{aborted, {already_exists, schema, _, disc_copies}} -> ok
+			end
+	end.
 
 
 %%-----------------------------------------------------------------------------

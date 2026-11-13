@@ -20,11 +20,16 @@
 %% Rev PA1 Date: 2026-11-13 Author: David W. Thomas
 %% Initial implementation.
 %%---------------------------------------------------------------------
+%% Rev PA2 Date: 2026-11-13 Author: David W. Thomas
+%% node/1, nref/1 and is_seed/1 answer not_seed / false for any other
+%% term instead of raising function_clause in the caller (graphdb_class
+%% calls node/1 on an unvalidated class argument inside handle_call).
+%%---------------------------------------------------------------------
 
 -module(graphdb_seeds).
 -include_lib("graphdb/include/graphdb_nrefs.hrl").
 
--revision('Rev PA1').
+-revision('Rev PA2').
 -created('2026-11-13').
 -created_by('David W. Thomas').
 
@@ -98,7 +103,7 @@ collect_labels() ->
 
 
 %%---------------------------------------------------------------------
-%% node(NrefOrLabel) -> {ok, #node{}} | not_seed
+%% node(NrefOrLabel) -> {ok, #node{}} | not_seed   (not_seed for any other term)
 %%---------------------------------------------------------------------
 node(Label) when is_atom(Label) ->
 	case nref(Label) of
@@ -113,25 +118,31 @@ node(Nref) when is_integer(Nref) ->
 				_               -> not_seed
 			end;
 		undefined -> not_seed
-	end.
+	end;
+node(_) ->
+	not_seed.
 
 %%---------------------------------------------------------------------
-%% nref(Label) -> {ok, Nref} | not_seed
+%% nref(Label) -> {ok, Nref} | not_seed   (not_seed for a non-atom)
 %%---------------------------------------------------------------------
 nref(Label) when is_atom(Label) ->
 	case persistent_term:get(?KEY, undefined) of
 		#{labels := #{Label := Nref}} -> {ok, Nref};
 		_                             -> not_seed
-	end.
+	end;
+nref(_) ->
+	not_seed.
 
 %%---------------------------------------------------------------------
-%% is_seed(Nref) -> boolean()
+%% is_seed(Nref) -> boolean()   (false for a non-integer)
 %%---------------------------------------------------------------------
 is_seed(Nref) when is_integer(Nref) ->
 	case persistent_term:get(?KEY, undefined) of
 		#{nodes := Nodes} -> maps:is_key(Nref, Nodes);
 		undefined         -> false
-	end.
+	end;
+is_seed(_) ->
+	false.
 
 %%---------------------------------------------------------------------
 %% all() -> [#node{}]

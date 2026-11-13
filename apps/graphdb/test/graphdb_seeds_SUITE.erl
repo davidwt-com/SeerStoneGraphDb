@@ -33,12 +33,14 @@
 	lookup_by_label/1,
 	non_nref_map_values_are_not_labels/1,
 	unknown_label_is_not_seed/1,
+	non_nref_term_is_not_seed/1,
 	label_sources_are_disjoint/1,
 	before_load_nothing_is_seed/1,
 	load_skips_absent_workers/1,
 	lookups_run_inside_a_transaction/1,
 	load_rejects_worker_started_after_flip/1,
-	app_start_loads_seed_cache/1
+	app_start_loads_seed_cache/1,
+	app_restart_on_fresh_dir_reloads_seed_cache/1
 ]).
 
 suite() ->
@@ -55,6 +57,7 @@ groups() ->
 			lookup_by_label,
 			non_nref_map_values_are_not_labels,
 			unknown_label_is_not_seed,
+			non_nref_term_is_not_seed,
 			label_sources_are_disjoint,
 			before_load_nothing_is_seed,
 			load_skips_absent_workers,
@@ -62,7 +65,8 @@ groups() ->
 			load_rejects_worker_started_after_flip
 		]},
 		{app_boot, [], [
-			app_start_loads_seed_cache
+			app_start_loads_seed_cache,
+			app_restart_on_fresh_dir_reloads_seed_cache
 		]}
 	].
 
@@ -91,16 +95,22 @@ init_per_testcase(load_rejects_worker_started_after_flip, Config) ->
 	ok = graphdb_nref:set_runtime_phase(),
 	Config1;
 init_per_testcase(app_start_loads_seed_cache, Config) ->
+	%% No schema is created here: the application boots on an empty
+	%% directory, as in production.
 	Config1 = setup_isolated_env(Config),
-	%% Works around a pre-existing defect: mnesia is a graphdb app dependency,
-	%% so it starts schemaless before graphdb, and
-	%% graphdb_bootstrap:ensure_mnesia/0 skips create_schema when mnesia is
-	%% already running, so a fresh-dir app boot fails creating disc_copies
-	%% tables. The fix is tracked separately.
-	ok = mnesia:create_schema([node()]),
 	application:set_env(seerstone_graph_db, bootstrap_file,
 		proplists:get_value(bootstrap_file, Config1)),
 	Config1;
+init_per_testcase(app_restart_on_fresh_dir_reloads_seed_cache, Config) ->
+	%% Two empty directories: the first boot uses tmp_dir, the restart
+	%% uses second_dir (inside tmp_dir, so teardown removes both).
+	Config1 = setup_isolated_env(Config),
+	application:set_env(seerstone_graph_db, bootstrap_file,
+		proplists:get_value(bootstrap_file, Config1)),
+	SecondDir = filename:join(proplists:get_value(tmp_dir, Config1),
+		"second"),
+	ok = filelib:ensure_dir(filename:join([SecondDir, "mnesia", "x"])),
+	[{second_dir, SecondDir} | Config1];
 init_per_testcase(_TC, Config) ->
 	Config1 = setup_isolated_env(Config),
 	start_workers(Config1, true),
@@ -142,7 +152,9 @@ setup_isolated_env(Config) ->
 %%-----------------------------------------------------------------------------
 %% end_per_testcase/2
 %%-----------------------------------------------------------------------------
-end_per_testcase(app_start_loads_seed_cache, Config) ->
+end_per_testcase(TC, Config) when
+		TC =:= app_start_loads_seed_cache;
+		TC =:= app_restart_on_fresh_dir_reloads_seed_cache ->
 	catch application:stop(graphdb),
 	catch graphdb_seeds:erase(),
 	end_per_testcase(common, Config);
@@ -185,6 +197,24 @@ app_start_loads_seed_cache(_Config) ->
 	?assertMatch({ok, _}, graphdb_seeds:nref(applies_to)),
 	?assertMatch({ok, _}, graphdb_seeds:nref(remote_reference_class)).
 
+%% A stopped and restarted application must not keep the previous run's
+%% seed cache: on a fresh directory every stale "seed" would be skipped
+%% by rebuild_caches/0 and the boot would fail its cache invariant.
+app_restart_on_fresh_dir_reloads_seed_cache(Config) ->
+	{ok, _} = application:ensure_all_started(graphdb),
+	?assert(graphdb_seeds:is_seed(?NREF_ROOT)),
+	ok = application:stop(graphdb),
+	ok = application:stop(mnesia),
+	ok = application:stop(nref),
+	SecondDir = proplists:get_value(second_dir, Config),
+	%% nref and rel_id_server keep their DETS files in the cwd.
+	ok = file:set_cwd(SecondDir),
+	application:set_env(mnesia, dir, filename:join(SecondDir, "mnesia")),
+	{ok, _} = application:ensure_all_started(graphdb),
+	?assertEqual(runtime, graphdb_nref:phase()),
+	?assert(graphdb_seeds:is_seed(?NREF_ROOT)),
+	?assertEqual(ok, graphdb_mgr:verify_caches()).
+
 load_caches_every_permanent_tier_node(_Config) ->
 	ok = graphdb_seeds:load(),
 	Keys = [N || N <- mnesia:dirty_all_keys(nodes), N < ?NREF_START],
@@ -225,6 +255,14 @@ unknown_label_is_not_seed(_Config) ->
 	ok = graphdb_seeds:load(),
 	?assertEqual(not_seed, graphdb_seeds:nref(no_such_seed)),
 	?assertEqual(not_seed, graphdb_seeds:node(no_such_seed)).
+
+non_nref_term_is_not_seed(_Config) ->
+	ok = graphdb_seeds:load(),
+	?assertEqual(not_seed, graphdb_seeds:node("x")),
+	?assertNot(graphdb_seeds:is_seed("x")),
+	?assertEqual(not_seed, graphdb_seeds:node({1})),
+	?assertNot(graphdb_seeds:is_seed(1.0)),
+	?assertEqual(not_seed, graphdb_seeds:nref("x")).
 
 label_sources_are_disjoint(_Config) ->
 	%% Two sources claiming one label would silently overwrite each other.

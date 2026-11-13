@@ -63,6 +63,7 @@
 	add_qc_refuses_seed_class/1,
 	bind_qc_value_refuses_seed_class/1,
 	seed_class_writable_before_load/1,
+	seed_guard_passes_non_nref_class_arg/1,
 	%% Creation
 	create_class_top_level/1,
 	create_class_subclass/1,
@@ -253,7 +254,8 @@ groups() ->
 			add_superclass_under_seed_parent_allowed,
 			add_qc_refuses_seed_class,
 			bind_qc_value_refuses_seed_class,
-			seed_class_writable_before_load
+			seed_class_writable_before_load,
+			seed_guard_passes_non_nref_class_arg
 		]}
 	].
 
@@ -1447,3 +1449,18 @@ seed_class_writable_before_load(_Config) ->
 	ok = graphdb_seeds:erase(),
 	{ok, A} = graphdb_attr:create_literal_attribute("qc_pre", string),
 	?assertEqual(ok, graphdb_class:add_qualifying_characteristic(S, A)).
+
+seed_guard_passes_non_nref_class_arg(_Config) ->
+	%% The seed guard must not crash the server on a class argument that is
+	%% neither an nref nor a label; the mutator's own error comes back.
+	{ok, _} = graphdb_class:start_link(),
+	{ok, P} = graphdb_class:create_class("P", ?NREF_CLASSES),
+	{ok, A} = graphdb_attr:create_literal_attribute("qx", string),
+	?assertEqual({error, not_found}, graphdb_class:add_superclass("x", P)),
+	?assertEqual({error, not_found},
+		graphdb_class:add_qualifying_characteristic("x", A)),
+	?assertEqual({error, not_found},
+		graphdb_class:add_qualifying_characteristic("x", A,
+			#{instance_only => true})),
+	?assertEqual({error, not_found}, graphdb_class:bind_qc_value("x", A, "v")),
+	?assert(is_pid(whereis(graphdb_class))).
