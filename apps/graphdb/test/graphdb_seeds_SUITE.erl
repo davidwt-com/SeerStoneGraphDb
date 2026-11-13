@@ -37,14 +37,15 @@
 	before_load_nothing_is_seed/1,
 	load_skips_absent_workers/1,
 	lookups_run_inside_a_transaction/1,
-	load_rejects_worker_started_after_flip/1
+	load_rejects_worker_started_after_flip/1,
+	app_start_loads_seed_cache/1
 ]).
 
 suite() ->
 	[{timetrap, {seconds, 60}}].
 
 all() ->
-	[{group, cache}].
+	[{group, cache}, {group, app_boot}].
 
 groups() ->
 	[
@@ -59,6 +60,9 @@ groups() ->
 			load_skips_absent_workers,
 			lookups_run_inside_a_transaction,
 			load_rejects_worker_started_after_flip
+		]},
+		{app_boot, [], [
+			app_start_loads_seed_cache
 		]}
 	].
 
@@ -85,6 +89,17 @@ init_per_testcase(load_rejects_worker_started_after_flip, Config) ->
 	Config1 = setup_isolated_env(Config),
 	start_workers(Config1, false),
 	ok = graphdb_nref:set_runtime_phase(),
+	Config1;
+init_per_testcase(app_start_loads_seed_cache, Config) ->
+	Config1 = setup_isolated_env(Config),
+	%% Works around a pre-existing defect: mnesia is a graphdb app dependency,
+	%% so it starts schemaless before graphdb, and
+	%% graphdb_bootstrap:ensure_mnesia/0 skips create_schema when mnesia is
+	%% already running, so a fresh-dir app boot fails creating disc_copies
+	%% tables. The fix is tracked separately.
+	ok = mnesia:create_schema([node()]),
+	application:set_env(seerstone_graph_db, bootstrap_file,
+		proplists:get_value(bootstrap_file, Config1)),
 	Config1;
 init_per_testcase(_TC, Config) ->
 	Config1 = setup_isolated_env(Config),
@@ -127,6 +142,10 @@ setup_isolated_env(Config) ->
 %%-----------------------------------------------------------------------------
 %% end_per_testcase/2
 %%-----------------------------------------------------------------------------
+end_per_testcase(app_start_loads_seed_cache, Config) ->
+	catch application:stop(graphdb),
+	catch graphdb_seeds:erase(),
+	end_per_testcase(common, Config);
 end_per_testcase(_TC, Config) ->
 	catch graphdb_seeds:erase(),
 	catch gen_server:stop(graphdb_rules),
@@ -158,6 +177,13 @@ end_per_testcase(_TC, Config) ->
 %%=============================================================================
 %% Test cases
 %%=============================================================================
+
+app_start_loads_seed_cache(_Config) ->
+	{ok, _} = application:ensure_all_started(graphdb),
+	?assertEqual(runtime, graphdb_nref:phase()),
+	?assert(graphdb_seeds:is_seed(?NREF_ROOT)),
+	?assertMatch({ok, _}, graphdb_seeds:nref(applies_to)),
+	?assertMatch({ok, _}, graphdb_seeds:nref(remote_reference_class)).
 
 load_caches_every_permanent_tier_node(_Config) ->
 	ok = graphdb_seeds:load(),

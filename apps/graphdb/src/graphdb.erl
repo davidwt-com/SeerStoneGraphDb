@@ -17,6 +17,10 @@
 %% Initial implementation and testing of module completed.
 %% 
 %%--------------------------------------------------------------------- 
+%% Rev PA2 Date: November 13, 2026 Author: David W. Thomas
+%% start/2 loads the seed cache (graphdb_seeds:load/0) after the runtime flip.
+%%
+%%---------------------------------------------------------------------
 %% Rev A Date: *** 2008 Author: Dallas Noyes (dallas.noyes@gmail.com)
 %%  
 %%--------------------------------------------------------------------- 
@@ -146,6 +150,9 @@ start(Type, StartArgs) ->
 			%% All child init/1s have completed; flip to the runtime tier
 			%% (also raises nref_server's floor to ?NREF_START).
 			ok = graphdb_nref:set_runtime_phase(),
+			%% Every permanent-tier seed now exists and none can be added
+			%% later; cache them. A failed load crashes the start.
+			ok = graphdb_seeds:load(),
 			{ok, Pid};
 		ignore ->
 			{error, ignore};
